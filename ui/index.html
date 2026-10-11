@@ -18,6 +18,16 @@
   --spring: cubic-bezier(.3,1.5,.5,1);
   --pfill: color-mix(in srgb, var(--t) calc(var(--p) * 1%), transparent);
 }
+:root[data-theme="light"] {
+  --bg: #F3EFFA; --s1: #FFFFFF; --s2: #F6F2FC; --s3: #E9E2F5;
+  --ln: rgba(27,20,38,.1); --ink: #1B1426; --mu: #6E6580;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #F3EFFA; --s1: #FFFFFF; --s2: #F6F2FC; --s3: #E9E2F5;
+    --ln: rgba(27,20,38,.1); --ink: #1B1426; --mu: #6E6580;
+  }
+}
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
@@ -73,7 +83,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 
 .stage {
-  position: relative; padding: 14px 0 0; text-align: center; overflow: hidden;
+  position: relative; padding: 10px 0 0; text-align: center; overflow: hidden;
+  border: none; border-radius: 0;
   border-bottom: 1px solid var(--ln); background: linear-gradient(180deg, var(--s1), transparent);
 }
 .stage::before {
@@ -82,12 +93,12 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
   background: radial-gradient(closest-side, color-mix(in srgb, var(--t) 22%, transparent), transparent);
 }
 #peek {
-  position: relative; width: 104px; height: 60px; margin: 0 auto; overflow: hidden;
+  position: relative; width: 128px; height: 104px; margin: 0 auto; overflow: hidden;
   cursor: pointer; transition: width .55s var(--spring), height .55s var(--spring);
 }
-#peek.full { width: 210px; height: 150px; }
-#peek .blip-mount { width: 210px; display: block; margin: 0 auto; }
-#peek svg { width: 210px; height: auto; display: block; margin-top: -4px; }
+#peek.full { width: 230px; height: 170px; }
+#peek .blip-mount { width: 230px; display: block; margin: 0 auto; }
+#peek svg { width: 230px; height: auto; display: block; margin-top: -14px; transform: translateX(-14px); }
 .capsule {
   position: relative; margin: -4px auto 0; width: min(520px, calc(100% - 36px));
   border-radius: 99px; border: 1px solid var(--ln); background: var(--s2);
@@ -206,7 +217,7 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
       <i></i>
       <span><b>Main thread</b><small id="chatStatus">idle</small></span>
     </button>
-    <div class="note" style="margin-top:auto;padding:8px 6px;">demo states cycle off on first interaction</div>
+    <div class="note" style="margin-top:auto;padding:8px 6px;">blip v1 · federation</div>
   </aside>
 
   <main>
@@ -248,6 +259,11 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: r
     <div class="card" style="display:block">
       <input class="keyin" id="key" type="password" placeholder="agent api key" autocomplete="off" />
       <button class="setbtn" id="setKey">SAVE KEY</button>
+    </div>
+    <h2>APPEARANCE</h2>
+    <div class="lane">
+      <button id="thDark" class="active">DARK</button>
+      <button id="thLight">LIGHT</button>
     </div>
     <p class="note">Blip reads your last exchange and a fast lane model picks the pose and color you see above. Key stays in this browser only.</p>
   </aside>
@@ -305,6 +321,19 @@ function endProgress(stateKey) {
 
 /* ---- auth ---- */
 const key = () => localStorage.getItem("blip_key") || "";
+
+/* ---- theme ---- */
+const paramTheme = new URLSearchParams(location.search).get("theme");
+const savedTheme = localStorage.getItem("blip_theme");
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("blip_theme", t);
+  $("thDark").classList.toggle("active", t === "dark");
+  $("thLight").classList.toggle("active", t === "light");
+}
+applyTheme(paramTheme === "light" || paramTheme === "dark" ? paramTheme : savedTheme || "dark");
+$("thDark").onclick = () => applyTheme("dark");
+$("thLight").onclick = () => applyTheme("light");
 if (key()) $("key").value = key();
 $("setKey").onclick = () => { localStorage.setItem("blip_key", $("key").value.trim()); check(); sys("key saved locally"); };
 

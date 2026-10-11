@@ -130,3 +130,14 @@ Rules:
 Only `provider = 'antigravity' AND authType = 'oauth' AND isActive = 1` rows are
 emitted; qoder/kiro/cursor/xai oauth rows are deliberately ignored. The summary line
 printed by the extractor contains counts only, never token values.
+
+The catalog entry `providers.antigravity` is intentionally absent from the config: its
+transport uses the array form `baseUrls:[...]` (resolved base
+`https://daily-cloudcode-pa.googleapis.com`, module 74129 `w3` in `458.js`) plus
+`format:"antigravity"`, so there is no OpenAI-compatible chat `baseUrl` to copy. The
+chat forwarder for `ag` must build `POST {apiEndpoint}/v1internal:generateContent`
+(`apiVersion: "v1internal"`, `loadCodeAssistEndpoint` as in section 1) itself; see
+section 1. The extractor also scopes each provider's catalog fields to the window
+between its own `id:"..."` match and the next provider's, so a neighbouring provider's
+transport or media config can no longer leak into an entry (antigravity previously
+picked up `api.anthropic.com`).

@@ -1,4 +1,4 @@
-
+﻿
 @property --t{syntax:"<color>";inherits:true;initial-value:#FFD66B}
 @property --la{syntax:"<angle>";inherits:true;initial-value:10deg}
 @property --ra{syntax:"<angle>";inherits:true;initial-value:-10deg}
@@ -21,11 +21,8 @@
 html{scroll-padding-top:env(safe-area-inset-top,0px)}*{box-sizing:border-box}
 button{font:inherit;color:inherit;cursor:pointer}button:focus-visible{outline:2px solid var(--t);outline-offset:2px}
 .top{max-width:1040px;margin:0 auto 18px;display:flex;justify-content:space-between;align-items:center;gap:12px}.top b{font-size:22px;letter-spacing:-.02em}
-.stage{position:relative;border-radius:38px;background:linear-gradient(180deg,var(--s1),var(--bg));border:1px solid var(--ln);padding:26px 20px 28px;text-align:center;overflow:hidden}
-.stage:before{content:"";position:absolute;left:50%;top:-40px;width:520px;height:420px;transform:translateX(-50%);background:radial-gradient(closest-side,color-mix(in srgb,var(--t) 36%,transparent),transparent)}
 #mx{--sine:cubic-bezier(.37,0,.63,1);position:relative;width:min(100%,470px);display:block;margin:0 auto;overflow:visible;transition:--la .9s cubic-bezier(.34,1.4,.64,1),--ra .9s cubic-bezier(.34,1.4,.64,1),--w .6s ease,--ex .6s cubic-bezier(.34,1.3,.64,1),--ey .6s cubic-bezier(.34,1.3,.64,1),--by .5s ease,--ba .5s ease,--bo .4s ease,--hx .9s cubic-bezier(.34,1.3,.64,1) .08s,--hy .9s cubic-bezier(.34,1.3,.64,1) .08s,--lid .35s ease,--px .25s ease,--py .25s ease}
-.cap{position:relative}.tag{display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border-radius:99px;background:color-mix(in srgb,var(--t) 20%,transparent);font-weight:700;font-size:13px}.tag i{width:9px;height:9px;border-radius:3px;background:var(--t)}
-.dots:after{content:"";animation:dt 1.4s steps(1) infinite}@keyframes dt{25%{content:"."}50%{content:".."}75%{content:"..."}}
+@keyframes dt{25%{content:"."}50%{content:".."}75%{content:"..."}}
 /* rig */
 .shd{transform-box:fill-box;transform-origin:center;fill:rgba(0,0,0,.3);animation:var(--sk,none) var(--bd,4s) var(--sine) infinite}
 .sq{transform-box:fill-box;transform-origin:50% 100%;animation:var(--bk,breathe) var(--bd,4s) var(--sine) infinite}

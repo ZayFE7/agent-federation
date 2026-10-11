@@ -27,21 +27,24 @@ providers = {}
 # Google OAuth client ids embedded in the catalog's transport block (public
 # app config, not a secret). Only antigravity ("ag") is used by the worker.
 oauth_client_ids = {}
-for m in prov_iter:
+for _i, m in enumerate(prov_iter):
     pid = m.group(1)
-    block = data[m.start() : m.start() + 4000]
+    # A provider's fields live between its own id:"..." match and the next
+    # provider's. The old fixed 4000-char window could swallow the next
+    # provider's transport: antigravity's own transport uses the array form
+    # baseUrls:[...] (no string match), so it wrongly picked up a neighbour's
+    # transport:{baseUrl:"https://api.anthropic.com/v1/messages"}. Cap the
+    # window at both bounds.
+    end = m.start() + 4000
+    if _i + 1 < len(prov_iter):
+        end = min(end, prov_iter[_i + 1].start())
+    block = data[m.start() : end]
     # OAuth client id lives on the transport/oauth block (public app config).
     cid = re.search(r'clientId:"([^"]+)"', block)
     if cid:
         oauth_client_ids[pid] = cid.group(1)
     tb = re.search(r"transport:\{baseUrl:\"([^\"]+)\"", block)
-    if not tb:
-        continue
-    entry = {"baseUrl": tb.group(1), "priority": int(m.group(2))}
-    # Gemini's catalog baseUrl is the models-list/validate endpoint; the
-    # OpenAI-compatible chat endpoint is a well-known sibling path.
-    if "generativelanguage.googleapis.com" in entry["baseUrl"] and "openai" not in entry["baseUrl"]:
-        entry["baseUrl"] = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    media = {}
     for key, pat in (
         ("stt", r"sttConfig:\{baseUrl:\"([^\"]+)\""),
         ("tts", r"ttsConfig:\{baseUrl:\"([^\"]+)\""),
@@ -51,7 +54,20 @@ for m in prov_iter:
     ):
         mm = re.search(pat, block)
         if mm:
-            entry[key] = mm.group(1)
+            media[key] = mm.group(1)
+    # Some providers have no string transport of their own (array form
+    # baseUrls:[...], template literal, or empty string) but do own media
+    # endpoints; keep those entries, just without a chat baseUrl.
+    if not tb and not media:
+        continue
+    entry = {"priority": int(m.group(2))}
+    if tb:
+        entry["baseUrl"] = tb.group(1)
+        # Gemini's catalog baseUrl is the models-list/validate endpoint; the
+        # OpenAI-compatible chat endpoint is a well-known sibling path.
+        if "generativelanguage.googleapis.com" in entry["baseUrl"] and "openai" not in entry["baseUrl"]:
+            entry["baseUrl"] = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    entry.update(media)
     providers[pid] = entry
 
 # ---- 2. SQLite: nodes, connections, combos, keys, aliases ----

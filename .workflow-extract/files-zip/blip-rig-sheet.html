@@ -1,0 +1,203 @@
+<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Blip rig sheet</title><style>
+@property --t{syntax:"<color>";inherits:true;initial-value:#FFD66B}
+@property --la{syntax:"<angle>";inherits:true;initial-value:10deg}
+@property --ra{syntax:"<angle>";inherits:true;initial-value:-10deg}
+@property --w{syntax:"<angle>";inherits:true;initial-value:4deg}
+@property --ba{syntax:"<angle>";inherits:true;initial-value:0deg}
+@property --ex{syntax:"<length>";inherits:true;initial-value:0px}
+@property --ey{syntax:"<length>";inherits:true;initial-value:0px}
+@property --by{syntax:"<length>";inherits:true;initial-value:0px}
+@property --gx{syntax:"<length>";inherits:true;initial-value:0px}
+@property --gy{syntax:"<length>";inherits:true;initial-value:0px}
+@property --px{syntax:"<length>";inherits:true;initial-value:0px}
+@property --py{syntax:"<length>";inherits:true;initial-value:0px}
+@property --hx{syntax:"<length>";inherits:true;initial-value:0px}
+@property --hy{syntax:"<length>";inherits:true;initial-value:0px}
+@property --lid{syntax:"<length>";inherits:true;initial-value:0px}
+@property --bo{syntax:"<number>";inherits:true;initial-value:0}
+:root{--t:#FFD66B;transition:--t .8s ease;--bg:#F3EFFA;--s1:#fff;--s2:#F6F2FC;--s3:#E9E2F5;--ln:rgba(27,20,38,.1);--ink:#1B1426;--mu:#6E6580;--f:ui-rounded,"SF Pro Rounded",Nunito,"Segoe UI",system-ui,sans-serif;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0E0916;--s1:#171024;--s2:#1F1731;--s3:#2B2142;--ln:rgba(255,255,255,.09);--ink:#F5F0FF;--mu:#9C91B8}}
+:root[data-theme="dark"]{--bg:#0E0916;--s1:#171024;--s2:#1F1731;--s3:#2B2142;--ln:rgba(255,255,255,.09);--ink:#F5F0FF;--mu:#9C91B8}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font:15px/1.4 var(--f);padding:22px 16px 40px}
+button{font:inherit;color:inherit;cursor:pointer}button:focus-visible{outline:2px solid var(--t);outline-offset:2px}
+/* rig */
+.shd{transform-box:fill-box;transform-origin:center;fill:rgba(0,0,0,.3);animation:var(--sk,none) var(--bd,4s) var(--sine) infinite}
+.sq{transform-box:fill-box;transform-origin:50% 100%;animation:var(--bk,breathe) var(--bd,4s) var(--sine) infinite}
+.ear{transform-box:fill-box;transform-origin:50% 100%;animation:ear 3.6s var(--sine) infinite;transition:transform .8s cubic-bezier(.34,1.4,.64,1)}
+[data-s=error] .ear,[data-s=sleep] .ear{animation:none;transform:rotate(calc(var(--ed)*22deg))}
+.arm{transform-box:fill-box;transform-origin:50% 0}.aL{animation:wgL var(--wd,4s) var(--sine) infinite}.aR{animation:wgR var(--wd,4s) var(--sine) infinite}
+[data-s=code] .aR{animation-delay:calc(var(--wd)/-2)}
+.face{transform:translate(var(--hx),var(--hy))}
+.eyes{animation:var(--ek,none) var(--ekd,3s) var(--sine) infinite;transform:translate(calc(var(--ex)*.18 + var(--gx)*.3),calc(var(--ey)*.14 + var(--gy)*.3))}
+.eb{transition:opacity .2s}.eL,.eR{transform-box:fill-box;transform-origin:center;transition:transform .4s cubic-bezier(.34,1.4,.64,1),opacity .2s}
+[data-e=wide] .eL,[data-e=wide] .eR{transform:scale(1.15)}[data-e=squint] .eL,[data-e=squint] .eR{transform:scaleY(.72)}
+[data-e=happy] .eb,[data-e=closed] .eb{opacity:0}.eh,.ec{opacity:0;transition:opacity .2s}[data-e=happy] .eh,[data-e=closed] .ec{opacity:1}
+.br{transform-box:fill-box;transform-origin:center;opacity:var(--bo)}.bl{transform:translateY(var(--by)) rotate(var(--ba))}.brr{transform:translateY(var(--by)) rotate(calc(var(--ba)*-1))}
+.m{opacity:0;transition:opacity .25s}[data-m=smile] .smile,[data-m=smirk] .smirk,[data-m=flat] .flat,[data-m=sad] .sad,[data-m=o] .o,[data-m=grin] .grin{opacity:1}
+.orb{fill:var(--t)}.halo{fill:var(--t);opacity:.3;transform-box:fill-box;transform-origin:center;animation:halo 2s var(--sine) infinite}
+.pr{opacity:0;transform:translateY(12px) scale(.6);transition:opacity .35s,transform .7s cubic-bezier(.34,1.56,.64,1);transform-box:fill-box;transform-origin:center}.pr.on{opacity:1;transform:none}
+.fl1{animation:fl 3.2s var(--sine) infinite}.fl2{animation:fl 3.8s var(--sine) infinite -1s}.cl{fill:#fff;stroke:var(--t);stroke-width:2.5}.dd{fill:var(--t);animation:dd 1.2s var(--sine) infinite}
+.fx{transform-box:fill-box;transform-origin:center}
+@keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.08)}}
+@keyframes ear{50%{transform:rotate(calc(var(--ed)*7deg))}}
+@keyframes wgL{50%{transform:rotate(calc(var(--la) + var(--w)))}}@keyframes wgR{50%{transform:rotate(calc(var(--ra) - var(--w)))}}
+@keyframes scan{0%,100%{--gx:-3.4px}50%{--gx:3.4px}}
+@keyframes rd{0%{--gx:-3.4px;--gy:-1.4px}30%{--gx:3.2px;--gy:-1.4px}31%{--gx:-3.4px;--gy:.8px}60%{--gx:3.2px;--gy:.8px}61%{--gx:-3.4px;--gy:3px}100%{--gx:3.2px;--gy:3px}}
+@keyframes drift{0%,100%{--gx:0px;--gy:0px}30%{--gx:2.2px;--gy:.5px}65%{--gx:-2px;--gy:-.7px}}
+@keyframes breathe{50%{transform:scale(1.02,.975)}}@keyframes snore{50%{transform:scale(1.04,.955)}}
+@keyframes sway{0%,100%{transform:rotate(-2deg)}50%{transform:rotate(2deg)}}@keyframes bob{50%{transform:translateY(-4px)}}
+@keyframes lean{50%{transform:rotate(3deg) translateX(3px)}}@keyframes nod{50%{transform:translateY(2px) scale(1.02,.98)}}
+@keyframes buzz{50%{transform:translateY(-1.6px)}}@keyframes careful{0%,100%{transform:rotate(-1.5deg)}50%{transform:rotate(1.5deg) scale(1,.99)}}
+@keyframes hop{0%{transform:translateY(0) scale(1.07,.93);animation-timing-function:cubic-bezier(.2,.8,.3,1)}18%{transform:translateY(-26px) scale(.94,1.07);animation-timing-function:cubic-bezier(.7,0,.9,.4)}38%{transform:translateY(0) scale(1.07,.93);animation-timing-function:cubic-bezier(.3,1.4,.6,1)}50%,100%{transform:translateY(0) scale(1)}}
+@keyframes hope{0%,60%,100%{transform:translateY(0)}15%{transform:translateY(-12px) scale(.97,1.04)}30%{transform:translateY(0) scale(1.04,.96)}45%{transform:translateY(-6px)}}
+@keyframes cheer{0%{transform:translateY(0) scale(1.08,.92);animation-timing-function:cubic-bezier(.2,.8,.3,1)}20%{transform:translateY(-52px) scale(.92,1.1);animation-timing-function:cubic-bezier(.7,0,.9,.4)}45%{transform:translateY(0) scale(1.1,.9);animation-timing-function:cubic-bezier(.2,.8,.3,1)}60%{transform:translateY(-14px);animation-timing-function:cubic-bezier(.7,0,.9,.4)}75%{transform:translateY(0) scale(1.03,.97)}100%{transform:translateY(0)}}
+@keyframes droop{0%,100%{transform:rotate(-4deg) translateY(2px) scale(1.01,.97)}50%{transform:rotate(-5deg) translateY(3px) scale(1.02,.96)}}
+@keyframes shd{20%{transform:scale(.62)}}@keyframes halo{50%{transform:scale(1.5);opacity:.1}}@keyframes fl{50%{transform:translateY(-4px)}}
+@keyframes dd{50%{transform:translateY(-5px)}}@keyframes cur{0%,100%{transform:translate(-30px,6px)}50%{transform:translate(4px,18px)}}
+@keyframes mg{0%,100%{transform:translate(-7px,-4px) rotate(-6deg)}50%{transform:translate(7px,7px) rotate(6deg)}}
+@keyframes hl{0%{transform:translateY(0)}100%{transform:translateY(46px)}}@keyframes tw{0%{transform:scaleX(0)}60%,100%{transform:scaleX(1)}}
+@keyframes cb{50%{opacity:0}}@keyframes kf{50%{opacity:.35}}
+@keyframes fly{0%,12%{transform:translate(0,8px) scale(.7);opacity:0}30%{transform:translate(0,0) scale(1);opacity:1}55%{transform:translate(0,-4px)}100%{transform:translate(36px,-72px) rotate(16deg) scale(.7);opacity:0}}
+@keyframes burst{0%{transform:translate(0,0) scale(0)}15%{opacity:1;transform:scale(1)}100%{transform:translate(var(--x),var(--y)) rotate(240deg) scale(.6);opacity:0}}
+@keyframes pop{0%{transform:scale(0)}60%{transform:scale(1.25)}100%{transform:scale(1)}}@keyframes ring{0%{transform:scale(.8);opacity:.9}100%{transform:scale(1.9);opacity:0}}
+@keyframes drop{0%{transform:translateY(-6px);opacity:0}30%{opacity:1}100%{transform:translateY(22px);opacity:0}}
+@keyframes zz{0%{transform:translate(0,10px) scale(.6);opacity:0}30%{opacity:1}100%{transform:translate(10px,-22px) scale(1.1);opacity:0}}
+@keyframes wob{50%{transform:rotate(8deg)}}
+.env{animation:fly 1.8s var(--sine) infinite}.mg{animation:mg 2s var(--sine) infinite}.cur{animation:cur 2.4s var(--sine) infinite}.hl{animation:hl 3s var(--sine) infinite}
+.tl{transform-box:fill-box;transform-origin:left;animation:tw 2.4s var(--sine) infinite}.tl2{animation-delay:.5s}.tl3{animation-delay:1s}.cbk{animation:cb 1s steps(1) infinite}.keys{animation:kf .36s var(--sine) infinite}
+.cf *{transform-box:fill-box;transform-origin:center;animation:burst 1.9s ease-out infinite}.ck{transform-box:fill-box;transform-origin:center}.pr.on .ck{animation:pop .6s cubic-bezier(.34,1.56,.64,1) both}.rg{transform-box:fill-box;transform-origin:center;animation:ring 1.6s ease-out infinite}
+.sw{animation:drop 2s ease-in infinite}.z1,.z2,.z3{animation:zz 3s ease-out infinite}.z2{animation-delay:1s}.z3{animation-delay:2s}.eg{animation:wob 1s var(--sine) infinite;transform-box:fill-box;transform-origin:center}
+
+.sq2{transform-box:fill-box;transform-origin:50% 100%}.chg .sq2{animation:chg .6s cubic-bezier(.34,1.4,.64,1)}
+.bar{transform-box:fill-box;transform-origin:50% 100%;animation:grow 2.6s var(--sine) infinite}
+.bub{transform-box:fill-box;transform-origin:0 100%;animation:pop2 3.6s cubic-bezier(.34,1.4,.64,1) infinite}.b2{transform-origin:100% 100%;animation-delay:1s}
+.itm{animation:fall 2.8s var(--sine) infinite}.i2{animation-delay:.5s}.i3{animation-delay:1s}
+.nt{transform-box:fill-box;transform-origin:center;animation:tuck 2.8s var(--sine) infinite}.bel{opacity:0;animation:belly 2.8s var(--sine) infinite}
+.spk{transform-box:fill-box;transform-origin:center;animation:spark 2s var(--sine) infinite}.s2{animation-delay:1s}
+.wv{transform-box:fill-box;transform-origin:center;animation:wv 1s var(--sine) infinite}
+.hg{transform-box:fill-box;transform-origin:center;animation:flip 4s var(--sine) infinite}.sn1,.sn2{transform-box:fill-box;transform-origin:50% 100%;animation:sand 4s linear infinite}.sn2{animation-name:sand2}
+.mb{animation:mini 1.8s var(--sine) infinite}.brs{transform-box:fill-box;transform-origin:0 100%;animation:brush 1.6s var(--sine) infinite}
+.fp{transform-box:fill-box;transform-origin:top;animation:fpg 3.2s var(--sine) infinite}.hlc{transform-box:fill-box;transform-origin:center;animation:pls2 1.4s var(--sine) infinite}
+[data-s=listen] .ear{animation:perk 1.6s var(--sine) infinite;transform:rotate(calc(var(--ed)*-8deg))}
+.wink .eR{animation:wk .5s var(--sine)}.twitch .ear{animation:flick .7s var(--sine)}.hip .sq{animation:hop .9s var(--sine)}
+@keyframes chg{0%{transform:scale(1)}30%{transform:scale(1.06,.93)}60%{transform:scale(.97,1.04)}100%{transform:scale(1)}}
+@keyframes grow{0%{transform:scaleY(0)}55%,100%{transform:scaleY(1)}}
+@keyframes pop2{0%,8%{transform:scale(0)}22%,78%{transform:scale(1)}92%,100%{transform:scale(0)}}
+@keyframes fall{0%{transform:translateY(-36px);opacity:0}20%{opacity:1}50%,85%{transform:none;opacity:1}100%{transform:none;opacity:0}}
+@keyframes tuck{0%{transform:scale(1);opacity:0}12%{opacity:1}65%{transform:translate(-55px,113px) scale(.28);opacity:1}80%,100%{transform:translate(-55px,113px) scale(0);opacity:0}}
+@keyframes belly{0%,60%{opacity:0}75%{opacity:.75}100%{opacity:0}}
+@keyframes spark{0%,100%{transform:scale(0) rotate(0)}50%{transform:scale(1) rotate(90deg)}}
+@keyframes wv{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
+@keyframes flip{0%,85%{transform:rotate(0)}100%{transform:rotate(180deg)}}
+@keyframes sand{0%{transform:scaleY(1)}85%,100%{transform:scaleY(.04)}}@keyframes sand2{0%{transform:scaleY(.04)}85%,100%{transform:scaleY(1)}}
+@keyframes mini{0%,100%{transform:translate(0,0)}25%{transform:translate(7px,-14px)}50%{transform:translate(14px,0)}75%{transform:translate(7px,-7px)}}
+@keyframes brush{0%,100%{transform:rotate(-8deg) translate(-6px,4px)}50%{transform:rotate(8deg) translate(8px,-4px)}}
+@keyframes fpg{0%,60%{transform:scaleY(1)}70%{transform:scaleY(.1)}80%,100%{transform:scaleY(1)}}
+@keyframes pls2{50%{transform:scale(1.4)}}@keyframes perk{50%{transform:rotate(calc(var(--ed)*-3deg))}}
+@keyframes wk{40%,60%{transform:scaleY(.08)}}@keyframes flick{30%{transform:rotate(calc(var(--ed)*14deg))}60%{transform:rotate(calc(var(--ed)*-4deg))}}
+
+.mxs{--sine:cubic-bezier(.37,0,.63,1);transition:--px .25s ease,--py .25s ease;display:block;width:100%;height:auto;overflow:visible}
+.top{max-width:1280px;margin:0 auto 16px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+h1{margin:0;font-size:clamp(26px,4vw,40px);letter-spacing:-.03em;line-height:1}.top p{margin:6px 0 0;color:var(--mu)}
+.sm{border:1px solid var(--ln);background:var(--s2);border-radius:99px;padding:8px 15px;font-size:13px;font-weight:700}.sm[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.board{max-width:1280px;margin:0 auto;border:1px solid var(--ln);border-radius:34px;background:linear-gradient(180deg,var(--s1),var(--bg));padding:14px;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.tile{display:flex;flex-direction:column;border:1px solid var(--ln);border-radius:24px;overflow:hidden;background:var(--s1)}
+.art{position:relative;aspect-ratio:1;display:grid;place-items:center;padding:5%;background:radial-gradient(closest-side at 50% 60%,color-mix(in srgb,var(--t) 32%,transparent),transparent 90%),var(--s2);border-bottom:1px solid var(--ln)}
+.g .art:after{content:"";position:absolute;inset:0;background-image:linear-gradient(var(--ln) 1px,transparent 1px),linear-gradient(90deg,var(--ln) 1px,transparent 1px);background-size:10% 10%;pointer-events:none}
+.p *{animation-play-state:paused!important}
+.inf{padding:12px 14px 14px;display:grid;gap:5px;align-content:start;flex:1}
+.inf h3{margin:0;font-size:17px;letter-spacing:-.02em;display:flex;gap:8px;align-items:center}.inf h3 i{width:11px;height:11px;border-radius:4px;background:var(--t);flex:none}
+.inf p{margin:0;font-size:12.5px;line-height:1.4;color:var(--mu)}.inf .tr{color:var(--ink);font-weight:600}
+.inf code{font:11px/1.4 ui-monospace,Menlo,monospace;background:var(--s3);border-radius:8px;padding:5px 8px;color:var(--ink);display:block;margin-top:2px}
+.gp{font-size:10.5px;font-weight:800;color:var(--t)}
+.leg{justify-content:center;padding:18px;gap:8px;background:var(--s2)}.leg b{font-size:19px;letter-spacing:-.02em}.leg p{font-size:13px}
+@media (max-width:1100px){.board{grid-template-columns:repeat(4,minmax(0,1fr))}}@media (max-width:760px){.board{grid-template-columns:repeat(2,minmax(0,1fr))}body{padding:16px 10px 30px}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style></head><body><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><radialGradient id="gb" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#FFF3C4"/><stop offset=".45" stop-color="#FFD66B"/><stop offset="1" stop-color="#EBA93A"/></radialGradient>
+<radialGradient id="ge" cx=".4" cy=".3" r=".8"><stop offset="0" stop-color="#3A2C57"/><stop offset="1" stop-color="#1B1426"/></radialGradient>
+<path id="bd" d="M120 62C170 62 196 98 196 142C196 184 164 206 120 206C76 206 44 184 44 142C44 98 70 62 120 62Z"/><clipPath id="bc"><use href="#bd"/></clipPath><g id="mn"><path d="M-9-8l-3-9 8 3zM9-8l3-9-8 3z" fill="#FFD66B"/><ellipse rx="14" ry="12" fill="#FFD66B"/><ellipse cy="5" rx="8" ry="5" fill="#FFF6D6" opacity=".7"/><circle cx="-5" cy="-1" r="2.3" fill="#1B1426"/><circle cx="5" cy="-1" r="2.3" fill="#1B1426"/><path d="M-3 4q3 3 6 0" stroke="#1B1426" stroke-width="1.6" fill="none" stroke-linecap="round"/><path d="M0-12v-5" stroke="#D99A2B" stroke-width="1.6"/><circle cy="-19" r="3" fill="var(--t)"/></g><radialGradient id="gu" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(101.8 105.2) scale(121.6 115.2)"><stop offset="0" stop-color="#FFF3C4"/><stop offset=".45" stop-color="#FFD66B"/><stop offset="1" stop-color="#EBA93A"/></radialGradient><radialGradient id="gir"><stop offset=".5" stop-color="#0F0A18" stop-opacity="0"/><stop offset="1" stop-color="#0F0A18" stop-opacity=".8"/></radialGradient><clipPath id="ecL"><ellipse cx="97" cy="130" rx="11.5" ry="14.5"/></clipPath><clipPath id="ecR"><ellipse cx="143" cy="130" rx="11.5" ry="14.5"/></clipPath><clipPath id="lcL"><rect class="lcr lcL" x="70" y="111" width="54" height="80"/></clipPath><clipPath id="lcR"><rect class="lcr lcR" x="116" y="111" width="54" height="80"/></clipPath></defs></svg><div class="top"><div><h1>Blip rig sheet</h1><p>Every state on one canvas, same size, all playing at once.</p></div><span><button class="sm" id="gd" aria-pressed="false">Show grid</button> <button class="sm" id="ps" aria-pressed="false">Pause all</button> <button class="sm" id="tg">Light or dark</button></span></div><main class="board" id="board"></main><script>
+const ST={
+idle:{n:"Idle",c:"#FFD66B",h:"Ready",t:"Nothing running",d:"Breathes, blinks, ears wobble out of sync, eyes drift. The antenna light pulses in the brand color.",e:"n",m:"smile",p:[10,-10,4,4,0,0,0,0,0],b:["breathe",4],k:["drift",9]},
+think:{n:"Planning",c:"#FFD66B",h:"Thinking",t:"Building a plan",d:"Eyes up and right, hand on chin, a thought cloud with three bouncing dots, slow head sway.",e:"n",m:"smirk",p:[14,58,3,2.4,7,-7,-1,10,1],b:["sway",3.6]},
+browse:{n:"Browser",c:"#62B4FF",h:"Browsing",t:"Opening a page",d:"A window floats in beside it. Eyes sweep side to side, arm points at the page, the cursor wanders.",e:"n",m:"smile",p:[12,-115,6,1.6,0,0,0,0,0],b:["bob",1.8],k:["scan",2.2]},
+search:{n:"Search",c:"#4FD1E8",h:"Searching",t:"Searching the web",d:"Brows up, mouth a small o, eyes wide. Holds a magnifier and sweeps it in a slow arc while leaning in.",e:"wide",m:"o",p:[22,-100,5,1.8,4,0,-6,0,1],b:["lean",2.6]},
+read:{n:"Files",c:"#5FD8A6",h:"Reading",t:"Reading a file",d:"A page floats left, a highlight walks down the lines, eyes scan line by line, a slow nod.",e:"n",m:"flat",p:[100,14,3,2.6,0,0,0,6,1],b:["nod",3.2],k:["rd",3]},
+code:{n:"Terminal",c:"#FF7EB6",h:"Running code",t:"Executing a command",d:"Hands tap an unseen keyboard in alternation, body buzzes in time, a terminal types itself out.",e:"n",m:"smirk",p:[-40,40,13,.36,0,3,0,12,1],b:["buzz",.36]},
+mail:{n:"Email",c:"#B59CFF",h:"Sending mail",t:"Writing or sending email",d:"Holds up an envelope, then does a squash and stretch hop as it flies away. Shadow shrinks at the peak.",e:"n",m:"smile",p:[10,-100,5,1.4,4,0,0,0,0],b:["hop",1.8,1]},
+pay:{n:"Wallet",c:"#FF7A6B",h:"Checking out",t:"Handling a payment",d:"Careful, never rushed. Eyes squint at the card, brows furrowed, a lock bobs nearby, slow side lean.",e:"squint",m:"flat",p:[-52,52,1.5,3,0,4,1,14,1],b:["careful",3.4]},
+approve:{n:"Approval",c:"#FF7A6B",h:"Waiting on you",t:"Needs your OK",d:"Holds the decision out with both hands, hopeful brows, wide eyes, a double bounce and a pulsing ring.",e:"wide",m:"o",p:[-52,52,3,1,0,3,-6,-12,1],b:["hope",1.6,1]},
+success:{n:"Done",c:"#5FD8A6",h:"All done",t:"Task finished",d:"Arms up, happy closed eyes, big grin, a tall jump with squash and stretch, confetti and a check badge pop.",e:"happy",m:"grin",p:[155,-155,10,.5,0,-2,-4,0,1],b:["cheer",1.9,1]},
+error:{n:"Error",c:"#FF6B81",h:"Hit a snag",t:"Something failed",d:"Ears droop, brows worry, head tilts, hands tremble at the belly, a sweat drop slides down and a badge wobbles.",e:"wide",m:"sad",p:[-25,25,2,.25,-3,3,0,-16,1],b:["droop",2.4]},
+sleep:{n:"Background",c:"#8E86B8",h:"Working in the background",t:"App closed, still working",d:"Eyes shut, ears down, deep slow breathing and floating Zs. Wakes with a stretch when it needs you.",e:"closed",m:"flat",p:[6,-6,2,5,0,0,2,0,0],b:["snore",4.8]}};
+Object.assign(ST,{
+wave:{n:"Hello",c:"#FFD66B",h:"Hi there",t:"Greets you",d:"Big waving arm, happy closed eyes, a grin, a small double bounce and a speech bubble.",e:"happy",m:"grin",p:[12,-140,26,.55,0,0,-4,0,1],b:["hope",1.8]},
+listen:{n:"Listening",c:"#67E8F9",h:"Listening",t:"Voice mode",d:"Hand cupped to ear, ears perk toward you, wide eyes, a live voice meter bounces.",e:"wide",m:"o",p:[170,-10,3,1.6,3,0,-5,-8,1],b:["lean",2.2]},
+wait:{n:"Waiting",c:"#CBD5E1",h:"Waiting it out",t:"Long task or rate limit",d:"Arms crossed, patient eyes on a flipping hourglass, slow sway.",e:"n",m:"flat",p:[-55,55,1.5,3,5,-4,0,10,1],b:["sway",3.8]},
+write:{n:"Writing",c:"#FFA94D",h:"Writing",t:"Editing a file or note",d:"Holds a notepad, the pen hand scribbles, eyes follow the lines as they appear.",e:"n",m:"smirk",p:[-52,40,8,.5,0,4,0,12,1],b:["nod",2.4]},
+data:{n:"Analysis",c:"#2DD4BF",h:"Crunching numbers",t:"Data and spreadsheets",d:"Puts on glasses, points at a chart whose bars grow in turn, leans in to inspect.",e:"n",m:"smirk",p:[12,-105,4,1.8,4,-3,-2,8,1],b:["lean",2.6]},
+message:{n:"Messages",c:"#7C9CFF",h:"Chatting",t:"Slack, SMS, chat",d:"Chat bubbles pop in and out, typing dots bounce, an arm points at the thread.",e:"n",m:"smile",p:[14,-115,5,1.4,5,-4,-3,0,0],b:["bob",1.6]},
+calendar:{n:"Calendar",c:"#A3E635",h:"Scheduling",t:"Booking or checking time",d:"A calendar floats in, the header flips like a page and today's date pulses.",e:"n",m:"smile",p:[12,-120,5,2,4,-4,0,0,0],b:["bob",2]},
+shop:{n:"Shopping",c:"#E879F9",h:"Shopping",t:"Filling a cart",d:"Pushes a small cart, items drop in one by one with a soft bob.",e:"n",m:"smile",p:[-52,52,2,2.2,0,4,0,0,0],b:["bob",1.4]},
+create:{n:"Creating",c:"#FF8FA3",h:"Making something",t:"Image or design generation",d:"Paints with a brush, strokes draw themselves on a canvas, sparkles twinkle.",e:"wide",m:"smile",p:[20,-100,6,1.6,-5,0,-3,0,1],b:["sway",2.8]},
+memory:{n:"Memory",c:"#FFD66B",h:"Remembering",t:"Saving something for later",d:"A glowing note drops into its belly, the belly lights up, contented closed eyes.",e:"happy",m:"smile",p:[-45,45,2,2.6,0,0,2,0,0],b:["sway",3.4]},
+delegate:{n:"Sub-agents",c:"#A78BFA",h:"Delegating",t:"Spawning helper agents",d:"Arms up like a conductor while three mini Blips, each with its own tool light, bounce off to work.",e:"wide",m:"smile",p:[125,-125,12,.7,0,-3,-4,0,1],b:["bob",1.2]}});
+const GR=[["Basics",["idle","wave","think","listen","wait","sleep"]],["Web",["browse","search"]],["Files and code",["read","write","code","data"]],["Messages and time",["mail","message","calendar"]],["Money",["pay","shop","approve"]],["Create and remember",["create","memory","delegate"]],["Outcomes",["success","error"]]];
+
+const BODY=`
+<ellipse class="shd" cx="120" cy="216" rx="66" ry="9"/>
+<g class="sq2"><g class="sq">
+<g class="ear" style="--ed:-1"><path d="M72 88C56 70 58 44 74 38C90 46 98 66 96 84Z" fill="url(#gb)"/><path d="M75 80C68 68 69 54 75 49C83 55 87 66 86 77Z" fill="#FF9DB0" opacity=".7"/></g>
+<g class="ear" style="--ed:1;animation-delay:-1.5s"><path d="M168 88C184 70 182 44 166 38C150 46 142 66 144 84Z" fill="url(#gb)"/><path d="M165 80C172 68 171 54 165 49C157 55 153 66 154 77Z" fill="#FF9DB0" opacity=".7"/></g>
+<g class="ant"><path d="M120 66Q121 50 130 42" fill="none" stroke="#D99A2B" stroke-width="3" stroke-linecap="round"/><circle class="halo" cx="130" cy="40" r="12"/><circle class="orb" cx="130" cy="40" r="6"/><circle cx="128" cy="38" r="2" fill="#fff" opacity=".8"/></g>
+<ellipse class="ft ftL" cx="92" cy="206" rx="20" ry="10" fill="#E3A93A"/><ellipse class="ft ftR" cx="148" cy="206" rx="20" ry="10" fill="#E3A93A"/>
+<use href="#bd" fill="url(#gb)"/>
+<g clip-path="url(#bc)"><ellipse cx="120" cy="208" rx="82" ry="32" fill="#C88415" opacity=".22"/><ellipse cx="120" cy="166" rx="40" ry="30" fill="#FFF6D6" opacity=".55"/></g>
+<path d="M68 104C74 86 90 76 108 72" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity=".45"/><circle cx="62" cy="122" r="3.5" fill="#fff" opacity=".4"/>
+<g class="pr pr-code"><g transform="translate(0,0)"><rect x="82" y="188" width="76" height="22" rx="7" fill="#2B2142"/><path class="keys" d="M91 195h8m4 0h8m4 0h8m4 0h8m4 0h8M91 203h8m4 0h22m4 0h8m4 0h8" stroke="var(--t)" stroke-width="4" stroke-linecap="round"/></g></g>
+<g class="pr pr-memory"><ellipse class="bel" cx="120" cy="168" rx="36" ry="26" fill="var(--t)"/></g>
+<g class="pr pr-shop"><path d="M88 164h8l8 26h40l6-20H100" fill="none" stroke="var(--t)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="108" cy="200" r="4.5" fill="#1B1426"/><circle cx="146" cy="200" r="4.5" fill="#1B1426"/><rect class="itm" x="112" y="174" width="10" height="10" rx="3" fill="#FFD66B"/><circle class="itm i2" cx="130" cy="180" r="6" fill="#fff"/><rect class="itm i3" x="136" y="172" width="9" height="12" rx="3" fill="#7C9CFF"/></g>
+<g class="pr pr-write"><g transform="rotate(-5 120 184)"><rect x="90" y="160" width="60" height="46" rx="7" fill="#fff"/><rect x="90" y="160" width="60" height="9" rx="7" fill="var(--t)"/><rect class="tl" x="98" y="176" width="42" height="4" rx="2" fill="#D9D2E8"/><rect class="tl tl2" x="98" y="186" width="34" height="4" rx="2" fill="var(--t)"/><rect class="tl tl3" x="98" y="196" width="26" height="4" rx="2" fill="#D9D2E8"/></g><path d="M146 174l14-13" stroke="#1B1426" stroke-width="5" stroke-linecap="round"/><path d="M159 162l3-3" stroke="var(--t)" stroke-width="5" stroke-linecap="round"/></g>
+<g class="face"><ellipse class="chk" cx="76" cy="152" rx="10" ry="6.5" fill="#FF8FA8"/><ellipse class="chk" cx="164" cy="152" rx="10" ry="6.5" fill="#FF8FA8"/>
+<g class="eyes"><g class="eb"><g clip-path="url(#lcL)"><g class="eL"><ellipse cx="97" cy="130" rx="11.5" ry="14.5" fill="#1B1426"/><g clip-path="url(#ecL)"><g class="pg"><ellipse cx="97" cy="131" rx="8.8" ry="11.2" fill="var(--t)"/><ellipse cx="97" cy="131" rx="8.8" ry="11.2" fill="url(#gir)"/><ellipse cx="97" cy="138" rx="5.6" ry="3" fill="#fff" opacity=".22"/><ellipse class="pu" cx="97" cy="131" rx="4.4" ry="5.8" fill="#0F0A18"/></g></g><circle cx="101.5" cy="123.5" r="4.2" fill="#fff"/><circle cx="92.5" cy="137" r="2" fill="#fff" opacity=".85"/></g></g><g clip-path="url(#lcR)"><g class="eR"><ellipse cx="143" cy="130" rx="11.5" ry="14.5" fill="#1B1426"/><g clip-path="url(#ecR)"><g class="pg"><ellipse cx="143" cy="131" rx="8.8" ry="11.2" fill="var(--t)"/><ellipse cx="143" cy="131" rx="8.8" ry="11.2" fill="url(#gir)"/><ellipse cx="143" cy="138" rx="5.6" ry="3" fill="#fff" opacity=".22"/><ellipse class="pu" cx="143" cy="131" rx="4.4" ry="5.8" fill="#0F0A18"/></g></g><circle cx="147.5" cy="123.5" r="4.2" fill="#fff"/><circle cx="138.5" cy="137" r="2" fill="#fff" opacity=".85"/></g></g><path class="lash" d="M86 132Q97 140 108 132"/><path class="lash" d="M132 132Q143 140 154 132"/></g></g>
+<g class="pr pr-data"><circle cx="97" cy="130" r="15" fill="none" stroke="#1B1426" stroke-width="3"/><circle cx="143" cy="130" r="15" fill="none" stroke="#1B1426" stroke-width="3"/><path d="M112 128q8-5 16 0M82 126l-8-4M158 126l8-4" stroke="#1B1426" stroke-width="3" fill="none" stroke-linecap="round"/></g>
+<g class="eh" fill="none" stroke="#1B1426" stroke-width="4.5" stroke-linecap="round"><path d="M86 134Q97 120 108 134"/><path d="M132 134Q143 120 154 134"/></g>
+<g class="ec" fill="none" stroke="#1B1426" stroke-width="4.5" stroke-linecap="round"><path d="M86 129Q97 138 108 129"/><path d="M132 129Q143 138 154 129"/></g>
+<g fill="none" stroke="#1B1426" stroke-width="4" stroke-linecap="round"><path class="br bl" d="M85 108Q97 102 109 108"/><path class="br brr" d="M131 108Q143 102 155 108"/></g>
+<g class="mo" fill="none" stroke="#1B1426" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path class="m smile" d="M109 152Q120 162 131 152"/><path class="m smirk" d="M110 155Q120 160 130 152"/><path class="m flat" d="M112 157H128"/><path class="m sad" d="M109 162Q120 151 131 162"/><ellipse class="m o" cx="120" cy="158" rx="5" ry="6.5" fill="#5A1F3B"/><path class="m grin" d="M108 150Q120 150 132 150Q130 168 120 168Q110 168 108 150Z" fill="#5A1F3B"/><ellipse class="m grin" cx="120" cy="164" rx="6.5" ry="3.6" fill="#FF8FA8" stroke="none"/></g></g>
+<g transform="translate(66,150)"><g class="arm aL" style="transform:rotate(var(--la))"><rect x="-9" width="18" height="42" rx="9" fill="#E3A33A"/><circle cy="40" r="10.5" fill="#FFD66B" stroke="#E3A33A" stroke-width="1.5"/><circle cx="-3" cy="36" r="3" fill="#fff" opacity=".4"/></g></g>
+<g transform="translate(174,150)"><g class="arm aR" style="transform:rotate(var(--ra))"><rect x="-9" width="18" height="42" rx="9" fill="#E3A33A"/><circle cy="40" r="10.5" fill="#FFD66B" stroke="#E3A33A" stroke-width="1.5"/><circle cx="-3" cy="36" r="3" fill="#fff" opacity=".4"/></g></g>
+<g class="pr pr-search"><g class="mg"><circle cx="226" cy="124" r="17" fill="#fff" fill-opacity=".25" stroke="var(--t)" stroke-width="5"/><path d="M214 137L207 146" stroke="var(--t)" stroke-width="6" stroke-linecap="round"/><path d="M218 116a10 10 0 018-5" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" opacity=".8"/></g></g>
+<g class="pr pr-mail"><g class="env"><rect x="198" y="118" width="38" height="27" rx="5" fill="#fff"/><path d="M198 122l19 13 19-13" fill="none" stroke="var(--t)" stroke-width="3" stroke-linejoin="round"/></g></g>
+<g class="pr pr-pay"><g transform="rotate(-6 120 180)"><rect x="88" y="160" width="64" height="40" rx="7" fill="var(--t)"/><rect x="88" y="168" width="64" height="8" fill="#1B1426" opacity=".6"/><rect x="95" y="184" width="14" height="10" rx="2.5" fill="#FFE9A6"/><path d="M128 190h18" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".8"/></g><g class="fl1"><rect x="196" y="88" width="24" height="18" rx="5" fill="#fff"/><path d="M201 88v-5a7 7 0 0114 0v5" stroke="#fff" fill="none" stroke-width="3.5"/></g></g>
+<g class="pr pr-approve"><circle class="rg" cx="120" cy="182" r="26" fill="none" stroke="var(--t)" stroke-width="3"/><rect x="96" y="158" width="48" height="48" rx="13" fill="var(--t)"/><text x="120" y="194" text-anchor="middle" font-size="32" font-weight="800" fill="#1B1426" font-family="ui-rounded,system-ui,sans-serif">?</text></g>
+</g></g>
+<g class="pr pr-think"><circle class="cl" cx="186" cy="76" r="4"/><circle class="cl" cx="196" cy="60" r="6"/><g class="fl1"><ellipse class="cl" cx="222" cy="34" rx="34" ry="20"/><circle class="dd" cx="208" cy="34" r="3.5"/><circle class="dd" style="animation-delay:.2s" cx="222" cy="34" r="3.5"/><circle class="dd" style="animation-delay:.4s" cx="236" cy="34" r="3.5"/></g></g>
+<g class="pr pr-browse"><g class="fl1"><rect x="180" y="22" width="76" height="58" rx="9" fill="#fff"/><path d="M180 31a9 9 0 019-9h58a9 9 0 019 9v5H180z" fill="var(--t)"/><circle cx="190" cy="29" r="2" fill="#fff"/><circle cx="198" cy="29" r="2" fill="#fff"/><rect x="190" y="44" width="40" height="5" rx="2.5" fill="#D9D2E8"/><rect x="190" y="55" width="56" height="5" rx="2.5" fill="#D9D2E8"/><rect x="190" y="66" width="30" height="5" rx="2.5" fill="var(--t)" opacity=".6"/><path class="cur" d="M222 52v14l4-4 3 7 3-1-3-7h6z" fill="#1B1426" stroke="#fff"/></g></g>
+<g class="pr pr-read"><g class="fl2"><g transform="rotate(-8 13 131)"><rect x="-18" y="92" width="62" height="78" rx="8" fill="#fff"/><rect x="-8" y="104" width="38" height="5" rx="2.5" fill="#D9D2E8"/><rect x="-8" y="116" width="42" height="5" rx="2.5" fill="#D9D2E8"/><rect x="-8" y="128" width="30" height="5" rx="2.5" fill="#D9D2E8"/><rect x="-8" y="140" width="40" height="5" rx="2.5" fill="#D9D2E8"/><rect x="-8" y="152" width="26" height="5" rx="2.5" fill="#D9D2E8"/><rect class="hl" x="-12" y="101" width="50" height="11" rx="4" fill="var(--t)" opacity=".4"/></g></g></g>
+<g class="pr pr-code"><g class="fl1"><rect x="178" y="22" width="80" height="58" rx="9" fill="#1B1426" stroke="var(--t)" stroke-width="2"/><path d="M188 38l6 5-6 5" stroke="var(--t)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect class="tl" x="200" y="40" width="44" height="4" rx="2" fill="#fff" opacity=".8"/><rect class="tl tl2" x="188" y="54" width="56" height="4" rx="2" fill="var(--t)"/><rect class="tl tl3" x="188" y="64" width="34" height="4" rx="2" fill="#fff" opacity=".5"/><rect class="cbk" x="230" y="62" width="6" height="8" fill="var(--t)"/></g></g>
+<g class="pr pr-success"><g class="cf" transform="translate(120,72)"><rect width="9" height="9" rx="2" fill="#FF7EB6" style="--x:-90px;--y:-70px"/><rect width="9" height="9" rx="2" fill="#62B4FF" style="--x:90px;--y:-80px;animation-delay:.1s"/><circle r="5" fill="#FFD66B" style="--x:-60px;--y:-110px;animation-delay:.2s"/><circle r="5" fill="#B59CFF" style="--x:60px;--y:-112px;animation-delay:.05s"/><rect width="8" height="8" rx="2" fill="#5FD8A6" style="--x:-110px;--y:-20px;animation-delay:.3s"/><rect width="8" height="8" rx="2" fill="#FF7A6B" style="--x:112px;--y:-30px;animation-delay:.15s"/><circle r="4" fill="#fff" style="--x:-20px;--y:-125px;animation-delay:.25s"/><circle r="4" fill="#fff" style="--x:24px;--y:-120px;animation-delay:.35s"/></g><g class="ck"><circle cx="196" cy="66" r="16" fill="#5FD8A6"/><path d="M188 66l6 6 11-12" stroke="#1B1426" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g></g>
+<g class="pr pr-error"><path class="sw" d="M186 96q-8 12 0 18q8-6 0-18z" fill="#7CC8FF"/><g class="eg"><circle cx="40" cy="66" r="15" fill="#FF6B81"/><path d="M40 58v9M40 73v.01" stroke="#fff" stroke-width="4" stroke-linecap="round"/></g></g>
+<g class="pr pr-sleep" font-weight="800" font-family="ui-rounded,system-ui,sans-serif" fill="var(--t)"><text class="z1" x="184" y="64" font-size="16">z</text><text class="z2" x="196" y="52" font-size="22">z</text><text class="z3" x="210" y="36" font-size="28">Z</text></g>
+<g class="pr pr-data"><g class="fl1"><rect x="180" y="22" width="76" height="62" rx="9" fill="#fff"/><rect class="bar" x="190" y="52" width="10" height="24" rx="3" fill="var(--t)"/><rect class="bar" style="animation-delay:.2s" x="206" y="40" width="10" height="36" rx="3" fill="var(--t)"/><rect class="bar" style="animation-delay:.4s" x="222" y="58" width="10" height="18" rx="3" fill="var(--t)"/><rect class="bar" style="animation-delay:.6s" x="238" y="32" width="10" height="44" rx="3" fill="var(--t)"/></g></g>
+<g class="pr pr-calendar"><g class="fl1"><rect x="182" y="22" width="72" height="64" rx="10" fill="#fff"/><path class="fp" d="M182 32a10 10 0 0110-10h52a10 10 0 0110 10v8H182z" fill="var(--t)"/><circle cx="198" cy="22" r="3.5" fill="#1B1426"/><circle cx="238" cy="22" r="3.5" fill="#1B1426"/><g fill="#D9D2E8"><circle cx="198" cy="54" r="3"/><circle cx="212" cy="54" r="3"/><circle cx="226" cy="54" r="3"/><circle cx="240" cy="54" r="3"/><circle cx="198" cy="68" r="3"/><circle cx="212" cy="68" r="3"/><circle cx="240" cy="68" r="3"/></g><circle class="hlc" cx="226" cy="68" r="6" fill="var(--t)"/></g></g>
+<g class="pr pr-message"><g class="fl1"><g class="bub"><path d="M184 28a10 10 0 0110-10h36a10 10 0 0110 10v14a10 10 0 01-10 10h-24l-10 8v-8h-2a10 10 0 01-10-10z" fill="#fff"/><path d="M194 30h28M194 40h18" stroke="#D9D2E8" stroke-width="4" stroke-linecap="round"/></g><g class="bub b2"><path d="M214 64a10 10 0 0110-10h22a10 10 0 0110 10v8a10 10 0 01-10 10h-1v8l-10-8h-11a10 10 0 01-10-10z" fill="var(--t)"/><circle class="dd" cx="226" cy="68" r="3" fill="#1B1426"/><circle class="dd" style="animation-delay:.2s" cx="236" cy="68" r="3" fill="#1B1426"/><circle class="dd" style="animation-delay:.4s" cx="246" cy="68" r="3" fill="#1B1426"/></g></g></g>
+<g class="pr pr-create"><g class="brs"><path d="M214 140l16-22" stroke="#8A5A2B" stroke-width="5" stroke-linecap="round"/><path d="M229 120l6-8" stroke="var(--t)" stroke-width="8" stroke-linecap="round"/></g><g class="fl2"><g transform="rotate(-6 14 131)"><rect x="-18" y="94" width="62" height="70" rx="8" fill="#fff"/><path class="tl" d="M-8 150q14-30 28-8t18-24" stroke="var(--t)" stroke-width="6" fill="none" stroke-linecap="round"/><path class="tl tl2" d="M-8 126q20 10 40-8" stroke="#7C9CFF" stroke-width="6" fill="none" stroke-linecap="round"/><circle class="tl tl3" cx="30" cy="112" r="7" fill="#FFD66B"/></g></g><path class="spk" d="M236 70l3 8 8 3-8 3-3 8-3-8-8-3 8-3z" fill="var(--t)"/><path class="spk s2" d="M54 88l2 6 6 2-6 2-2 6-2-6-6-2 6-2z" fill="#fff"/></g>
+<g class="pr pr-listen"><g class="fl1" fill="var(--t)"><rect class="wv" x="192" y="40" width="8" height="30" rx="4"/><rect class="wv" style="animation-delay:.15s" x="206" y="34" width="8" height="42" rx="4"/><rect class="wv" style="animation-delay:.3s" x="220" y="44" width="8" height="24" rx="4"/><rect class="wv" style="animation-delay:.45s" x="234" y="36" width="8" height="38" rx="4"/></g></g>
+<g class="pr pr-memory"><g class="nt"><rect x="160" y="40" width="30" height="30" rx="8" fill="var(--t)"/><path d="M175 47l3.5 7 7.5 1-5.5 5 1.5 7.5-7-3.8-7 3.8 1.5-7.5-5.5-5 7.5-1z" fill="#1B1426"/></g></g>
+<g class="pr pr-delegate"><use href="#mn" class="mb" x="198" y="120" style="--t:#62B4FF"/><use href="#mn" class="mb" x="20" y="126" style="--t:#FF7EB6;animation-delay:-.6s"/><use href="#mn" class="mb" x="216" y="178" style="--t:#5FD8A6;animation-delay:-1.1s"/></g>
+<g class="pr pr-wait"><g class="fl1"><g class="hg"><path d="M200 22h40M200 78h40" stroke="var(--t)" stroke-width="5" stroke-linecap="round"/><path d="M204 26c0 18 12 20 16 26c4-6 16-8 16-26M204 78c0-18 12-20 16-26c4 6 16 8 16 26" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" opacity=".9"/><path class="sn1" d="M209 30h22l-11 17z" fill="var(--t)"/><path class="sn2" d="M209 74h22l-11-15z" fill="var(--t)"/></g></g></g>
+<g class="pr pr-wave"><g class="fl1"><path d="M190 30a12 12 0 0112-12h28a12 12 0 0112 12v10a12 12 0 01-12 12h-14l-10 9v-9h-4a12 12 0 01-12-12z" fill="#fff"/><text x="216" y="43" text-anchor="middle" font-size="22" font-weight="800" fill="#1B1426" font-family="ui-rounded,system-ui,sans-serif">Hi!</text></g></g>
+`;
+const grp={};GR.forEach(([g,l])=>l.forEach(k=>grp[k]=g));
+const order=GR.flatMap(g=>g[1]);const board=document.getElementById("board");
+order.forEach(k=>{const s=ST[k],[la,ra,w,wd,ex,ey,by,ba,bo]=s.p,t=document.createElement("article");t.className="tile";t.style.setProperty("--t",s.c);
+t.innerHTML=`<div class="art"><svg class="mxs" viewBox="-20 0 280 240" data-s="${k}" data-e="${s.e}" data-m="${s.m}" style="--la:${la}deg;--ra:${ra}deg;--w:${w}deg;--wd:${wd}s;--ex:${ex}px;--ey:${ey}px;--hx:${ex*.3}px;--hy:${ey*.25}px;--by:${by}px;--ba:${ba}deg;--bo:${bo};--bk:${s.b[0]};--bd:${s.b[1]}s;--sk:${s.b[2]?"shd":"none"};--ek:${s.k?s.k[0]:"none"};--ekd:${s.k?s.k[1]+"s":"3s"}" role="img" aria-label="Blip, ${s.n}">${BODY}</svg></div><div class="inf"><span class="gp">${grp[k]}</span><h3><i></i>${s.n}</h3><p class="tr">${s.t}</p><p>${s.d}</p><code>L ${la}° R ${ra}° · ${s.b[0]} ${s.b[1]}s</code></div>`;
+t.querySelectorAll(".pr").forEach(p=>p.classList.contains("pr-"+k)?p.classList.add("on"):p.remove());board.appendChild(t)});
+const lg=document.createElement("article");lg.className="tile inf leg";lg.innerHTML=`<b>One rig, 23 states</b><p>Every tile uses the same 280 x 240 canvas, the same scale and the same body. Only the pose numbers, face, and prop change.</p><code>${order.length} states, all looping</code>`;board.appendChild(lg);
+const idle=board.querySelector('[data-s=idle]');setInterval(()=>{const a=["wink","twitch","hip"][Math.random()*3|0];idle.classList.add(a);setTimeout(()=>idle.classList.remove(a),1000)},4200);
+let pq=0;addEventListener("pointermove",e=>{if(pq)return;pq=requestAnimationFrame(()=>{pq=0;document.querySelectorAll(".mxs").forEach(m=>{const r=m.getBoundingClientRect(),c=(v,a,b)=>Math.max(-1,Math.min(1,(v-a)/b*2));m.style.setProperty("--px",c(e.clientX,r.left+r.width/2,innerWidth)*2.6+"px");m.style.setProperty("--py",c(e.clientY,r.top+r.height/2,innerHeight)*2.2+"px")})})});
+const tog=(id,cls)=>document.getElementById(id).onclick=e=>{board.classList.toggle(cls);e.currentTarget.setAttribute("aria-pressed",board.classList.contains(cls))};
+tog("gd","g");tog("ps","p");
+document.getElementById("tg").onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme=="dark"?"light":"dark"};
+</script></body></html>
