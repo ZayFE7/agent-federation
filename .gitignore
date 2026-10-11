@@ -4,3 +4,5 @@ node_modules/
 dist/
 .env
 __pycache__/
+
+deploy/router-worker/router-config.json

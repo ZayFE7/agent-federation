@@ -1,0 +1,12 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "zay-router",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "kv_namespaces": [
+    {
+      "binding": "ROUTER_CONFIG",
+      "id": "45aef8b69a2b4b42997bd7dc24d435ea"
+    }
+  ]
+}
