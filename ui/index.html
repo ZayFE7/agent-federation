@@ -9,10 +9,10 @@
 @property --t { syntax: "<color>"; inherits: true; initial-value: #FFD66B; }
 @property --p { syntax: "<number>"; inherits: true; initial-value: 0; }
 :root {
-  --t: #FFD66B;
-  --p: 0;
+  --t: #FFD66B; --p: 0;
   --bg: #0E0916; --s1: #171024; --s2: #1F1731; --s3: #2B2142;
   --ln: rgba(255,255,255,.09); --ink: #F5F0FF; --mu: #9C91B8;
+  --glass: rgba(31,23,49,.72);
   --f: ui-rounded, "SF Pro Rounded", Nunito, "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --spring: cubic-bezier(.3,1.5,.5,1);
@@ -21,251 +21,256 @@
 :root[data-theme="light"] {
   --bg: #F3EFFA; --s1: #FFFFFF; --s2: #F6F2FC; --s3: #E9E2F5;
   --ln: rgba(27,20,38,.1); --ink: #1B1426; --mu: #6E6580;
+  --glass: rgba(255,255,255,.78);
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg: #F3EFFA; --s1: #FFFFFF; --s2: #F6F2FC; --s3: #E9E2F5;
     --ln: rgba(27,20,38,.1); --ink: #1B1426; --mu: #6E6580;
+    --glass: rgba(255,255,255,.78);
   }
 }
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+* { box-sizing: border-box; margin: 0; }
+html, body { height: 100%; }
 body {
-  background:
-    radial-gradient(900px 500px at 80% -10%, color-mix(in srgb, var(--t) 7%, transparent), transparent 60%),
-    var(--bg);
-  color: var(--ink); font: 15px/1.45 var(--f);
-  display: flex; overflow: hidden;
-  transition: --t .7s ease;
+  background: var(--bg); color: var(--ink); font: 15px/1.45 var(--f);
+  display: flex; flex-direction: column; overflow: hidden;
 }
 button { font: inherit; color: inherit; cursor: pointer; background: none; border: none; }
 button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--t); outline-offset: 2px; }
 
-/* rail */
-.rail {
-  width: 76px; border-right: 1px solid var(--ln); background: var(--s1);
-  display: flex; flex-direction: column; align-items: center; padding: 18px 0; gap: 8px;
+/* top bar */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px clamp(14px, 3vw, 28px); gap: 12px; z-index: 30;
 }
-.rail .logo {
-  width: 42px; height: 42px; border-radius: 14px; margin-bottom: 14px;
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-orb {
+  width: 30px; height: 30px; border-radius: 10px;
   background: radial-gradient(circle at 32% 30%, #FFF3C4, var(--t) 55%, #C88415);
-  box-shadow: 0 0 22px color-mix(in srgb, var(--t) 45%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--t) 40%, transparent);
   transition: box-shadow .5s ease;
 }
-.tab {
-  width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center;
-  color: var(--mu); transition: all .25s var(--spring); position: relative;
+.brand b { font-size: 15px; letter-spacing: -.01em; font-weight: 800; }
+.brand small { display: block; font-family: var(--mono); font-size: 9.5px; letter-spacing: .22em; color: var(--mu); }
+.top-actions { display: flex; gap: 8px; }
+.pillbtn {
+  border: 1px solid var(--ln); background: var(--glass); backdrop-filter: blur(14px);
+  border-radius: 99px; padding: 8px 14px; font-size: 12.5px; font-weight: 700;
+  color: var(--mu); transition: all .2s var(--spring); display: inline-flex; align-items: center; gap: 7px;
 }
-.tab svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.tab[aria-selected="true"] { background: var(--ink); color: var(--bg); transform: translateY(-2px); }
-.tab:hover { color: var(--ink); }
-.tab small { display: none; }
-.rail .spacer { flex: 1; }
+.pillbtn:hover { color: var(--ink); border-color: color-mix(in srgb, var(--t) 40%, var(--ln)); transform: translateY(-1px); }
+.pillbtn .dotc { width: 7px; height: 7px; border-radius: 50%; background: var(--mu); }
+.pillbtn .dotc.on { background: #5FD8A6; box-shadow: 0 0 8px #5FD8A6; }
+.pillbtn .dotc.err { background: #FF6B81; }
 
-/* chats column */
-.chats {
-  width: 300px; min-width: 300px; border-right: 1px solid var(--ln);
-  background: linear-gradient(180deg, var(--s1), var(--bg));
-  display: flex; flex-direction: column; padding: 18px 14px; gap: 10px;
-}
-.chats h1 { font-size: 20px; letter-spacing: -.02em; margin: 4px 6px 10px; font-weight: 800; }
-.chat-row {
-  display: flex; gap: 10px; align-items: center; padding: 12px 13px; border-radius: 18px;
-  border: 1px solid var(--ln); background: var(--s2); text-align: left; width: 100%;
-  transition: all .3s var(--spring);
-}
-.chat-row[aria-current="true"] { border-color: var(--t); background: color-mix(in srgb, var(--t) 10%, var(--s1)); transform: translateX(3px); }
-.chat-row i { width: 10px; height: 10px; border-radius: 4px; background: var(--t); flex: none; }
-.chat-row b { display: block; font-size: 14px; line-height: 1.2; }
-.chat-row small { color: var(--mu); font-size: 12px; font-family: var(--mono); }
-
-/* main */
-main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
-
+/* stage hero */
 .stage {
-  position: relative; padding: 10px 0 0; text-align: center; overflow: hidden;
-  border: none; border-radius: 0;
-  border-bottom: 1px solid var(--ln); background: linear-gradient(180deg, var(--s1), transparent);
+  position: relative; text-align: center; padding: 6px 16px 18px; flex: none; overflow: hidden;
 }
 .stage::before {
-  content: ""; position: absolute; left: 50%; top: -60px; width: 480px; height: 320px;
+  content: ""; position: absolute; left: 50%; top: -120px; width: min(720px, 120vw); height: 480px;
   transform: translateX(-50%); pointer-events: none;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--t) 22%, transparent), transparent);
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--t) 30%, transparent), transparent 72%);
+  transition: background .8s ease;
 }
 #peek {
-  position: relative; width: 128px; height: 104px; margin: 0 auto; overflow: hidden;
-  cursor: pointer; transition: width .55s var(--spring), height .55s var(--spring);
+  position: relative; width: 240px; height: 175px; margin: 0 auto; overflow: hidden; cursor: default;
 }
-#peek.full { width: 230px; height: 170px; }
-#peek .blip-mount { width: 230px; display: block; margin: 0 auto; }
-#peek svg { width: 230px; height: auto; display: block; margin-top: -14px; transform: translateX(-14px); }
-.capsule {
-  position: relative; margin: -4px auto 0; width: min(520px, calc(100% - 36px));
-  border-radius: 99px; border: 1px solid var(--ln); background: var(--s2);
-  display: flex; align-items: center; gap: 10px; padding: 9px 16px; overflow: hidden;
-  z-index: 2;
+#peek svg {
+  width: 240px; height: auto; display: block; margin-top: -6px;
 }
-.capsule::before {
+.verbline {
+  position: relative; font-size: clamp(24px, 4.5vw, 34px); font-weight: 800;
+  letter-spacing: -.03em; line-height: 1.05; margin-top: -6px;
+  transition: color .5s ease;
+}
+.tagrow { position: relative; display: flex; justify-content: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.tagchip {
+  display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 99px;
+  background: color-mix(in srgb, var(--t) 16%, transparent);
+  font-family: var(--mono); font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
+}
+.tagchip i { width: 8px; height: 8px; border-radius: 3px; background: var(--t); }
+.steps { position: relative; display: flex; gap: 5px; justify-content: center; margin-top: 14px; }
+.steps span {
+  width: 42px; height: 4px; border-radius: 99px; background: var(--s3); overflow: hidden; position: relative;
+}
+.steps span.on { background: color-mix(in srgb, var(--t) 35%, var(--s3)); }
+.steps span.cur::after {
   content: ""; position: absolute; inset: 0; width: calc(var(--p) * 1%);
-  background: var(--pfill); transition: width .5s ease; pointer-events: none;
+  background: var(--t); border-radius: 99px;
 }
-.capsule .cdot { width: 9px; height: 9px; border-radius: 50%; background: var(--t); animation: pulse 1.8s ease-in-out infinite; flex: none; }
-@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--t) 55%, transparent);} 50% { box-shadow: 0 0 0 7px transparent; } }
-.capsule .verb { font-weight: 700; font-size: 13.5px; flex: 1; text-align: left; position: relative; }
-.capsule .tagp {
-  font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 99px;
-  background: color-mix(in srgb, var(--t) 18%, transparent); position: relative;
-}
-.capsule .clock { font-family: var(--mono); font-size: 12px; color: var(--mu); position: relative; min-width: 38px; text-align: right; }
 
 /* thread */
 .thread {
-  flex: 1; overflow-y: auto; padding: 22px clamp(16px, 4vw, 40px) 8px;
+  flex: 1; overflow-y: auto; padding: 10px clamp(16px, 4vw, 40px) 120px;
   display: flex; flex-direction: column; gap: 12px;
 }
 .thread::-webkit-scrollbar { width: 10px; }
 .thread::-webkit-scrollbar-thumb { background: var(--s3); border-radius: 8px; }
 .bubble {
-  max-width: 640px; padding: 12px 16px; border-radius: 22px; font-size: 15px; line-height: 1.5;
-  white-space: pre-wrap; word-break: break-word; animation: popin .35s var(--spring);
+  max-width: 640px; padding: 13px 17px; border-radius: 22px; font-size: 15px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word; animation: popin .4s var(--spring);
   border: 1px solid var(--ln);
 }
-@keyframes popin { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes popin { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: none; } }
 .bubble.user { align-self: flex-end; background: var(--ink); color: var(--bg); border: none; border-bottom-right-radius: 8px; }
 .bubble.agent { align-self: flex-start; background: var(--s2); border-bottom-left-radius: 8px; }
-.bubble.sys { align-self: center; background: transparent; color: var(--mu); font-family: var(--mono); font-size: 12px; border: none; }
+.bubble.sys { align-self: center; background: none; border: none; color: var(--mu); font-family: var(--mono); font-size: 12px; }
 .empty {
   margin: auto; text-align: center; color: var(--mu); font-family: var(--mono);
-  letter-spacing: .3em; font-size: 12px;
+  letter-spacing: .34em; font-size: 12px; padding-bottom: 40px;
 }
-.empty b { display: block; font-size: 22px; letter-spacing: .45em; margin-bottom: 10px; color: var(--ink); font-weight: 800; }
+.empty b { display: block; font-size: 20px; letter-spacing: .5em; color: var(--ink); font-weight: 800; margin-bottom: 10px; }
 
-/* composer */
-.composer-wrap { padding: 10px clamp(16px, 4vw, 40px) calc(18px + env(safe-area-inset-bottom, 0px)); }
-.composer {
-  max-width: 760px; margin: 0 auto; display: flex; align-items: flex-end; gap: 10px;
-  border: 1px solid var(--ln); border-radius: 22px; background: var(--s2);
-  padding: 12px 14px; transition: border-color .2s ease, box-shadow .2s ease;
+/* floating composer dock */
+.dock {
+  position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%); width: min(720px, calc(100% - 28px)); z-index: 40;
 }
-.composer:focus-within { border-color: color-mix(in srgb, var(--t) 50%, var(--ln)); box-shadow: 0 10px 30px -12px color-mix(in srgb, var(--t) 40%, transparent); }
+.composer {
+  display: flex; align-items: flex-end; gap: 10px;
+  border: 1px solid var(--ln); border-radius: 24px;
+  background: var(--glass); backdrop-filter: blur(20px) saturate(1.3);
+  padding: 12px 12px 12px 18px;
+  box-shadow: 0 18px 50px -18px rgba(0,0,0,.55);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+:root[data-theme="light"] .composer { box-shadow: 0 18px 50px -18px rgba(27,20,38,.25); }
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--t) 55%, var(--ln));
+  box-shadow: 0 18px 50px -18px color-mix(in srgb, var(--t) 45%, transparent);
+}
 .composer textarea {
   flex: 1; background: none; border: none; resize: none; outline: none; color: var(--ink);
-  font: 15px/1.45 var(--f); max-height: 160px;
+  font: 15px/1.4 var(--f); max-height: 140px;
 }
 .composer textarea::placeholder { color: var(--mu); }
 .send {
-  border-radius: 14px; padding: 10px 18px; font-weight: 800; font-size: 13px;
+  border-radius: 16px; padding: 11px 20px; font-weight: 800; font-size: 13px;
   background: var(--t); color: #1B1426; transition: transform .15s ease, opacity .2s;
 }
 .send:hover { transform: translateY(-1px); }
 .send:disabled { opacity: .4; cursor: not-allowed; transform: none; }
 
-/* side panel (settings) */
-.side {
-  width: 300px; border-left: 1px solid var(--ln); background: var(--s1);
-  padding: 20px 18px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+/* drawers */
+.scrim {
+  position: fixed; inset: 0; background: rgba(10,6,18,.55); backdrop-filter: blur(3px);
+  opacity: 0; pointer-events: none; transition: opacity .3s ease; z-index: 50;
 }
-.side h2 { font-size: 12px; font-family: var(--mono); letter-spacing: .22em; color: var(--mu); font-weight: 500; margin: 6px 0 2px; }
+.scrim.open { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: fixed; top: 0; bottom: 0; width: min(340px, 88vw); z-index: 60;
+  background: var(--s1); border: 1px solid var(--ln); padding: 22px 18px;
+  display: flex; flex-direction: column; gap: 16px; overflow-y: auto;
+  transition: transform .45s var(--spring);
+}
+#drawerLeft { left: 0; border-radius: 0 28px 28px 0; transform: translateX(-105%); }
+#drawerRight { right: 0; border-radius: 28px 0 0 28px; transform: translateX(105%); }
+.drawer.open { transform: none; }
+.drawer h2 { font-family: var(--mono); font-size: 11px; letter-spacing: .24em; color: var(--mu); font-weight: 500; }
+.drawer h1 { font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
 .card { border: 1px solid var(--ln); background: var(--s2); border-radius: 22px; padding: 14px; }
-.card .row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 4px 0; }
+.card .row { display: flex; justify-content: space-between; align-items: center; font-size: 13.5px; padding: 4px 0; }
 .card .row span { color: var(--mu); }
 .card .row b { font-family: var(--mono); font-size: 12px; font-weight: 500; }
-.dot7 { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; background: var(--mu); }
-.dot7.on { background: #5FD8A6; box-shadow: 0 0 8px #5FD8A6; }
-.dot7.err { background: #FF6B81; }
 .lane { display: flex; gap: 6px; }
 .lane button {
-  flex: 1; border: 1px solid var(--ln); border-radius: 12px; padding: 8px 0;
+  flex: 1; border: 1px solid var(--ln); border-radius: 14px; padding: 9px 0;
   font-family: var(--mono); font-size: 11px; color: var(--mu); transition: all .2s var(--spring);
 }
 .lane button.active { border-color: var(--t); color: var(--ink); background: color-mix(in srgb, var(--t) 12%, transparent); }
 .keyin {
-  width: 100%; border: 1px solid var(--ln); border-radius: 12px; background: var(--bg);
-  color: var(--ink); padding: 10px; font-family: var(--mono); font-size: 12px; outline: none;
+  width: 100%; border: 1px solid var(--ln); border-radius: 14px; background: var(--bg);
+  color: var(--ink); padding: 11px; font-family: var(--mono); font-size: 12px; outline: none;
 }
-.setbtn { width: 100%; margin-top: 8px; border-radius: 12px; background: var(--t); color: #1B1426; font-weight: 700; padding: 9px 0; font-size: 13px; }
-.note { font-size: 12px; color: var(--mu); line-height: 1.5; }
+.setbtn { width: 100%; margin-top: 8px; border-radius: 14px; background: var(--t); color: #1B1426; font-weight: 800; padding: 10px 0; font-size: 13px; }
+.note { font-size: 12.5px; color: var(--mu); line-height: 1.55; }
+.chat-row {
+  display: flex; gap: 10px; align-items: center; padding: 13px 14px; border-radius: 18px;
+  border: 1px solid var(--ln); background: var(--s2); text-align: left; width: 100%;
+  transition: all .3s var(--spring);
+}
+.chat-row[aria-current="true"] { border-color: var(--t); background: color-mix(in srgb, var(--t) 10%, var(--s1)); }
+.chat-row i { width: 10px; height: 10px; border-radius: 4px; background: var(--t); flex: none; }
+.chat-row b { display: block; font-size: 14px; }
+.chat-row small { color: var(--mu); font-size: 12px; font-family: var(--mono); }
 
-@media (max-width: 1100px) { .side { display: none; } }
-@media (max-width: 860px) {
-  .rail { display: none; }
-  .chats { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 </style>
 </head>
 <body>
-  <nav class="rail" role="tablist" aria-label="Sections">
-    <div class="logo" title="Blip"></div>
-    <button class="tab" role="tab" aria-selected="true" title="Chat">
-      <svg viewBox="0 0 24 24"><path d="M4 6h16v10H8l-4 4z"/></svg>
-    </button>
-    <button class="tab" role="tab" aria-selected="false" title="Tasks (soon)" disabled>
-      <svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
-    </button>
-    <button class="tab" role="tab" aria-selected="false" title="Docs (soon)" disabled>
-      <svg viewBox="0 0 24 24"><path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/></svg>
-    </button>
-    <div class="spacer"></div>
-    <button class="tab" id="clearTab" role="tab" aria-selected="false" title="Clear thread">
-      <svg viewBox="0 0 24 24"><path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/></svg>
-    </button>
-  </nav>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-orb"></div>
+      <div><b>Blip</b><small>FEDERATION</small></div>
+    </div>
+    <div class="top-actions">
+      <button class="pillbtn" id="btnChats">Chats</button>
+      <button class="pillbtn" id="btnBrain"><span class="dotc" id="dBrain"></span>brain</button>
+      <button class="pillbtn" id="btnSettings">Settings</button>
+    </div>
+  </header>
 
-  <aside class="chats">
+  <section class="stage" id="stage">
+    <div id="peek" title="Blip"><div id="blipMount"></div></div>
+    <div class="verbline" id="verb">Ready when you are</div>
+    <div class="tagrow">
+      <span class="tagchip"><i></i><span id="toolTag">idle</span></span>
+      <span class="tagchip" style="background:transparent;border:1px solid var(--ln);color:var(--mu)"><span id="clock">0:00</span></span>
+      <span class="tagchip" style="background:transparent;border:1px solid var(--ln);color:var(--mu)"><span id="transport">rest</span></span>
+    </div>
+    <div class="steps" id="steps"><span class="on"></span><span class="cur"></span><span></span><span></span></div>
+  </section>
+
+  <div class="thread" id="thread">
+    <div class="empty" id="empty"><b>BLIP</b>tapped into federation</div>
+  </div>
+
+  <div class="dock">
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="Message Blip..."></textarea>
+      <button class="send" id="send">SEND</button>
+    </div>
+  </div>
+
+  <div class="scrim" id="scrim"></div>
+
+  <aside class="drawer" id="drawerLeft" aria-label="Chats">
     <h1>Chats</h1>
     <button class="chat-row" aria-current="true">
       <i></i>
-      <span><b>Main thread</b><small id="chatStatus">idle</small></span>
+      <span><b>Main thread</b><small id="chatStatus">ready</small></span>
     </button>
-    <div class="note" style="margin-top:auto;padding:8px 6px;">blip v1 · federation</div>
+    <p class="note" style="margin-top:auto">blip v1 · federation</p>
   </aside>
 
-  <main>
-    <div class="stage">
-      <div id="peek" title="Tap to peek"><div class="blip-mount" id="blipMount"></div></div>
-      <div class="capsule">
-        <span class="cdot"></span>
-        <span class="verb" id="verb">Ready</span>
-        <span class="tagp" id="toolTag">idle</span>
-        <span class="clock" id="clock">0:00</span>
-      </div>
-    </div>
-
-    <div class="thread" id="thread">
-      <div class="empty" id="empty"><b>BLIP</b>tapped into federation</div>
-    </div>
-
-    <div class="composer-wrap">
-      <div class="composer">
-        <textarea id="input" rows="1" placeholder="Message Blip..."></textarea>
-        <button class="send" id="send">SEND</button>
-      </div>
-    </div>
-  </main>
-
-  <aside class="side">
+  <aside class="drawer" id="drawerRight" aria-label="Settings">
+    <h1>Settings</h1>
     <h2>UPLINK</h2>
     <div class="card">
-      <div class="row"><span>Brain</span><b><span class="dot7" id="dBrain"></span><span id="brainT">check</span></b></div>
-      <div class="row"><span>Transport</span><b id="transport">REST</b></div>
-      <div class="row"><span>Decider</span><b><span class="dot7" id="dDec"></span><span id="decT">jev lane</span></b></div>
+      <div class="row"><span>Brain</span><b><span class="dotc" id="dBrain2" style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px"></span><span id="brainT">check</span></b></div>
+      <div class="row"><span>Decider</span><b id="decT">jev lane</b></div>
     </div>
     <h2>LANE</h2>
     <div class="lane">
       <button id="tPrimary" class="active">PRIMARY</button>
       <button id="tCheap">CHEAP</button>
     </div>
-    <h2>AUTH KEY</h2>
-    <div class="card" style="display:block">
-      <input class="keyin" id="key" type="password" placeholder="agent api key" autocomplete="off" />
-      <button class="setbtn" id="setKey">SAVE KEY</button>
-    </div>
     <h2>APPEARANCE</h2>
     <div class="lane">
       <button id="thDark" class="active">DARK</button>
       <button id="thLight">LIGHT</button>
     </div>
-    <p class="note">Blip reads your last exchange and a fast lane model picks the pose and color you see above. Key stays in this browser only.</p>
+    <h2>AUTH KEY</h2>
+    <div class="card" style="display:block">
+      <input class="keyin" id="key" type="password" placeholder="agent api key" autocomplete="off" spellcheck="false" />
+      <button class="setbtn" id="setKey">SAVE KEY</button>
+    </div>
+    <p class="note">Key stays in this browser only. Blip picks its pose with a fast-lane model after every exchange.</p>
   </aside>
 
 <script type="module">
@@ -274,68 +279,86 @@ import { attachBlip, ST } from "./blip-rig.js";
 const AGENT = "https://agent-federation.agent-federation.workers.dev";
 const $ = (id) => document.getElementById(id);
 
-/* ---- mascot ---- */
+/* mascot */
 const svgText = await fetch("blip-rig.svg").then((r) => r.text());
 $("blipMount").innerHTML = svgText;
 const blip = attachBlip($("blipMount"));
-$("peek").onclick = () => {
-  const p = $("peek");
-  p.classList.toggle("full");
-  if (p.classList.contains("full")) setTimeout(() => p.classList.remove("full"), 5000);
-};
 
-/* ---- capsule ---- */
+/* drawers */
+const scrim = $("scrim");
+function openDrawer(el) {
+  closeDrawers();
+  el.classList.add("open");
+  scrim.classList.add("open");
+}
+function closeDrawers() {
+  document.querySelectorAll(".drawer").forEach((d) => d.classList.remove("open"));
+  scrim.classList.remove("open");
+}
+$("btnChats").onclick = () => openDrawer($("drawerLeft"));
+$("btnSettings").onclick = () => openDrawer($("drawerRight"));
+scrim.onclick = closeDrawers;
+addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawers(); });
+
+/* headline + mascot state */
 let verbTimer = null;
+const STEP_STATES = { think: 1, search: 1, browse: 1, read: 1, code: 2, mail: 2, pay: 3, approve: 3, success: 3, error: 3 };
 function setHeadline(stateKey, verbOverride) {
   const s = ST[stateKey] || ST.idle;
   blip.set(stateKey);
-  $("toolTag").textContent = stateKey;
+  $("toolTag").textContent = s.n.toLowerCase();
   $("chatStatus").textContent = s.h;
-  const verbs = (verbOverride ? [verbOverride, s.t] : [s.t, s.h, s.n]);
+  const verbs = verbOverride ? [verbOverride, s.t, s.h] : [s.t, s.h, s.n];
   let vi = 0;
   $("verb").textContent = verbs[0];
   clearInterval(verbTimer);
-  verbTimer = setInterval(() => { vi = (vi + 1) % verbs.length; $("verb").textContent = verbs[vi]; }, 2200);
+  verbTimer = setInterval(() => { vi = (vi + 1) % verbs.length; $("verb").textContent = verbs[vi]; }, 2400);
+  const step = STEP_STATES[stateKey] ?? (stateKey === "idle" ? 0 : 1);
+  $("steps").querySelectorAll("span").forEach((sp, i) => {
+    sp.className = i < step ? "on" : i === step ? "cur" : "";
+  });
 }
 
 /* progress + clock */
 let t0 = Date.now(), progTimer = null;
 function startProgress() {
   t0 = Date.now();
-  document.documentElement.style.setProperty("--p", 8);
+  document.documentElement.style.setProperty("--p", 6);
   clearInterval(progTimer);
   progTimer = setInterval(() => {
     const el = Math.floor((Date.now() - t0) / 1000);
     $("clock").textContent = Math.floor(el / 60) + ":" + String(el % 60).padStart(2, "0");
     const cur = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--p")) || 0;
-    if (cur < 92) document.documentElement.style.setProperty("--p", Math.min(92, cur + 3));
-  }, 700);
+    if (cur < 92) document.documentElement.style.setProperty("--p", Math.min(92, cur + 4));
+  }, 650);
 }
-function endProgress(stateKey) {
+function stopProgress() {
   clearInterval(progTimer);
-  document.documentElement.style.setProperty("--p", 100);
-  $("clock").textContent = "done";
-  setTimeout(() => document.documentElement.style.setProperty("--p", 0), 900);
-  setHeadline(stateKey || "idle");
+  document.documentElement.style.setProperty("--p", 0);
+  $("clock").textContent = "0:00";
 }
 
-/* ---- auth ---- */
-const key = () => localStorage.getItem("blip_key") || "";
-
-/* ---- theme ---- */
+/* theme */
 const paramTheme = new URLSearchParams(location.search).get("theme");
-const savedTheme = localStorage.getItem("blip_theme");
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   localStorage.setItem("blip_theme", t);
   $("thDark").classList.toggle("active", t === "dark");
   $("thLight").classList.toggle("active", t === "light");
 }
-applyTheme(paramTheme === "light" || paramTheme === "dark" ? paramTheme : savedTheme || "dark");
+applyTheme(paramTheme === "light" || paramTheme === "dark" ? paramTheme : localStorage.getItem("blip_theme") || "dark");
 $("thDark").onclick = () => applyTheme("dark");
 $("thLight").onclick = () => applyTheme("light");
+
+/* auth: trim always; this was the unauthorized bug */
+const key = () => (localStorage.getItem("blip_key") || "").trim();
 if (key()) $("key").value = key();
-$("setKey").onclick = () => { localStorage.setItem("blip_key", $("key").value.trim()); check(); sys("key saved locally"); };
+$("setKey").onclick = () => {
+  const v = $("key").value.trim();
+  localStorage.setItem("blip_key", v);
+  sys(v ? "key saved · " + v.slice(0, 6) + "…" : "key cleared");
+  check();
+};
 
 let tier = "primary";
 $("tPrimary").onclick = () => { tier = "primary"; $("tPrimary").classList.add("active"); $("tCheap").classList.remove("active"); };
@@ -345,16 +368,17 @@ async function check() {
   try {
     const r = await fetch(AGENT + "/health");
     const j = await r.json();
-    $("dBrain").className = "dot7 " + (j.ok ? "on" : "err");
+    const cls = "dotc " + (j.ok ? "on" : "err");
+    $("dBrain").className = cls;
     $("brainT").textContent = j.ok ? "online" : "degraded";
   } catch {
-    $("dBrain").className = "dot7 err";
+    $("dBrain").className = "dotc err";
     $("brainT").textContent = "down";
   }
 }
 check(); setInterval(check, 30000);
 
-/* ---- thread ---- */
+/* thread */
 const thread = $("thread");
 function bubble(role, text) {
   $("empty").style.display = "none";
@@ -366,9 +390,8 @@ function bubble(role, text) {
   return d;
 }
 function sys(t) { bubble("sys", t); }
-$("clearTab").onclick = () => { thread.querySelectorAll(".bubble").forEach((n) => n.remove()); $("empty").style.display = ""; };
 
-/* ---- transport ---- */
+/* transport */
 let ws = null, busy = false;
 function connectWS() {
   try {
@@ -379,15 +402,15 @@ function connectWS() {
     ws.onmessage = (ev) => {
       try {
         const m = JSON.parse(ev.data);
-        if (m.type === "chat" && typeof m.reply === "string") done(m.reply);
-        else if (m.error) done("[error] " + m.error);
+        if (m.type === "chat" && typeof m.reply === "string") finish(m.reply);
+        else if (m.error) finish("[error] " + m.error);
       } catch {}
     };
   } catch { $("transport").textContent = "rest"; }
 }
 connectWS();
 
-/* ---- the Jev tip: fast model decides mascot state ---- */
+/* decider */
 async function decide(userText, replyText) {
   try {
     const r = await fetch(AGENT + "/api/decide", {
@@ -403,7 +426,7 @@ async function decide(userText, replyText) {
 async function send() {
   const text = $("input").value.trim();
   if (!text || busy) return;
-  if (!key()) { sys("save your agent api key in the panel first"); return; }
+  if (!key()) { sys("open Settings and save your agent api key first"); openDrawer($("drawerRight")); return; }
   $("input").value = ""; $("input").style.height = "auto";
   bubble("user", text);
   busy = true; $("send").disabled = true;
@@ -415,17 +438,14 @@ async function send() {
     if (replied) return; replied = true;
     bubble("agent", reply);
     const d = await decide(text, reply);
-    $("dDec").className = "dot7 " + (d ? "on" : "err");
     if (d && ST[d.state]) {
       setHeadline(d.state, d.verb);
-      $("dDec").className = "dot7 on";
-      $("decT").textContent = d.state + " · " + d.verb;
+      $("decT").textContent = d.state + " · " + (d.verb || "");
     } else {
-      endProgress("idle");
+      setHeadline("idle");
       $("decT").textContent = "fallback idle";
     }
-    document.documentElement.style.setProperty("--p", 0);
-    $("clock").textContent = "0:00";
+    stopProgress();
     busy = false; $("send").disabled = false;
   };
 
@@ -450,7 +470,7 @@ $("input").addEventListener("keydown", (e) => {
 });
 $("input").addEventListener("input", () => {
   $("input").style.height = "auto";
-  $("input").style.height = Math.min($("input").scrollHeight, 160) + "px";
+  $("input").style.height = Math.min($("input").scrollHeight, 140) + "px";
 });
 setHeadline("idle");
 </script>
