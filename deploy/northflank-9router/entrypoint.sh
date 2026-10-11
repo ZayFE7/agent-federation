@@ -30,8 +30,10 @@ trap on_shutdown TERM INT
 
 log "starting 9router..."
 cd /app
+PORT="${PORT:-20128}"
+export HOST="${HOST:-0.0.0.0}"
 if [ -f cli.js ]; then
-  node cli.js --no-browser --skip-update &
+  node cli.js --no-browser --skip-update --port "$PORT" &
 elif [ -f src/server.js ]; then
   node src/server.js &
 else
