@@ -1,0 +1,13 @@
+{
+  // Codespaces is the build host for this project: this container only provides
+  // Node 24 and tooling. Local dev and deploy still run through wrangler here.
+  "name": "agent-federation",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "forwardPorts": [8787],
+  "postCreateCommand": "npm install && npm install -g wrangler",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint"]
+    }
+  }
+}
