@@ -37,6 +37,20 @@ async function poolGet(env: Env, sessionId: string): Promise<Sandbox> {
     }
   }
   const sbx = await createSandbox(env.E2B_API_KEY);
+  // Persistent workspaces: restore last snapshot into /workspace on fresh boots.
+  try {
+    const tar = await env.SESSIONS.get(`ws:tar:${sessionId}`);
+    if (tar) {
+      await sbx.commands.run(
+        "mkdir -p /workspace && cd /workspace && echo '" +
+          tar +
+          "' | base64 -d | tar xzf -",
+        { timeout: 30 }
+      );
+    }
+  } catch {
+    /* no snapshot yet */
+  }
   await env.SESSIONS.put(
     sessionId,
     JSON.stringify({ id: sbx.sandboxId }),
@@ -70,6 +84,25 @@ export default {
         await env.SESSIONS.delete(sid);
       }
       return json(200, { ok: true });
+    }
+
+    if (url.pathname === "/workspace/snapshot" && request.method === "POST") {
+      const body = (await request.json()) as { sessionId?: string };
+      const sid = body.sessionId || "agent";
+      let sbx: Sandbox;
+      try {
+        sbx = await poolGet(env, sid);
+      } catch (e) {
+        return json(502, { error: String(e) });
+      }
+      const packed = await sbx.commands.run(
+        "mkdir -p /workspace && cd /workspace && tar czf - . 2>/dev/null | base64 -w0",
+        { timeout: 30 }
+      );
+      const b64 = (packed.stdout || "").trim();
+      if (!b64) return json(200, { ok: true, bytes: 0, note: "workspace empty" });
+      await env.SESSIONS.put(`ws:tar:${sid}`, b64);
+      return json(200, { ok: true, bytes: Math.floor((b64.length * 3) / 4), sessionId: sid });
     }
 
     if (url.pathname === "/run" && request.method === "POST") {

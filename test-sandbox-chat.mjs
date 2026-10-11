@@ -1,10 +1,12 @@
-import { writeFileSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
+const raw = readFileSync("E:/Users/Zay L/agent-federation/.dev.vars", "utf8");
+const ak = raw.match(/AGENT_API_KEY=([a-f0-9]+)/)[1];
 writeFileSync(
   "E:/Users/Zay L/agent-federation/tc.json",
   JSON.stringify({
     content:
-      "Use your sandbox to run: date, then python3 -c 'print(6*7)'. Show me the outputs.",
-    tier: "primary",
+      "Schedule a daily job at 08:00 UTC: run date in the sandbox and save a one-line log to /workspace/daily.log",
+    tier: "cheap",
   })
 );
-console.log("written");
+console.log("body written, key len", ak.length);

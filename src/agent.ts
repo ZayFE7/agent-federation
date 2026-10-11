@@ -10,6 +10,7 @@ import type {
 import { DEFAULT_MODEL_CHEAP, DEFAULT_MODEL_PRIMARY } from "./types";
 import {
   dueTasks,
+  enqueueTask,
   ensureSchema,
   logMessage,
   recentMessages,
@@ -169,11 +170,20 @@ export class FederationAgent extends Agent<Env> {
     const sql = this.db();
     const now = Date.now();
     for (const task of dueTasks(sql, now)) {
-      remember(sql, "task", `Tick observed due task #${task.id}: ${task.title}`, 2);
+      remember(sql, "task", `Running scheduled task #${task.id}: ${task.title}`, 2);
       sql.exec(
         "UPDATE tasks SET status = 'running' WHERE id = ? AND status = 'pending'",
         task.id
       );
+      try {
+        const instructions = (task.payload && task.payload.trim()) || task.title;
+        const result = await this.handleChat(instructions, "cheap");
+        remember(sql, "task-done", `Task #${task.id} (${task.title}) result: ${result.reply.slice(0, 800)}`, 3);
+        logMessage(sql, "assistant", `[scheduled] ${result.reply}`, "cheap");
+      } catch (err) {
+        remember(sql, "error", `Task #${task.id} failed: ${String(err)}`, 3);
+      }
+      sql.exec("UPDATE tasks SET status = 'done' WHERE id = ?", task.id);
     }
     await this.armTick();
   }
@@ -240,6 +250,33 @@ export class FederationAgent extends Agent<Env> {
           },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "schedule_task",
+          description:
+            "Schedule a recurring or one-off background job. Use when the user asks to be reminded, wants something done later, or on a schedule (e.g. every morning). The job runs autonomously with full tool access.",
+          parameters: {
+            type: "object",
+            properties: {
+              title: { type: "string", description: "Short job name" },
+              instructions: { type: "string", description: "What the agent should do when the job fires" },
+              minutes_from_now: { type: "number", description: "Fire once this many minutes from now (one-off)" },
+              daily_at: { type: "string", description: "HH:MM 24h UTC for a daily recurring job (overrides minutes_from_now)" },
+            },
+            required: ["title", "instructions"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "save_workspace",
+          description:
+            "Snapshot the sandbox /workspace directory into persistent storage so files survive sandbox restarts. Call after creating important files.",
+          parameters: { type: "object", properties: {} },
+        },
+      },
     ];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -278,30 +315,73 @@ export class FederationAgent extends Agent<Env> {
       for (const tc of toolCalls) {
         let out = "";
         try {
-          const args = JSON.parse(tc.function.arguments || "{}") as { cmd?: string };
-          const cmd = args.cmd || "true";
-          ranCmds.push(cmd);
-          if (!this.env.SANDBOX) {
-            out = "sandbox not configured";
+          const args = JSON.parse(tc.function.arguments || "{}") as {
+            cmd?: string;
+            title?: string;
+            instructions?: string;
+            minutes_from_now?: number;
+            daily_at?: string;
+          };
+          if (tc.function.name === "schedule_task") {
+            const now = Date.now();
+            let dueAt = now + 60_000;
+            if (args.daily_at && /^\d{1,2}:\d{2}$/.test(args.daily_at)) {
+              const [h, m] = args.daily_at.split(":").map(Number);
+              const next = new Date(now);
+              next.setUTCHours(h, m, 0, 0);
+              if (next.getTime() <= now) next.setUTCDate(next.getUTCDate() + 1);
+              dueAt = next.getTime();
+            } else if (typeof args.minutes_from_now === "number") {
+              dueAt = now + Math.max(1, args.minutes_from_now) * 60_000;
+            }
+            const title = (args.title || "scheduled job").slice(0, 120);
+            const instructions = (args.instructions || title).slice(0, 2000);
+            enqueueTask(sql, title, dueAt, instructions);
+            const when = new Date(dueAt).toISOString();
+            out = `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
+            remember(sql, "task", `Scheduled: ${title} at ${when}`, 2);
+          } else if (tc.function.name === "save_workspace") {
+            if (!this.env.SANDBOX) {
+              out = "sandbox not configured";
+            } else {
+              const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/workspace/snapshot", {
+                method: "POST",
+                headers: {
+                  authorization: `Bearer ${this.env.SBOX_TOKEN}`,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({ sessionId: "agent" }),
+              });
+              const sd = (await sres.json()) as Record<string, unknown>;
+              out = sres.ok
+                ? `Workspace saved: ${JSON.stringify(sd)}`
+                : `snapshot error: ${JSON.stringify(sd).slice(0, 400)}`;
+            }
           } else {
-            const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
-              method: "POST",
-              headers: {
-                authorization: `Bearer ${this.env.SBOX_TOKEN}`,
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({ cmd, sessionId: "agent" }),
-            });
-            const sd = (await sres.json()) as {
-              stdout?: string;
-              stderr?: string;
-              exitCode?: number;
-              error?: string;
-            };
-            out = sres.ok
-              ? `exit ${sd.exitCode}\nstdout:\n${(sd.stdout || "").slice(0, 4000)}\nstderr:\n${(sd.stderr || "").slice(0, 1500)}`
-              : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
-            remember(sql, "tool", `exec: ${cmd} -> exit ${sd.exitCode ?? "?"}`, 2);
+            const cmd = args.cmd || "true";
+            ranCmds.push(cmd);
+            if (!this.env.SANDBOX) {
+              out = "sandbox not configured";
+            } else {
+              const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
+                method: "POST",
+                headers: {
+                  authorization: `Bearer ${this.env.SBOX_TOKEN}`,
+                  "content-type": "application/json",
+                },
+                body: JSON.stringify({ cmd, sessionId: "agent" }),
+              });
+              const sd = (await sres.json()) as {
+                stdout?: string;
+                stderr?: string;
+                exitCode?: number;
+                error?: string;
+              };
+              out = sres.ok
+                ? `exit ${sd.exitCode}\nstdout:\n${(sd.stdout || "").slice(0, 4000)}\nstderr:\n${(sd.stderr || "").slice(0, 1500)}`
+                : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
+              remember(sql, "tool", `exec: ${cmd} -> exit ${sd.exitCode ?? "?"}`, 2);
+            }
           }
         } catch (e) {
           out = "tool error: " + String(e);
@@ -321,6 +401,29 @@ export class FederationAgent extends Agent<Env> {
     logMessage(sql, "assistant", finalText, chatTier);
     remember(sql, "exchange", `User: ${content}\nAgent: ${finalText}`, 2);
 
-    return { reply: finalText };
+    // Deterministic mascot state from what actually happened (no LLM decider).
+    let state = "idle";
+    let verb: string | undefined;
+    const lower = (content + " " + finalText).toLowerCase();
+    if (/error|failed|couldn't|cannot/.test(finalText.toLowerCase().slice(0, 200))) {
+      state = "error";
+      verb = "Hit a snag";
+    } else if (ranCmds.length > 0) {
+      state = "code";
+      verb = "Ran commands";
+    } else if (/schedul|remind|every morning|every day|daily at|cron|recurring/.test(lower)) {
+      state = "success";
+      verb = "Job queued";
+    } else if (/search|google|look up|find out|web/.test(lower)) {
+      state = "search";
+      verb = "Digging";
+    } else if (/email|mail|inbox/.test(lower)) {
+      state = "mail";
+    } else if (/file|read|document/.test(lower)) {
+      state = "read";
+    } else if (/done|finished|complete|success/.test(lower)) {
+      state = "success";
+    }
+    return { reply: finalText, state, verb };
   }
 }

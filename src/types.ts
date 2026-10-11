@@ -15,6 +15,10 @@ export interface ChatMessage {
 /** Response shape for POST /api/message and the DO chat method. */
 export interface AgentReply {
   reply: string;
+  /** Deterministic mascot state (replaces the flaky LLM decider). */
+  state?: string;
+  /** Short capsule verb matching the state. */
+  verb?: string;
 }
 
 /** Inbound body for POST /api/message and WebSocket {type:"chat"}. */
