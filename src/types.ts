@@ -38,6 +38,8 @@ export interface Env {
   AGENT_API_KEY: string;
   /** Bearer token required by /internal/vault/* (9router state sync). */
   STATE_KEY: string;
+  /** Public URL of the Render-hosted 9router (keep-alive cron target). */
+  RENDER_URL?: string;
   /** Durable Object binding for FederationAgent (wrangler name: FEDERATION_AGENT). */
   FEDERATION_AGENT: DurableObjectNamespace;
 }

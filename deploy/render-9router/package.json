@@ -1,0 +1,8 @@
+{
+  "name": "render-9router",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "9router": "0.5.95"
+  }
+}

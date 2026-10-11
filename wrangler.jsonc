@@ -17,8 +17,14 @@
       "new_sqlite_classes": ["FederationAgent"]
     }
   ],
+  // Keep-alive cron: pings RENDER_URL/health every 10 minutes so the free
+  // Render instance never idles into sleep (744h/month budget stays safe).
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  },
   // Public vars (non-secret). Replace ROUTER_URL with your trigger URL.
   // Local dev: .dev.vars overrides these for the keys it defines.
+  // RENDER_URL is added after the Render service has its public URL.
   "vars": {
     "ROUTER_URL": "https://your-workflow-pipedream.com/xxxxx",
     "MODEL_PRIMARY": "meta/muse-spark-1.3",

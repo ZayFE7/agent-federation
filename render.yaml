@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: 9router
+    runtime: node
+    plan: free
+    rootDir: deploy/render-9router
+    buildCommand: npm install
+    startCommand: node render-start.mjs
+    healthCheckPath: /health
+    envVars:
+      - key: VAULT_URL
+        value: https://agent-federation.agent-federation.workers.dev
+      - key: SYNC_INTERVAL
+        value: "180"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: STATE_KEY
+        generateValue: false

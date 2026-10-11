@@ -154,4 +154,17 @@ export default {
 
     return new Response("Not found", { status: 404 });
   },
+
+  /** Keep-alive cron: ping the Render 9router every 10 min so free tier never idles. */
+  async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    if (!env.RENDER_URL) return;
+    try {
+      const res = await fetch(`${env.RENDER_URL.replace(/\/+$/, "")}/health`, {
+        cf: { cacheTtl: 0 },
+      });
+      console.log(`keep-alive: ${res.status}`);
+    } catch (err) {
+      console.log(`keep-alive failed: ${String(err)}`);
+    }
+  },
 } satisfies ExportedHandler<Env>;
