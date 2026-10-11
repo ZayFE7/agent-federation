@@ -1,9 +1,13 @@
 # Antigravity ("ag") OAuth token + refresh notes
 
 Ground truth: 9router bundle `C:\npm-global\node_modules\9router\app\.next-cli-build\server\chunks\458.js`
-(provider catalog entry `id:"antigravity"`) and `chunks\3943.js` (module `8521`, the
-token refresh hub). Local DB: `providerConnections` table, `provider = 'antigravity'`,
-`authType = 'oauth'`.
+(provider catalog entry `id:"antigravity"`) and `chunks\827.js` (the Google OAuth
+refresher: the `if("gemini-cli"===b||"antigravity"===b)` branch). Local DB:
+`providerConnections` table, `provider = 'antigravity'`, `authType = 'oauth'`.
+(Reviewed 2026-10-11: an earlier draft cited `function q` in `chunks\3943.js` module
+`8521`; that chunk holds the *generic* refresher `m()` for claude/iflow/github/kimi and
+the codex-specific refresher, not the Google one. The Google path used by antigravity
+lives in `827.js`.)
 
 ## 1. Endpoints and client
 
@@ -21,9 +25,9 @@ Catalog oauth scopes (only relevant to a fresh consent flow, not to refresh):
 `https://www.googleapis.com/auth/cloud-platform`,
 `.../userinfo.email`, `.../userinfo.profile`, `.../cclog`, `.../experimentsandconfigs`.
 
-The worker needs only the client **id** to refresh. 9router's generic Google refresher
-(`function q` in `3943.js`, dispatched from the `antigravity` entry of map `I`) posts all
-four fields, so that exact shape is what we mirror.
+The worker needs only the client **id** to refresh. 9router's Google refresher for
+antigravity (`827.js`, the shared `gemini-cli`/`antigravity` branch) posts all four
+fields, so that exact shape is what we mirror.
 
 ## 2. Exact refresh request
 
@@ -42,7 +46,8 @@ Notes:
 
 - Form-encoded body (`URLSearchParams`), never JSON. Google's token endpoint rejects
   `application/json` bodies for this grant.
-- `client_secret` is included by 9router (`q()` always sends it). It is embedded in the
+- `client_secret` is included by 9router (the Google branch in `827.js` always sends it
+  in the `URLSearchParams`). It is embedded in the
   public CLI bundle, so carrying it is the same exposure as the client id. If we later
   decide to keep the worker config secret-free, send the request without
   `client_secret` first: Google installed-app clients usually refresh fine with only
@@ -51,12 +56,16 @@ Notes:
   retained server-side.
 - Success body: `{access_token, expires_in, scope, token_type, ...}`. Google returns a
   new `refresh_token` only for some grants: **if `refresh_token` is absent, keep the
-  existing one** (9router does `refreshToken: g.refresh_token || old`).
+  existing one** (9router does `refreshToken: e.refresh_token || c`).
 - Failure body: `{error, error_description}`. Treat `invalid_grant` (refresh token
   revoked/expired/reused) as **permanent** for that connection: stop retrying it and fall
-  through to the next `priority`. 9router flags `invalid_grant`, `refresh_token_reused`,
-  `refresh_token_invalidated`, `unrecoverable_refresh_error`, `invalid_request` as
-  permanent.
+  through to the next `priority`. Attribution note (verified 2026-10-11): the Google
+  branch in `827.js` has no permanent-error classification of its own, it just returns
+  `null` on any non-ok status. The explicit permanent family
+  (`refresh_token_expired`, `refresh_token_reused`, `refresh_token_invalidated`,
+  `invalid_grant` -> `unrecoverable_refresh_error`) is codex's branch in `3943.js`.
+  Adopting the same classification for antigravity is our policy choice (Google treats
+  `invalid_grant` as terminal), not a behavior copied from the Google path.
 
 Workers runtime: plain `fetch` + `URLSearchParams`, no Node APIs.
 
@@ -126,6 +135,17 @@ Rules:
 `projectId` (empty string when the row has none, 4 of 11 today), `accessToken`,
 `refreshToken`, `expiresAt`, `clientId` (from the catalog block, single distinct value),
 `priority` (1..11, ascending), `label` (the connection's `name`, i.e. the account email).
+
+A row is emitted when it has an access **or** a refresh token, so `accessToken` may be
+an empty string (refresh-only row). The worker must treat empty/missing `accessToken`
+or `expiresAt` as "needs refresh", which is what section 3's rule already says. As of
+the 2026-10-11 extract all 11 rows carry both tokens.
+
+Implementation status (reviewed 2026-10-11/12): the worker side of this document is
+still unimplemented. `src/index.ts` only declares the `AntigravityRow` type; there is
+no `src/antigravity.ts`, no refresh call, no `router:ag-tokens` overlay merge, no
+`ag`/`websearch:antigravity` routing, and no SSE thought-signature translation.
+Section 3 and 4 are the contract the implementing task must follow.
 
 Only `provider = 'antigravity' AND authType = 'oauth' AND isActive = 1` rows are
 emitted; qoder/kiro/cursor/xai oauth rows are deliberately ignored. The summary line

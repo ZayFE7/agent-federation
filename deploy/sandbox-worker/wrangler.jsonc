@@ -1,0 +1,9 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "zay-sandbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "kv_namespaces": [
+    { "binding": "SESSIONS", "id": "6bc0d1ad878542c69cd6e8bf545d2d7d" }
+  ]
+}

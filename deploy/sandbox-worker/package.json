@@ -1,0 +1,8 @@
+{
+  "name": "zay-sandbox",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "e2b": "^1.5.0"
+  }
+}

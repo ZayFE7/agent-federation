@@ -1,4 +1,4 @@
-import { Agent, type Connection } from "agents";
+﻿import { Agent, type Connection } from "agents";
 import type {
   AgentReply,
   ChatMessage,
@@ -39,7 +39,16 @@ export function buildSystemPrompt(memories: MemoryRow[], persona: string): strin
 }
 
 interface RouterChatResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+      }>;
+    };
+  }>;
 }
 
 export class FederationAgent extends Agent<Env> {
@@ -87,7 +96,11 @@ export class FederationAgent extends Agent<Env> {
 
   /** RPC/HTTP entry used by the worker. */
   async chat(content: string, tier?: ChatTier): Promise<AgentReply> {
-    return this.handleChat(content, tier);
+    try {
+      return await this.handleChat(content, tier);
+    } catch (err) {
+      return { reply: "agent error: " + String(err) };
+    }
   }
 
   /** Vault RPC: store one base64 chunk. */
@@ -185,9 +198,18 @@ export class FederationAgent extends Agent<Env> {
     const chatTier: ChatTier = tier === "cheap" ? "cheap" : "primary";
     const { tier: routerTier, model } = this.tierModel(chatTier);
 
-    let memories = recall(sql, content, 8);
+    let memories: MemoryRow[] = [];
+    try {
+      memories = recall(sql, content.slice(0, 120), 8);
+    } catch {
+      memories = [];
+    }
     if (memories.length === 0) {
-      memories = recall(sql, "", 8);
+      try {
+        memories = recall(sql, "", 8);
+      } catch {
+        memories = [];
+      }
     }
     const system = buildSystemPrompt(memories, DEFAULT_PERSONA);
 
@@ -202,33 +224,103 @@ export class FederationAgent extends Agent<Env> {
     ];
     logMessage(sql, "user", content, chatTier);
 
-    let response: Response;
-    try {
-      response = await fetch(this.env.ROUTER_URL, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${this.env.ROUTER_KEY}`,
-          "X-Tier": routerTier,
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "exec",
+          description:
+            "Run a shell command in the agent's Linux sandbox (python3, common CLI tools, internet). Use for files, code, downloads, data work, anything that needs a computer.",
+          parameters: {
+            type: "object",
+            properties: {
+              cmd: { type: "string", description: "The shell command to execute" },
+            },
+            required: ["cmd"],
+          },
         },
-        body: JSON.stringify({ model, messages }),
-      });
-    } catch (err) {
-      remember(sql, "error", `Router fetch failed: ${String(err)}`, 3);
-      return { reply: "Router unreachable. Try again shortly." };
+      },
+    ];
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const msgs: any[] = messages;
+    let finalText = "";
+    const ranCmds: string[] = [];
+
+    for (let round = 0; round < 4; round++) {
+      let response: Response;
+      try {
+        response = await fetch(this.env.ROUTER_URL, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.env.ROUTER_KEY}`,
+            "X-Tier": routerTier,
+          },
+          body: JSON.stringify({ model, messages: msgs, tools }),
+        });
+      } catch (err) {
+        remember(sql, "error", `Router fetch failed: ${String(err)}`, 3);
+        return { reply: "Router unreachable. Try again shortly." };
+      }
+      if (!response.ok) {
+        remember(sql, "error", `Router HTTP ${response.status}`, 3);
+        return { reply: `Router returned ${response.status}.` };
+      }
+      const data = (await response.json()) as RouterChatResponse;
+      const msg = data.choices?.[0]?.message;
+      const toolCalls = msg?.tool_calls;
+      if (!toolCalls || toolCalls.length === 0) {
+        finalText = msg?.content ?? "";
+        break;
+      }
+      msgs.push({ role: "assistant", content: msg?.content ?? null, tool_calls: toolCalls });
+      for (const tc of toolCalls) {
+        let out = "";
+        try {
+          const args = JSON.parse(tc.function.arguments || "{}") as { cmd?: string };
+          const cmd = args.cmd || "true";
+          ranCmds.push(cmd);
+          if (!this.env.SANDBOX) {
+            out = "sandbox not configured";
+          } else {
+            const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${this.env.SBOX_TOKEN}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ cmd, sessionId: "agent" }),
+            });
+            const sd = (await sres.json()) as {
+              stdout?: string;
+              stderr?: string;
+              exitCode?: number;
+              error?: string;
+            };
+            out = sres.ok
+              ? `exit ${sd.exitCode}\nstdout:\n${(sd.stdout || "").slice(0, 4000)}\nstderr:\n${(sd.stderr || "").slice(0, 1500)}`
+              : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
+            remember(sql, "tool", `exec: ${cmd} -> exit ${sd.exitCode ?? "?"}`, 2);
+          }
+        } catch (e) {
+          out = "tool error: " + String(e);
+        }
+        msgs.push({ role: "tool", tool_call_id: tc.id, content: out });
+      }
+    }
+    if (!finalText) finalText = "(hit the tool round limit; try a simpler ask)";
+    if (ranCmds.length) {
+      finalText =
+        `Ran ${ranCmds.length} command${ranCmds.length > 1 ? "s" : ""} in the sandbox:\n` +
+        ranCmds.map((c) => `  $ ${c}`).join("\n") +
+        "\n\n" +
+        finalText;
     }
 
-    if (!response.ok) {
-      remember(sql, "error", `Router HTTP ${response.status}`, 3);
-      return { reply: `Router returned ${response.status}.` };
-    }
+    logMessage(sql, "assistant", finalText, chatTier);
+    remember(sql, "exchange", `User: ${content}\nAgent: ${finalText}`, 2);
 
-    const data = (await response.json()) as RouterChatResponse;
-    const reply = data.choices?.[0]?.message?.content ?? "";
-
-    logMessage(sql, "assistant", reply, chatTier);
-    remember(sql, "exchange", `User: ${content}\nAgent: ${reply}`, 2);
-
-    return { reply };
+    return { reply: finalText };
   }
 }

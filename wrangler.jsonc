@@ -9,7 +9,8 @@
     "run_worker_first": true
   },
   "services": [
-    { "binding": "ROUTER", "service": "zay-router" }
+    { "binding": "ROUTER", "service": "zay-router" },
+    { "binding": "SANDBOX", "service": "zay-sandbox" }
   ],
   "durable_objects": {
     "bindings": [

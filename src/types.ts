@@ -44,6 +44,10 @@ export interface Env {
   ASSETS: Fetcher;
   /** Direct service binding to the zay-router worker (same account). */
   ROUTER?: Fetcher;
+  /** Direct service binding to the zay-sandbox worker (same account). */
+  SANDBOX?: Fetcher;
+  /** Shared secret for the sandbox worker. */
+  SBOX_TOKEN: string;
   /** Durable Object binding for FederationAgent (wrangler name: FEDERATION_AGENT). */
   FEDERATION_AGENT: DurableObjectNamespace;
 }

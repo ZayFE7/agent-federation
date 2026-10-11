@@ -238,6 +238,18 @@ print(
     f"accessTokenExpired={sum(1 for r in antigravity if _expired(r['expiresAt']))} "
     f"needsRefresh_5min={sum(1 for r in antigravity if _needs_refresh(r['expiresAt']))}"
 )
+# Hardening: an empty clientId would make every worker refresh fail with a
+# confusing invalid_request at runtime, so fail loudly here instead.
+if antigravity and not ag_client_id:
+    print(
+        "WARNING: antigravity rows emitted but no clientId found in the catalog "
+        "block; worker token refresh will fail. Check the 458.js provider window."
+    )
+# Refresh-only rows (no access token yet) are valid; the worker must refresh
+# them before first use (refresh-notes.md section 3 rule 2).
+_refresh_only = sum(1 for r in antigravity if not r["accessToken"] and r["refreshToken"])
+if _refresh_only:
+    print(f"antigravity refresh-only rows (empty accessToken): {_refresh_only}")
 print(
     "antigravity priorities:",
     [(r["priority"], bool(r["projectId"])) for r in antigravity],
