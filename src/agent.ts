@@ -38,14 +38,38 @@ interface RouterChatResponse {
 export class FederationAgent extends Agent<Env> {
   private schemaReady = false;
 
-  /** this.sql from the Agents SDK, adapted to the SqlHandle used by memory helpers. */
+  /**
+   * Adapt the Agents SDK's tagged-template this.sql(strings, ...values) into
+   * the exec-style SqlHandle used by memory helpers. The SDK rebuilds the
+   * query by joining string chunks with "?" for each value, so an exec-style
+   * query must be split on its existing placeholders first.
+   */
   private db(): SqlHandle {
-    const sql = this.sql as unknown as SqlHandle;
+    const sqlTag = this.sql.bind(this) as unknown as (
+      strings: TemplateStringsArray,
+      ...values: unknown[]
+    ) => unknown[];
+    const handle: SqlHandle = {
+      exec<T = Record<string, unknown>>(
+        query: string,
+        ...bindings: Array<string | number | null>
+      ) {
+        const parts = query.split("?");
+        if (parts.length !== bindings.length + 1) {
+          throw new Error(
+            `SQL placeholder mismatch: ${parts.length - 1} placeholders, ${bindings.length} bindings`
+          );
+        }
+        const strings = Object.assign(parts, { raw: [...parts] }) as unknown as TemplateStringsArray;
+        const rows = sqlTag(strings, ...bindings) as T[];
+        return { results: rows };
+      },
+    };
     if (!this.schemaReady) {
-      ensureSchema(sql);
+      ensureSchema(handle);
       this.schemaReady = true;
     }
-    return sql;
+    return handle;
   }
 
   async onStart(): Promise<void> {
