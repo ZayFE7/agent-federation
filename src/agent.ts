@@ -18,6 +18,13 @@ import {
   type MemoryRow,
   type SqlHandle,
 } from "./memory";
+import {
+  ensureVaultSchema,
+  vaultDelete as vaultDeleteChunks,
+  vaultGetBytes,
+  vaultMeta,
+  vaultPutChunk,
+} from "./vault";
 
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
@@ -67,6 +74,7 @@ export class FederationAgent extends Agent<Env> {
     };
     if (!this.schemaReady) {
       ensureSchema(handle);
+      ensureVaultSchema(handle);
       this.schemaReady = true;
     }
     return handle;
@@ -80,6 +88,36 @@ export class FederationAgent extends Agent<Env> {
   /** RPC/HTTP entry used by the worker. */
   async chat(content: string, tier?: ChatTier): Promise<AgentReply> {
     return this.handleChat(content, tier);
+  }
+
+  /** Vault RPC: store one base64 chunk. */
+  async vaultPut(key: string, idx: number, total: number, dataB64: string): Promise<void> {
+    vaultPutChunk(this.db(), key, idx, total, dataB64);
+  }
+
+  /** Vault RPC: read one base64 chunk (small payload; full pull RPC is capped). */
+  async vaultChunk(key: string, idx: number): Promise<string | null> {
+    const rows = this.db().exec<{ data: string }>(
+      "SELECT data FROM vault_chunks WHERE vault_key = ? AND idx = ?",
+      key,
+      idx
+    ).results;
+    return rows[0]?.data ?? null;
+  }
+
+  /** Vault RPC: read full blob as bytes (null when missing). Small vaults only. */
+  async vaultPull(key: string): Promise<Uint8Array | null> {
+    return vaultGetBytes(this.db(), key);
+  }
+
+  /** Vault RPC: metadata for sync checks. */
+  async vaultHealth(key: string): Promise<Record<string, unknown> | null> {
+    return vaultMeta(this.db(), key) as Record<string, unknown> | null;
+  }
+
+  /** Vault RPC: delete all chunks for a key. */
+  async vaultDelete(key: string): Promise<void> {
+    vaultDeleteChunks(this.db(), key);
   }
 
   /** WebSocket frames: {type:"chat"|"status", content, tier}. */

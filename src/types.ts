@@ -36,6 +36,8 @@ export interface Env {
   MODEL_CHEAP?: string;
   /** Bearer token required by POST /api/message. */
   AGENT_API_KEY: string;
+  /** Bearer token required by /internal/vault/* (9router state sync). */
+  STATE_KEY: string;
   /** Durable Object binding for FederationAgent (wrangler name: FEDERATION_AGENT). */
   FEDERATION_AGENT: DurableObjectNamespace;
 }
