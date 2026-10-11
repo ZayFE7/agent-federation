@@ -186,7 +186,12 @@ config = {
 }
 
 OUT.write_text(json.dumps(config, indent=1), encoding="utf-8")
-print(f"providers(catalog)={len(providers)} connections(apikey)={len(connections)} combos={len(combos)} aliases={len(aliases)} authKeys={len(auth_keys)}")
+_noauth = sum(1 for c in connections if c.get("noAuth"))
+print(
+    f"providers(catalog)={len(providers)} connections(total)={len(connections)} "
+    f"apikey={len(connections) - _noauth} noAuth={_noauth} "
+    f"combos={len(combos)} aliases={len(aliases)} authKeys={len(auth_keys)}"
+)
 # antigravity OAuth summary (counts only; never print tokens)
 now = datetime.now(timezone.utc)
 

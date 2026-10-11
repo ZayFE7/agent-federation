@@ -58,6 +58,86 @@ export default {
       return Response.json(result);
     }
 
+    if (url.pathname === "/api/decide" && request.method === "POST") {
+      if (request.headers.get("Authorization") !== `Bearer ${env.AGENT_API_KEY}`) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      let body: { context?: string };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return Response.json({ error: "invalid JSON body" }, { status: 400 });
+      }
+      if (typeof body.context !== "string" || !body.context) {
+        return Response.json({ error: "context required" }, { status: 400 });
+      }
+      // TEMP debug: expose the exact router URL the brain holds
+      if (body.context === "__debug_url") {
+        const origin = env.ROUTER_URL.replace(/\/v1\/.*$/, "");
+        let probe = "no probe";
+        try {
+          const pr = await fetch(origin + "/health");
+          probe = pr.status + " " + (await pr.text()).slice(0, 120);
+        } catch (e) {
+          probe = String(e);
+        }
+        return Response.json({ routerUrl: env.ROUTER_URL, origin, probe, hasKey: !!env.ROUTER_KEY, keyLen: (env.ROUTER_KEY || "").length });
+      }
+      const states = [
+        "idle","think","browse","search","read","code","mail","pay",
+        "approve","success","error","sleep","listen","wait",
+      ];
+      const sysPrompt =
+        "You classify what a personal AI agent is doing so a mascot can pose accordingly. " +
+        'Reply with ONLY a compact JSON object, no prose, no markdown: {"state":"<one of these>","verb":"<1-2 word action>"}. ' +
+        "States: " + states.join(", ") + ". " +
+        'Examples: {"state":"search","verb":"Digging the web"} {"state":"code","verb":"Poking the shell"} {"state":"idle","verb":"Ready"}.';
+      try {
+        const init: RequestInit = {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${env.ROUTER_KEY}`,
+            "X-Tier": "cheap",
+          },
+          body: JSON.stringify({
+            model: env.MODEL_CHEAP || "gemini3.7flash",
+            messages: [
+              { role: "system", content: sysPrompt },
+              { role: "user", content: body.context },
+            ],
+            max_tokens: 600,
+            stream: false,
+          }),
+        };
+        // Service binding avoids workers.dev fetch challenges between Workers.
+        const res = env.ROUTER
+          ? await env.ROUTER.fetch(new Request(env.ROUTER_URL, init))
+          : await fetch(env.ROUTER_URL, init);
+        const text = await res.text();
+        let parsed: { state?: string; verb?: string } | null = null;
+        try {
+          const data = JSON.parse(text) as {
+            choices?: Array<{ message?: { content?: string } }>;
+          };
+          let raw = data.choices?.[0]?.message?.content ?? "";
+          raw = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+          const m = raw.match(/\{[\s\S]*\}/);
+          parsed = JSON.parse(m ? m[0] : raw) as { state?: string; verb?: string };
+        } catch {
+          return Response.json({
+            state: "idle",
+            error: `router ${res.status}: ${text.slice(0, 180)}`,
+          });
+        }
+        const state = states.includes(parsed.state ?? "") ? parsed.state! : "idle";
+        const verb = typeof parsed.verb === "string" && parsed.verb ? parsed.verb.slice(0, 40) : undefined;
+        return Response.json({ state, verb });
+      } catch (err) {
+        return Response.json({ state: "idle", error: String(err) });
+      }
+    }
+
     // ---- State vault (9router container sync) ----
     const vaultAuthed =
       request.headers.get("Authorization") === `Bearer ${env.STATE_KEY}` &&

@@ -27,6 +27,22 @@ interface ConnectionCfg {
   extraHeaders?: Record<string, string>;
 }
 
+/**
+ * One OAuth "ag" row as emitted by extract-config.py into router:config
+ * (key `antigravity`). Declared here so the KV schema is visible to the
+ * worker; refresh/rotation wiring (src/antigravity.ts) is not implemented
+ * yet (see refresh-notes.md). Never log accessToken/refreshToken.
+ */
+interface AntigravityRow {
+  projectId: string;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+  clientId: string;
+  priority: number;
+  label: string;
+}
+
 interface Config {
   authKeys: string[];
   providers: Record<string, ProviderCfg>;
@@ -34,6 +50,8 @@ interface Config {
   combos: Record<string, string[]>;
   aliases: Record<string, string>;
   aliasProviders?: Record<string, string>;
+  /** present in router:config; unused by the v1 apikey paths */
+  antigravity?: AntigravityRow[];
 }
 
 interface Env {

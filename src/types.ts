@@ -42,6 +42,8 @@ export interface Env {
   RENDER_URL?: string;
   /** Static UI assets (console). */
   ASSETS: Fetcher;
+  /** Direct service binding to the zay-router worker (same account). */
+  ROUTER?: Fetcher;
   /** Durable Object binding for FederationAgent (wrangler name: FEDERATION_AGENT). */
   FEDERATION_AGENT: DurableObjectNamespace;
 }
