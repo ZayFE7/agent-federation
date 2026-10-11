@@ -8,3 +8,4 @@ __pycache__/
 deploy/router-worker/router-config.json
 design-extract/
 .tmp-ag/
+.workflow-extract/
