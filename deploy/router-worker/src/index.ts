@@ -22,6 +22,9 @@ interface ConnectionCfg {
   defaultModel?: string;
   accountId?: string;
   label?: string;
+  noAuth?: boolean;
+  forceStream?: boolean;
+  extraHeaders?: Record<string, string>;
 }
 
 interface Config {
@@ -30,6 +33,7 @@ interface Config {
   connections: ConnectionCfg[];
   combos: Record<string, string[]>;
   aliases: Record<string, string>;
+  aliasProviders?: Record<string, string>;
 }
 
 interface Env {
@@ -82,6 +86,14 @@ function resolve(cfg: Config, model: string): Array<{ conn: ConnectionCfg; upstr
       .filter((c) => c.provider === pfx && c.type === "builtin")
       .sort((a, b) => a.priority - b.priority);
     if (provConns.length) return provConns.map((conn) => ({ conn, upstreamModel: rest }));
+    // Provider alias as prefix: "oc/mimo-v2.6-flash" -> opencode
+    const aliasId = cfg.aliasProviders?.[pfx];
+    if (aliasId) {
+      const alConns = cfg.connections
+        .filter((c) => c.provider === aliasId)
+        .sort((a, b) => a.priority - b.priority);
+      if (alConns.length) return alConns.map((conn) => ({ conn, upstreamModel: rest }));
+    }
   }
 
   // Exact defaultModel match
@@ -148,14 +160,67 @@ function buildHeaders(conn: ConnectionCfg, incoming: Headers, isJson: boolean): 
     if (lk === "authorization" || lk === "x-api-key" || lk === "api-key") return;
     h.set(k, v);
   });
-  if (conn.type === "anthropic") {
+  if (conn.noAuth) {
+    /* free/no-auth provider: no credential header */
+  } else if (conn.type === "anthropic") {
     h.set("x-api-key", conn.key);
     if (!h.has("anthropic-version")) h.set("anthropic-version", "2023-06-01");
   } else {
     h.set("authorization", `Bearer ${conn.key}`);
   }
+  if (conn.extraHeaders) {
+    for (const [k, v] of Object.entries(conn.extraHeaders)) h.set(k, v);
+  }
   if (isJson && !h.has("content-type")) h.set("content-type", "application/json");
   return h;
+}
+
+/** Collapse an SSE chat stream into a single chat.completion JSON response. */
+async function aggregateSSE(res: Response): Promise<Response> {
+  const text = await res.text();
+  let content = "";
+  let model = "";
+  let finish = "stop";
+  let id = " aggregated";
+  let created = Math.floor(Date.now() / 1000);
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      const obj = JSON.parse(payload) as {
+        model?: string;
+        id?: string;
+        created?: number;
+        choices?: Array<{
+          finish_reason?: string;
+          delta?: { content?: string; reasoning_content?: string };
+        }>;
+      };
+      if (obj.model) model = obj.model;
+      if (obj.id) id = obj.id.trim();
+      if (obj.created) created = obj.created;
+      const ch = obj.choices?.[0];
+      if (ch?.finish_reason) finish = ch.finish_reason;
+      if (ch?.delta?.content) content += ch.delta.content;
+    } catch {
+      /* skip malformed chunks */
+    }
+  }
+  return json(200, {
+    id,
+    object: "chat.completion",
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content },
+        finish_reason: finish,
+      },
+    ],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  });
 }
 
 async function forward(
@@ -311,8 +376,10 @@ export default {
 
         // Rewrite model in body
         let sendBody: BodyInit | null = bodyInit;
+        const clientWantedStream = !!(jsonBody && jsonBody.stream === true);
         if (jsonBody) {
-          const nb = { ...jsonBody, model: upstreamModel };
+          const nb: Record<string, unknown> = { ...jsonBody, model: upstreamModel };
+          if (conn.forceStream) nb.stream = true;
           sendBody = JSON.stringify(nb);
         } else if (bodyInit instanceof FormData) {
           const fd2 = new FormData();
@@ -326,6 +393,12 @@ export default {
         try {
           const res = await forward(cfg, conn, target, request.headers, sendBody, kind);
           if (res.ok || !RETRY_STATUSES.has(res.status)) {
+            if (conn.forceStream && !clientWantedStream && (res.headers.get("content-type") || "").includes("event-stream")) {
+              const agg = await aggregateSSE(res);
+              const ah = new Headers({ "content-type": "application/json", "access-control-allow-origin": "*" });
+              ah.set("x-router-conn", `${conn.provider}${conn.label ? "/" + conn.label : ""}`);
+              return new Response(agg.body, { status: 200, headers: ah });
+            }
             const rh = new Headers();
             res.headers.forEach((v, k) => {
               if (!DROP_RES_HEADERS.has(k.toLowerCase())) rh.set(k, v);

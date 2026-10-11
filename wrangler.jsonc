@@ -26,9 +26,9 @@
   // Local dev: .dev.vars overrides these for the keys it defines.
   // RENDER_URL is added after the Render service has its public URL.
   "vars": {
-    "ROUTER_URL": "https://your-workflow-pipedream.com/xxxxx",
-    "MODEL_PRIMARY": "meta/muse-spark-1.3",
-    "MODEL_CHEAP": "meta/muse-spark-1.3-contributor"
+    "ROUTER_URL": "https://zay-router.agent-federation.workers.dev/v1/chat/completions",
+    "MODEL_PRIMARY": "gemini3.8flash",
+    "MODEL_CHEAP": "gemini3.7flash"
   },
   // Secrets (never put these in vars):
   //   wrangler secret put ROUTER_KEY
