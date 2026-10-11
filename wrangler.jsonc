@@ -3,6 +3,11 @@
   "name": "agent-federation",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./ui",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
   "durable_objects": {
     "bindings": [
       {

@@ -40,6 +40,8 @@ export interface Env {
   STATE_KEY: string;
   /** Public URL of the Render-hosted 9router (keep-alive cron target). */
   RENDER_URL?: string;
+  /** Static UI assets (console). */
+  ASSETS: Fetcher;
   /** Durable Object binding for FederationAgent (wrangler name: FEDERATION_AGENT). */
   FEDERATION_AGENT: DurableObjectNamespace;
 }
