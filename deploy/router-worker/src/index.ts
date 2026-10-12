@@ -134,6 +134,11 @@ function resolve(cfg: Config, model: string): Array<{ conn: ConnectionCfg; upstr
 
 function upstreamChatUrl(cfg: Config, conn: ConnectionCfg, kind: "openai" | "anthropic"): string {
   if (conn.type === "builtin") {
+    // Prefer the connection's own URL when it is already an API path
+    // (synthetic connections carry the exact endpoint; catalog root URLs are sites).
+    if (conn.baseUrl && /chat\/completions|messages|t2a|generateContent/.test(conn.baseUrl)) {
+      return conn.baseUrl;
+    }
     const b = cfg.providers[conn.provider]?.baseUrl || `${conn.baseUrl}/v1/chat/completions`;
     // Guard: catalog sometimes stores a validate/models URL instead of chat.
     if (!/chat\/completions|messages|t2a|generateContent/.test(b)) {
@@ -241,6 +246,15 @@ async function aggregateSSE(res: Response): Promise<Response> {
   });
 }
 
+function opencodeReqId(): string {
+  const b = new Uint8Array(13);
+  crypto.getRandomValues(b);
+  const hex = Array.from(b.slice(0, 6), (x) => x.toString(16).padStart(2, "0")).join("");
+  const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  const tail = Array.from(b.slice(6), (x) => chars[x % chars.length]).join("");
+  return `msg_${hex}${tail}`;
+}
+
 async function forward(
   cfg: Config,
   conn: ConnectionCfg,
@@ -251,6 +265,9 @@ async function forward(
 ): Promise<Response> {
   const isJson = (incoming.get("content-type") || "").includes("json");
   const headers = buildHeaders(conn, incoming, isJson);
+  if (conn.provider === "opencode") {
+    headers.set("x-opencode-request", opencodeReqId());
+  }
   if (conn.provider === "cloudflare-ai" && conn.accountId) {
     url = url.replace(
       "https://api.cloudflare.com/client/v4/accounts",
@@ -398,6 +415,19 @@ export default {
         if (jsonBody) {
           const nb: Record<string, unknown> = { ...jsonBody, model: upstreamModel };
           if (conn.forceStream) nb.stream = true;
+          if (conn.provider === "opencode") {
+            // Free-tier gate requires the lowercase fingerprint quartet.
+            const fp = ["bash", "glob", "grep", "read"].map((name) => ({
+              type: "function",
+              function: {
+                name,
+                description: "This tool is currently unavailable and must not be used.",
+                parameters: { type: "object", properties: {} },
+              },
+            }));
+            nb.tools = fp;
+            nb.tool_choice = "none";
+          }
           sendBody = JSON.stringify(nb);
         } else if (bodyInit instanceof FormData) {
           const fd2 = new FormData();

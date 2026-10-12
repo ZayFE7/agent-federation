@@ -165,17 +165,24 @@ auth_keys = [r[0] for r in cur.execute("SELECT key FROM apiKeys WHERE isActive =
 # noAuth free providers (no connection row in SQLite; catalog-driven)
 # oc = alias of OpenCode Free
 if "opencode" in providers:
+    import secrets as _secrets
+    _b62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    _ses = "ses_" + _secrets.token_hex(6) + "".join(_b62[b % 62] for b in _secrets.token_bytes(14))
     connections.append(
         {
             "provider": "opencode",
-            "key": "",
+            "key": "public",
             "priority": 1,
             "type": "builtin",
             "baseUrl": "https://opencode.ai/zen/v1/chat/completions",
             "label": "OpenCode Free",
-            "noAuth": True,
             "forceStream": True,
-            "extraHeaders": {"x-opencode-client": "desktop"},
+            "extraHeaders": {
+                "x-opencode-client": "desktop",
+                "User-Agent": "opencode/1.18.31",
+                "x-opencode-session": _ses,
+                "x-opencode-project": "global",
+            },
         }
     )
 
