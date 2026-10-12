@@ -6,6 +6,7 @@ import type {
   ChatTier,
   Env,
   Tier,
+  ToolRun,
 } from "./types";
 import { DEFAULT_MODEL_CHEAP, DEFAULT_MODEL_PRIMARY } from "./types";
 import {
@@ -31,14 +32,28 @@ import {
 
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
-  "You are Federation, a personal AI assistant. Be concise, practical, and honest about uncertainty.";
+  "You are Blip, a personal AI agent with a real Linux sandbox computer, persistent memory across sessions, and the ability to schedule background jobs. Be conversational, concise, and honest about what you cannot do.";
 
-/** Single place the system prompt is assembled (persona + recalled memories). */
+/**
+ * Everything the model is allowed to do, as prompt text. Single source of truth
+ * for the system prompt; the `tools` array in handleChat offers the matching
+ * function schemas. Add a tool here and there (and to the UI's Tools tab) together.
+ */
+export const CAPABILITIES = [
+  "- Persistent memory: you remember the user and prior conversations across sessions (recall happens automatically).",
+  "- Linux sandbox: you can run shell commands and Python (exec tool) in a real Linux computer with internet access; important files can be snapshotted so they survive restarts (save_workspace tool).",
+  "- Background jobs: you can schedule one-off or daily recurring jobs from plain text (schedule_task tool); they run autonomously with full tool access, e.g. every morning at 8.",
+  "- A web console shows your live status and full replies.",
+  "- NOT connected yet: email, calendar, messaging apps, a real web browser, payments. Say so honestly if asked; do not pretend these exist.",
+  "Call a tool when the ask needs one. When no tool is needed, answer normally and conversationally: never reply with a plan you are not executing, and never invent activity the tools did not report.",
+].join("\n");
+
+/** Single place the system prompt is assembled (persona + capabilities + recalled memories). */
 export function buildSystemPrompt(memories: MemoryRow[], persona: string): string {
   const memoryLines = memories.length
     ? memories.map((m) => `- (${m.kind}, importance ${m.importance}) ${m.content}`).join("\n")
     : "- (none yet)";
-  return `${persona}\n\nKnown memories:\n${memoryLines}`;
+  return `${persona}\n\nCapabilities:\n${CAPABILITIES}\n\nKnown memories:\n${memoryLines}`;
 }
 
 interface RouterChatResponse {
@@ -136,8 +151,11 @@ export class FederationAgent extends Agent<Env> {
     vaultDeleteChunks(this.db(), key);
   }
 
-  /** Task query RPC for UI / API inspection. */
-  async tasks(): Promise<TaskRow[]> {
+  /**
+   * Task query RPC for UI / API inspection. Named jobList (not `tasks`) because
+   * the Agents SDK base class already owns a readonly `tasks` member.
+   */
+  async jobList(): Promise<TaskRow[]> {
     return listTasks(this.db(), 20);
   }
 
@@ -168,8 +186,8 @@ export class FederationAgent extends Agent<Env> {
       );
       return;
     }
-    const { reply } = await this.handleChat(payload.content, payload.tier);
-    connection.send(JSON.stringify({ type: "chat", reply }));
+    const reply = await this.handleChat(payload.content, payload.tier);
+    connection.send(JSON.stringify({ type: "chat", ...reply }));
   }
 
   /** Alarm tick: log due tasks into memory and mark them running, then re-arm. */
@@ -241,6 +259,22 @@ export class FederationAgent extends Agent<Env> {
     ];
     logMessage(sql, "user", content, chatTier);
 
+    // Deterministic answer for capability questions: the free-tier model
+    // ignores the system prompt here, and this is factual product copy.
+    if (/what can you do|what are you (able|capable)|your capabilit|help me with what/i.test(content)) {
+      const reply =
+        "Right now I can:\n" +
+        "- chat and remember you across sessions (persistent memory)\n" +
+        "- run shell commands and Python on a real Linux sandbox with internet (just ask, I'll execute)\n" +
+        "- schedule one-off or daily background jobs from plain text, like \"every morning at 8 check X\"\n" +
+        "- snapshot sandbox files so your work survives restarts\n" +
+        "Not connected yet: email, calendar, messaging apps, a real browser, payments. Ask away, or tell me to run something.";
+      logMessage(sql, "assistant", reply, chatTier);
+      remember(sql, "exchange", `User: ${content}\nAgent: ${reply}`, 1);
+      return { reply, state: "idle", verb: "Ready" };
+    }
+
+
     const tools = [
       {
         type: "function",
@@ -289,7 +323,8 @@ export class FederationAgent extends Agent<Env> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const msgs: any[] = messages;
     let finalText = "";
-    const ranCmds: string[] = [];
+    /** Envelope tool cards for the UI: what the model actually called, in order. */
+    const toolRuns: ToolRun[] = [];
 
     for (let round = 0; round < 4; round++) {
       let response: Response;
@@ -321,6 +356,8 @@ export class FederationAgent extends Agent<Env> {
       msgs.push({ role: "assistant", content: msg?.content ?? null, tool_calls: toolCalls });
       for (const tc of toolCalls) {
         let out = "";
+        let runCmd = "";
+        let runOk = false;
         try {
           const args = JSON.parse(tc.function.arguments || "{}") as {
             cmd?: string;
@@ -347,7 +384,10 @@ export class FederationAgent extends Agent<Env> {
             const when = new Date(dueAt).toISOString();
             out = `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
             remember(sql, "task", `Scheduled: ${title} at ${when}`, 2);
+            runCmd = title;
+            runOk = true;
           } else if (tc.function.name === "save_workspace") {
+            runCmd = "save_workspace";
             if (!this.env.SANDBOX) {
               out = "sandbox not configured";
             } else {
@@ -360,13 +400,14 @@ export class FederationAgent extends Agent<Env> {
                 body: JSON.stringify({ sessionId: "agent" }),
               });
               const sd = (await sres.json()) as Record<string, unknown>;
+              runOk = sres.ok;
               out = sres.ok
                 ? `Workspace saved: ${JSON.stringify(sd)}`
                 : `snapshot error: ${JSON.stringify(sd).slice(0, 400)}`;
             }
           } else {
             const cmd = args.cmd || "true";
-            ranCmds.push(cmd);
+            runCmd = cmd;
             if (!this.env.SANDBOX) {
               out = "sandbox not configured";
             } else {
@@ -384,6 +425,7 @@ export class FederationAgent extends Agent<Env> {
                 exitCode?: number;
                 error?: string;
               };
+              runOk = sres.ok && sd.exitCode === 0;
               out = sres.ok
                 ? `exit ${sd.exitCode}\nstdout:\n${(sd.stdout || "").slice(0, 4000)}\nstderr:\n${(sd.stderr || "").slice(0, 1500)}`
                 : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
@@ -393,17 +435,16 @@ export class FederationAgent extends Agent<Env> {
         } catch (e) {
           out = "tool error: " + String(e);
         }
+        toolRuns.push({
+          name: tc.function.name || "tool",
+          cmd: runCmd,
+          output: out.slice(0, 4000),
+          ok: runOk,
+        });
         msgs.push({ role: "tool", tool_call_id: tc.id, content: out });
       }
     }
     if (!finalText) finalText = "(hit the tool round limit; try a simpler ask)";
-    if (ranCmds.length) {
-      finalText =
-        `Ran ${ranCmds.length} command${ranCmds.length > 1 ? "s" : ""} in the sandbox:\n` +
-        ranCmds.map((c) => `  $ ${c}`).join("\n") +
-        "\n\n" +
-        finalText;
-    }
 
     logMessage(sql, "assistant", finalText, chatTier);
     remember(sql, "exchange", `User: ${content}\nAgent: ${finalText}`, 2);
@@ -415,7 +456,7 @@ export class FederationAgent extends Agent<Env> {
     if (/error|failed|couldn't|cannot/.test(finalText.toLowerCase().slice(0, 200))) {
       state = "error";
       verb = "Hit a snag";
-    } else if (ranCmds.length > 0) {
+    } else if (toolRuns.some((t) => t.name === "exec")) {
       state = "code";
       verb = "Ran commands";
     } else if (/schedul|remind|every morning|every day|daily at|cron|recurring/.test(lower)) {
@@ -431,6 +472,6 @@ export class FederationAgent extends Agent<Env> {
     } else if (/done|finished|complete|success/.test(lower)) {
       state = "success";
     }
-    return { reply: finalText, state, verb };
+    return { reply: finalText, state, verb, tools: toolRuns };
   }
 }

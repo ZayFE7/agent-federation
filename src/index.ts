@@ -6,7 +6,7 @@ export { FederationAgent };
 /** Minimal RPC surface of FederationAgent used over the DO stub. */
 interface AgentStub {
   chat(content: string, tier?: ChatTier): Promise<AgentReply>;
-  tasks(): Promise<unknown[]>;
+  jobList(): Promise<unknown[]>;
   vaultPut(key: string, idx: number, total: number, dataB64: string): Promise<void>;
   vaultPull(key: string): Promise<Uint8Array | null>;
   vaultChunk(key: string, idx: number): Promise<string | null>;
@@ -64,7 +64,7 @@ export default {
       if (auth !== env.AGENT_API_KEY.trim()) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
-      const list = await agentStub(env).tasks();
+      const list = await agentStub(env).jobList();
       return Response.json({ ok: true, tasks: list });
     }
 

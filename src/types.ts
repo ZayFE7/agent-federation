@@ -12,6 +12,18 @@ export interface ChatMessage {
   content: string;
 }
 
+/** One tool invocation the model made while producing a reply. */
+export interface ToolRun {
+  /** Tool function name, e.g. "exec" | "schedule_task" | "save_workspace". */
+  name: string;
+  /** What was invoked: the shell command, or the job title for schedule_task. */
+  cmd: string;
+  /** Captured stdout/stderr (or the scheduler's confirmation line). */
+  output: string;
+  /** Whether the invocation reported success. */
+  ok: boolean;
+}
+
 /** Response shape for POST /api/message and the DO chat method. */
 export interface AgentReply {
   reply: string;
@@ -19,6 +31,8 @@ export interface AgentReply {
   state?: string;
   /** Short capsule verb matching the state. */
   verb?: string;
+  /** Tool cards the UI renders; empty when the model only talked. */
+  tools?: ToolRun[];
 }
 
 /** Inbound body for POST /api/message and WebSocket {type:"chat"}. */

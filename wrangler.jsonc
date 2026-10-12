@@ -35,9 +35,9 @@
   // Local dev: .dev.vars overrides these for the keys it defines.
   // RENDER_URL is added after the Render service has its public URL.
   "vars": {
-    "ROUTER_URL": "https://zay-router.agent-federation.workers.dev/v1/chat/completions",
-    "MODEL_PRIMARY": "gemini3.8flash",
-    "MODEL_CHEAP": "gemini3.7flash"
+    "ROUTER_URL": "https://rv2y9vm.abc-tunnel.us/v1/chat/completions",
+    "MODEL_PRIMARY": "oc/mimo-v2.6-flash-free",
+    "MODEL_CHEAP": "oc/deepseek-v4-flash-free"
   },
   // Secrets (never put these in vars):
   //   wrangler secret put ROUTER_KEY

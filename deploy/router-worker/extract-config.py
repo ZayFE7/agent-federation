@@ -182,6 +182,7 @@ if "opencode" in providers:
                 "User-Agent": "opencode/1.18.31",
                 "x-opencode-session": _ses,
                 "x-opencode-project": "global",
+                "Accept": "text/event-stream",
             },
         }
     )

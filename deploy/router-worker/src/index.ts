@@ -311,6 +311,42 @@ export default {
       }
     }
 
+    if (url.pathname === "/debug-oc" && request.method === "POST") {
+      const cfg = await loadConfig(env);
+      const conn = cfg.connections.find((c) => c.provider === "opencode");
+      if (!conn) return json(404, { error: "no opencode conn" });
+      const upstreamBody = JSON.stringify({
+        model: "mimo-v2.6-flash-free",
+        messages: [{ role: "user", content: "say ok" }],
+        max_tokens: 32,
+        stream: true,
+        tool_choice: "none",
+        tools: ["bash", "glob", "grep", "read"].map((name) => ({
+          type: "function",
+          function: {
+            name,
+            description: "This tool is currently unavailable and must not be used.",
+            parameters: { type: "object", properties: {} },
+          },
+        })),
+      });
+      const headers = buildHeaders(conn, new Headers({ "content-type": "application/json" }), true);
+      headers.set("x-opencode-request", opencodeReqId());
+      const res = await fetch(conn.baseUrl, { method: "POST", headers, body: upstreamBody });
+      const text = await res.text();
+      const sent: Record<string, string> = {};
+      headers.forEach((v, k) => {
+        if (k === "authorization") sent[k] = "Bearer ***";
+        else if (k === "x-opencode-session") sent[k] = v;
+        else sent[k] = v;
+      });
+      return json(200, {
+        upstreamStatus: res.status,
+        sentHeaders: sent,
+        bodyPreview: text.slice(0, 220),
+      });
+    }
+
     let authed = false;
     if (url.pathname.startsWith("/v1/")) {
       try {

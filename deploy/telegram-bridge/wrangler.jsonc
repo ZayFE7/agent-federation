@@ -1,0 +1,11 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "telegram-bridge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "kv_namespaces": [{ "binding": "BRIDGE", "id": "PASTE_KV" }],
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": {
+    "AGENT_URL": "https://agent-federation.agent-federation.workers.dev"
+  }
+}
