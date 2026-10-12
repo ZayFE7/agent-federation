@@ -6,6 +6,7 @@ export { FederationAgent };
 /** Minimal RPC surface of FederationAgent used over the DO stub. */
 interface AgentStub {
   chat(content: string, tier?: ChatTier): Promise<AgentReply>;
+  tasks(): Promise<unknown[]>;
   vaultPut(key: string, idx: number, total: number, dataB64: string): Promise<void>;
   vaultPull(key: string): Promise<Uint8Array | null>;
   vaultChunk(key: string, idx: number): Promise<string | null>;
@@ -39,8 +40,8 @@ export default {
     }
 
     if (url.pathname === "/api/message" && request.method === "POST") {
-      const auth = request.headers.get("Authorization") ?? "";
-      if (auth !== `Bearer ${env.AGENT_API_KEY}`) {
+      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+      if (auth !== env.AGENT_API_KEY.trim()) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       let body: ChatRequest;
@@ -56,6 +57,15 @@ export default {
         body.tier === "primary" || body.tier === "cheap" ? body.tier : undefined;
       const result = await agentStub(env).chat(body.content, tier);
       return Response.json(result);
+    }
+
+    if (url.pathname === "/api/tasks" && request.method === "GET") {
+      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+      if (auth !== env.AGENT_API_KEY.trim()) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const list = await agentStub(env).tasks();
+      return Response.json({ ok: true, tasks: list });
     }
 
     if (url.pathname === "/api/decide" && request.method === "POST") {

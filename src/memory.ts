@@ -35,6 +35,13 @@ export interface TaskRow {
   created_at: number;
 }
 
+export function listTasks(sql: SqlHandle, limit = 20): TaskRow[] {
+  return sql.exec<TaskRow>(
+    "SELECT id, title, status, due_at, payload, created_at FROM tasks ORDER BY created_at DESC LIMIT ?",
+    limit
+  ).results;
+}
+
 /** Idempotent schema for memories, messages, and tasks. */
 export function ensureSchema(sql: SqlHandle): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS memories (

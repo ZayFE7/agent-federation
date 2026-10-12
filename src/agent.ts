@@ -12,12 +12,14 @@ import {
   dueTasks,
   enqueueTask,
   ensureSchema,
+  listTasks,
   logMessage,
   recentMessages,
   recall,
   remember,
   type MemoryRow,
   type SqlHandle,
+  type TaskRow,
 } from "./memory";
 import {
   ensureVaultSchema,
@@ -132,6 +134,11 @@ export class FederationAgent extends Agent<Env> {
   /** Vault RPC: delete all chunks for a key. */
   async vaultDelete(key: string): Promise<void> {
     vaultDeleteChunks(this.db(), key);
+  }
+
+  /** Task query RPC for UI / API inspection. */
+  async tasks(): Promise<TaskRow[]> {
+    return listTasks(this.db(), 20);
   }
 
   /** WebSocket frames: {type:"chat"|"status", content, tier}. */
