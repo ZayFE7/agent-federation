@@ -42,7 +42,7 @@ export const DEFAULT_PERSONA =
  */
 export const CAPABILITIES = [
   "- Persistent memory: you remember the user and prior conversations across sessions (recall happens automatically).",
-  "- Linux sandbox: you can run shell commands and Python (exec tool) in a real Linux computer with internet access; important files can be snapshotted so they survive restarts (save_workspace tool).",
+  "- Linux sandbox: when a sandbox is configured, you can run shell commands and Python (exec tool) in a real Linux computer with internet access; important files can be snapshotted so they survive restarts (save_workspace tool). The user can also prefix a message with \"run:\" to execute a command directly with no model round trip.",
   "- Background jobs: you can schedule one-off or daily recurring jobs from plain text (schedule_task tool); they run autonomously with full tool access, e.g. every morning at 8.",
   "- A web console shows your live status and full replies.",
   "- NOT connected yet: email, calendar, messaging apps, a real web browser, payments. Say so honestly if asked; do not pretend these exist.",
@@ -64,6 +64,11 @@ export const HARD_RULE =
  * trip). Group 2 is the command.
  */
 const DIRECT_RUN_RE = /^(run|exec|execute)\s*[:\s]\s*(.+)$/is;
+
+/** Slice to n chars and say so when truncated, so the model/user knows output was cut. */
+function clip(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)} [truncated ${s.length - n} chars]` : s;
+}
 
 /**
  * Single place the system prompt is assembled. Order is deliberate:
@@ -329,16 +334,58 @@ export class FederationAgent extends Agent<Env> {
     ];
     logMessage(sql, "user", content, chatTier);
 
+    // Deterministic exec: "run: <cmd>" / "exec: <cmd>" / "execute <cmd>" runs
+    // straight in the sandbox with no LLM round trip, so computer use stays
+    // reliable even when a free model ignores the system prompt and skips tools.
+    const directRun = DIRECT_RUN_RE.exec(content);
+    if (directRun) {
+      const cmd = (directRun[2] || "").trim();
+      let reply: string;
+      let ok = false;
+      if (!this.env.SANDBOX) {
+        reply = "Sandbox not configured yet, so I can't run that command.";
+      } else {
+        try {
+          const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${this.env.SBOX_TOKEN}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ cmd, sessionId: "agent" }),
+          });
+          const sd = (await sres.json()) as {
+            stdout?: string;
+            stderr?: string;
+            exitCode?: number;
+            error?: string;
+          };
+          ok = sres.ok && sd.exitCode === 0;
+          reply = sres.ok
+            ? `exit ${sd.exitCode}\nstdout:\n${clip(sd.stdout || "", 4000)}\nstderr:\n${clip(sd.stderr || "", 1500)}`
+            : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
+          remember(sql, "tool", `direct exec: ${cmd} -> exit ${sd.exitCode ?? "?"}`, 2);
+        } catch (e) {
+          reply = "sandbox error: " + String(e);
+        }
+      }
+      logMessage(sql, "assistant", reply, chatTier);
+      return { reply, state: ok ? "idle" : "error", verb: "Ran" };
+    }
+
     // Deterministic answer for capability questions: the free-tier model
     // ignores the system prompt here, and this is factual product copy.
     if (/what can you do|what are you (able|capable)|your capabilit|help me with what/i.test(content)) {
+      const sandboxLine = this.env.SANDBOX
+        ? "- run shell commands and Python on a real Linux sandbox with internet (ask me, or prefix a message with \"run:\")\n"
+        : "- (sandbox not configured yet, so live shell/Python execution is unavailable)\n";
       const reply =
         "Right now I can:\n" +
         "- chat and remember you across sessions (persistent memory)\n" +
-        "- run shell commands and Python on a real Linux sandbox with internet (just ask, I'll execute)\n" +
+        sandboxLine +
         "- schedule one-off or daily background jobs from plain text, like \"every morning at 8 check X\"\n" +
         "- snapshot sandbox files so your work survives restarts\n" +
-        "Not connected yet: email, calendar, messaging apps, a real browser, payments. Ask away, or tell me to run something.";
+        "Not connected yet: email, calendar, messaging apps, a real browser, payments.";
       logMessage(sql, "assistant", reply, chatTier);
       remember(sql, "exchange", `User: ${content}\nAgent: ${reply}`, 1);
       return { reply, state: "idle", verb: "Ready" };
@@ -509,7 +556,7 @@ export class FederationAgent extends Agent<Env> {
               };
               runOk = sres.ok && sd.exitCode === 0;
               out = sres.ok
-                ? `exit ${sd.exitCode}\nstdout:\n${(sd.stdout || "").slice(0, 4000)}\nstderr:\n${(sd.stderr || "").slice(0, 1500)}`
+                ? `exit ${sd.exitCode}\nstdout:\n${clip(sd.stdout || "", 4000)}\nstderr:\n${clip(sd.stderr || "", 1500)}`
                 : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
               remember(sql, "tool", `exec: ${cmd} -> exit ${sd.exitCode ?? "?"}`, 2);
             }
