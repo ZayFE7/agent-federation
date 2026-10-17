@@ -23,6 +23,28 @@ function mainAgentId(env: Env): DurableObjectId {
   return env.FEDERATION_AGENT.idFromName("main");
 }
 
+/** Length-check then constant-time string compare (no early exit on mismatch). */
+function safeEq(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * True only when a non-empty AGENT_API_KEY is configured AND the request's bearer
+ * token matches it. Fails CLOSED: an unset/empty key rejects every request, and a
+ * bare "Bearer undefined" no longer authenticates.
+ */
+function authed(request: Request, env: Env): boolean {
+  const key = (env.AGENT_API_KEY ?? "").trim();
+  if (!key) return false;
+  const got = (request.headers.get("Authorization") ?? "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  return safeEq(got, key);
+}
+
 function agentStub(env: Env): AgentStub {
   const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
   // Cast avoids depending on version-specific DurableObjectNamespace generics.
@@ -45,7 +67,7 @@ export default {
         .replace(/^Bearer\s+/i, "")
         .trim();
       const queryAuth = (url.searchParams.get("token") ?? "").trim();
-      if (!key || (headerAuth !== key && queryAuth !== key)) {
+      if (!key || (!safeEq(headerAuth, key) && !safeEq(queryAuth, key))) {
         return new Response("unauthorized", { status: 401 });
       }
       const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
@@ -57,8 +79,7 @@ export default {
     }
 
     if (url.pathname === "/api/message" && request.method === "POST") {
-      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-      if (auth !== env.AGENT_API_KEY.trim()) {
+      if (!authed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       let body: ChatRequest;
@@ -77,8 +98,7 @@ export default {
     }
 
     if (url.pathname === "/api/tasks" && request.method === "GET") {
-      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-      if (auth !== env.AGENT_API_KEY.trim()) {
+      if (!authed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const list = await agentStub(env).jobList();
@@ -86,8 +106,7 @@ export default {
     }
 
     if (url.pathname === "/api/plan" && request.method === "GET") {
-      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-      if (auth !== env.AGENT_API_KEY.trim()) {
+      if (!authed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const { plan, pending } = await agentStub(env).planState();
@@ -95,8 +114,7 @@ export default {
     }
 
     if (url.pathname === "/api/approve" && request.method === "POST") {
-      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-      if (auth !== env.AGENT_API_KEY.trim()) {
+      if (!authed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       let body: { id?: number; approve?: boolean };
@@ -113,7 +131,7 @@ export default {
     }
 
     if (url.pathname === "/api/decide" && request.method === "POST") {
-      if (request.headers.get("Authorization") !== `Bearer ${env.AGENT_API_KEY}`) {
+      if (!authed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       let body: { context?: string };
@@ -124,18 +142,6 @@ export default {
       }
       if (typeof body.context !== "string" || !body.context) {
         return Response.json({ error: "context required" }, { status: 400 });
-      }
-      // TEMP debug: expose the exact router URL the brain holds
-      if (body.context === "__debug_url") {
-        const origin = env.ROUTER_URL.replace(/\/v1\/.*$/, "");
-        let probe = "no probe";
-        try {
-          const pr = await fetch(origin + "/health");
-          probe = pr.status + " " + (await pr.text()).slice(0, 120);
-        } catch (e) {
-          probe = String(e);
-        }
-        return Response.json({ routerUrl: env.ROUTER_URL, origin, probe, hasKey: !!env.ROUTER_KEY, keyLen: (env.ROUTER_KEY || "").length });
       }
       const states = [
         "idle","think","browse","search","read","code","mail","pay",

@@ -75,16 +75,19 @@ export const HARD_RULE =
  * Deterministic tool trigger, checked before any model call: the user typed a
  * shell command themselves, so there is no reason to involve the LLM. Makes
  * tool calling 100% testable ("run: ls -la /" always works, no model round
- * trip). Group 2 is the command.
+ * trip). Group 2 is the command. The colon is required: matching on whitespace
+ * would make an ordinary message like "run the tests" execute the shell command
+ * "the tests", so a real prefix marker is mandatory.
  */
-const DIRECT_RUN_RE = /^(run|exec|execute)\s*[:\s]\s*(.+)$/is;
+const DIRECT_RUN_RE = /^(run|exec|execute):\s*(.+)$/is;
 
 /**
  * Deterministic web-search trigger, same idea as DIRECT_RUN_RE: "search: <query>"
  * hits Parallel directly with no model round trip, so search stays reliable even
  * when the free model skips tools, and is 100% testable. Group 1 is the query.
+ * Colon required for the same reason as above.
  */
-const DIRECT_SEARCH_RE = /^search\s*[:\s]\s*(.+)$/is;
+const DIRECT_SEARCH_RE = /^search:\s*(.+)$/is;
 
 /** Slice to n chars and say so when truncated, so the model/user knows output was cut. */
 function clip(s: string, n: number): string {
@@ -394,16 +397,20 @@ export class FederationAgent extends Agent<Env> {
           "SELECT MIN(due_at) AS m FROM tasks WHERE status = 'pending'"
         )
         .results[0]?.m;
-      // Default to the 1-minute safety poll so the tick chain never dies.
-      let delayMs = 60_000;
+      // This Agents SDK overload treats a numeric schedule() delay as SECONDS and a
+      // Date as an absolute wake time. The old code passed milliseconds, which the SDK
+      // read as seconds and pushed every wake ~1000x too far out. Pass a Date so the
+      // unit can never be misread. The poll cadence stays clamped to [5s, 60s] so it
+      // converges on the due time without storming the alarm.
+      const now = Date.now();
+      let wakeAt = now + 60_000;
       if (raw !== null && raw !== undefined) {
         const soonest = Number(raw);
         if (Number.isFinite(soonest)) {
-          // Near-exact, clamped to [5s, 60s] so it never storms and never sleeps long.
-          delayMs = Math.min(60_000, Math.max(5_000, soonest - Date.now()));
+          wakeAt = now + Math.min(60_000, Math.max(5_000, soonest - now));
         }
       }
-      await this.schedule(delayMs, "onScheduledTask");
+      await this.schedule(new Date(wakeAt), "onScheduledTask");
     } catch (err) {
       remember(this.db(), "error", `schedule failed: ${String(err)}`, 2);
     }
@@ -845,7 +852,7 @@ export class FederationAgent extends Agent<Env> {
             out = r.out;
             runOk = r.ok;
             if (r.ok) remember(sql, "tool", `web_search: "${query}" -> ok`, 2);
-          } else {
+          } else if (tc.function.name === "exec") {
             const cmd = args.cmd || "true";
             runCmd = cmd;
             if (isRisky(cmd)) {
@@ -862,6 +869,12 @@ export class FederationAgent extends Agent<Env> {
               runOk = r.ok;
               remember(sql, "tool", `exec: ${cmd} -> ${r.ok ? "ok" : "fail"}`, 2);
             }
+          } else {
+            // Unrecognized tool name: never fall through to exec (that used to run
+            // `exec "true"` and report a fake success). Tell the model the valid set.
+            out = `Unknown tool "${tc.function.name}". Valid tools: exec, web_search, schedule_task, save_workspace, plan, plan_done.`;
+            runCmd = tc.function.name || "tool";
+            runOk = false;
           }
         } catch (e) {
           out = "tool error: " + String(e);
