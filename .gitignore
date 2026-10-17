@@ -10,3 +10,6 @@ design-extract/
 .tmp-ag/
 .workflow-extract/
 design-extract2/
+
+# subagent-driven-development scratch (plans, ledgers, briefs, reports): never public
+.superpowers/
