@@ -39,7 +39,11 @@
     "MODEL_CHEAP": "deepseek-v4.1-flash-free"
   },
   // Secrets (never put these in vars):
-  //   wrangler secret put ROUTER_KEY
-  //   wrangler secret put AGENT_API_KEY
-  //   wrangler secret put ROUTER_URL   (omniroute tunnel URL; NEVER commit it, rule 8)
+  //   wrangler secret put ROUTER_KEY        (bearer for the model router)
+  //   wrangler secret put AGENT_API_KEY     (bearer the web UI / API must present)
+  //   wrangler secret put SBOX_TOKEN        (must match zay-sandbox's SBOX_TOKEN)
+  //   wrangler secret put PARALLEL_API_KEY  (Parallel Web Search; enables web_search)
+  //   wrangler secret put ROUTER_URL        (omniroute tunnel URL; NEVER commit it, rule 8)
+  // The zay-sandbox worker holds its own secrets (see deploy/sandbox-worker):
+  //   E2B_API_KEY, SBOX_TOKEN (same value as above).
 }

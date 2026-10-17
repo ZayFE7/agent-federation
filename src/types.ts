@@ -14,7 +14,7 @@ export interface ChatMessage {
 
 /** One tool invocation the model made while producing a reply. */
 export interface ToolRun {
-  /** Tool function name, e.g. "exec" | "schedule_task" | "save_workspace". */
+  /** Tool function name, e.g. "exec" | "web_search" | "schedule_task" | "save_workspace". */
   name: string;
   /** What was invoked: the shell command, or the job title for schedule_task. */
   cmd: string;
@@ -41,8 +41,8 @@ export interface ChatRequest {
   tier?: ChatTier;
 }
 
-export const DEFAULT_MODEL_PRIMARY = "meta/muse-spark-1.3";
-export const DEFAULT_MODEL_CHEAP = "meta/muse-spark-1.3-contributor";
+export const DEFAULT_MODEL_PRIMARY = "deepseek-v4.1-flash-free";
+export const DEFAULT_MODEL_CHEAP = "deepseek-v4.1-flash-free";
 
 export interface Env {
   /** HTTPS URL of the Pipedream router workflow. */
@@ -66,6 +66,8 @@ export interface Env {
   SANDBOX?: Fetcher;
   /** Shared secret for the sandbox worker. */
   SBOX_TOKEN: string;
+  /** Parallel AI Web Search API key (sent as x-api-key). Search degrades gracefully when unset. */
+  PARALLEL_API_KEY?: string;
   /** Durable Object binding for FederationAgent (wrangler name: FEDERATION_AGENT). */
   FEDERATION_AGENT: DurableObjectNamespace;
 }

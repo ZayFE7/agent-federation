@@ -44,8 +44,9 @@ export const CAPABILITIES = [
   "- Persistent memory: you remember the user and prior conversations across sessions (recall happens automatically).",
   "- Linux sandbox: when a sandbox is configured, you can run shell commands and Python (exec tool) in a real Linux computer with internet access; important files can be snapshotted so they survive restarts (save_workspace tool). The user can also prefix a message with \"run:\" to execute a command directly with no model round trip.",
   "- Background jobs: you can schedule one-off or daily recurring jobs from plain text (schedule_task tool); they run autonomously with full tool access, e.g. every morning at 8.",
+  "- Web search: you can search the live web for current facts, news, prices, and documentation (web_search tool); you get back titles, URLs, and text excerpts to reason over and cite.",
   "- A web console shows your live status and full replies.",
-  "- NOT connected yet: email, calendar, messaging apps, a real web browser, payments. Say so honestly if asked; do not pretend these exist.",
+  "- NOT connected yet: email, calendar, messaging apps, a full web browser (you can search the web but not drive a browser), payments. Say so honestly if asked; do not pretend these exist.",
   "Call a tool when the ask needs one. When no tool is needed, answer normally and conversationally: never reply with a plan you are not executing, and never invent activity the tools did not report.",
 ].join("\n");
 
@@ -65,9 +66,57 @@ export const HARD_RULE =
  */
 const DIRECT_RUN_RE = /^(run|exec|execute)\s*[:\s]\s*(.+)$/is;
 
+/**
+ * Deterministic web-search trigger, same idea as DIRECT_RUN_RE: "search: <query>"
+ * hits Parallel directly with no model round trip, so search stays reliable even
+ * when the free model skips tools, and is 100% testable. Group 1 is the query.
+ */
+const DIRECT_SEARCH_RE = /^search\s*[:\s]\s*(.+)$/is;
+
 /** Slice to n chars and say so when truncated, so the model/user knows output was cut. */
 function clip(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)} [truncated ${s.length - n} chars]` : s;
+}
+
+/** One Parallel Web Search result, narrowed to the fields we surface to the model. */
+interface SearchResult {
+  url?: string;
+  title?: string;
+  excerpts?: string[];
+}
+
+/**
+ * Render Parallel search results as compact text the model can reason over:
+ * title + URL + one clipped excerpt per result. Caps the count (token budget)
+ * and, when it caps, says so and tells the agent how to get more, rather than
+ * silently dropping rows the model would assume were the complete answer.
+ * Pure and exported so it can be unit-tested without hitting the network.
+ */
+export function formatSearchResults(
+  query: string,
+  results: SearchResult[],
+  maxResults: number
+): string {
+  if (!results.length) {
+    return `No web results for "${query}". Try a broader or differently-worded query.`;
+  }
+  const cap = Math.min(10, Math.max(1, Math.floor(maxResults) || 5));
+  const shown = results.slice(0, cap);
+  const body = shown
+    .map((r, i) => {
+      const title = (r.title || r.url || "untitled").trim();
+      const excerpt = clip((r.excerpts || []).join(" ").replace(/\s+/g, " ").trim(), 400);
+      return `${i + 1}. ${title}\n   ${r.url || "(no url)"}\n   ${excerpt || "(no excerpt)"}`;
+    })
+    .join("\n\n");
+  const head = `Found ${results.length} web result(s) for "${query}"${
+    results.length > shown.length ? ` (showing top ${shown.length})` : ""
+  }:\n`;
+  const tail =
+    results.length > shown.length
+      ? `\n\n[Showing ${shown.length} of ${results.length}. Raise max_results (up to 10) or narrow the query for more.]`
+      : "";
+  return head + body + tail;
 }
 
 /**
@@ -303,6 +352,50 @@ export class FederationAgent extends Agent<Env> {
     return { tier: "primary", model: this.env.MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY };
   }
 
+  /**
+   * One place that talks to Parallel Web Search. Shared by the web_search tool
+   * and the deterministic "search:" prefix, so the network contract lives once.
+   * Never throws: every failure mode comes back as { out, ok:false } text the
+   * model (or user) can act on, and out is already token-capped by the formatter.
+   */
+  private async webSearch(
+    query: string,
+    maxResults: number
+  ): Promise<{ out: string; ok: boolean }> {
+    const q = (query || "").trim();
+    if (!this.env.PARALLEL_API_KEY) {
+      return { out: "web search is not configured yet (no PARALLEL_API_KEY on the worker).", ok: false };
+    }
+    if (!q) {
+      return { out: "web_search needs a non-empty query. Retry with what you want to find.", ok: false };
+    }
+    const cap = Math.min(10, Math.max(1, Math.floor(maxResults) || 5));
+    try {
+      const sres = await fetch("https://api.parallel.ai/v1/search", {
+        method: "POST",
+        headers: {
+          "x-api-key": this.env.PARALLEL_API_KEY,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ objective: q, search_queries: [q] }),
+        // Search must fail fast, not hang the tool loop or the UI.
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!sres.ok) {
+        const errText = (await sres.text()).slice(0, 300);
+        return {
+          out: `web search failed (HTTP ${sres.status}): ${errText}. The Parallel key may lack the Search product; tell the user.`,
+          ok: false,
+        };
+      }
+      const sd = (await sres.json()) as { results?: SearchResult[] };
+      const results = sd.results || [];
+      return { out: formatSearchResults(q, results, cap), ok: results.length > 0 };
+    } catch (e) {
+      return { out: "web search error: " + String(e), ok: false };
+    }
+  }
+
   private async handleChat(content: string, tier?: ChatTier): Promise<AgentReply> {
     const sql = this.db();
     const chatTier: ChatTier = tier === "cheap" ? "cheap" : "primary";
@@ -373,19 +466,42 @@ export class FederationAgent extends Agent<Env> {
       return { reply, state: ok ? "idle" : "error", verb: "Ran" };
     }
 
+    // Deterministic web search: "search: <query>" hits Parallel with no LLM
+    // round trip, so search stays reliable even when the free model skips tools.
+    const directSearch = DIRECT_SEARCH_RE.exec(content);
+    if (directSearch) {
+      const query = (directSearch[1] || "").trim();
+      const r = await this.webSearch(query, 5);
+      logMessage(sql, "assistant", r.out, chatTier);
+      const runs: ToolRun[] = [
+        { name: "web_search", cmd: query, output: r.out.slice(0, 4000), ok: r.ok },
+      ];
+      if (r.ok) remember(sql, "tool", `direct web_search: "${query}" -> ok`, 2);
+      return {
+        reply: r.out,
+        state: r.ok ? "search" : "error",
+        verb: r.ok ? "Searched the web" : "Search failed",
+        tools: runs,
+      };
+    }
+
     // Deterministic answer for capability questions: the free-tier model
     // ignores the system prompt here, and this is factual product copy.
     if (/what can you do|what are you (able|capable)|your capabilit|help me with what/i.test(content)) {
       const sandboxLine = this.env.SANDBOX
         ? "- run shell commands and Python on a real Linux sandbox with internet (ask me, or prefix a message with \"run:\")\n"
         : "- (sandbox not configured yet, so live shell/Python execution is unavailable)\n";
+      const searchLine = this.env.PARALLEL_API_KEY
+        ? "- search the live web for current facts, news, and prices (ask me, or prefix a message with \"search:\")\n"
+        : "";
       const reply =
         "Right now I can:\n" +
         "- chat and remember you across sessions (persistent memory)\n" +
         sandboxLine +
+        searchLine +
         "- schedule one-off or daily background jobs from plain text, like \"every morning at 8 check X\"\n" +
         "- snapshot sandbox files so your work survives restarts\n" +
-        "Not connected yet: email, calendar, messaging apps, a real browser, payments.";
+        "Not connected yet: email, calendar, messaging apps, a full browser (I can search the web but not drive one), payments.";
       logMessage(sql, "assistant", reply, chatTier);
       remember(sql, "exchange", `User: ${content}\nAgent: ${reply}`, 1);
       return { reply, state: "idle", verb: "Ready" };
@@ -405,6 +521,29 @@ export class FederationAgent extends Agent<Env> {
               cmd: { type: "string", description: "The shell command to execute" },
             },
             required: ["cmd"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "web_search",
+          description:
+            "Search the live web for current information: news, prices, documentation, events, or any fact that may have changed since your training or that you are not certain of. Returns titles, URLs, and text excerpts you can reason over and cite. Prefer this over guessing whenever the user asks about something current, specific, or external.",
+          parameters: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description:
+                  "A specific search phrase describing what to find. Example: 'Cloudflare Workers free tier daily request limit 2026'.",
+              },
+              max_results: {
+                type: "number",
+                description: "Optional. How many results to return, 1 to 10. Defaults to 5.",
+              },
+            },
+            required: ["query"],
           },
         },
       },
@@ -489,6 +628,8 @@ export class FederationAgent extends Agent<Env> {
         try {
           const args = JSON.parse(tc.function.arguments || "{}") as {
             cmd?: string;
+            query?: string;
+            max_results?: number;
             title?: string;
             instructions?: string;
             minutes_from_now?: number;
@@ -534,6 +675,13 @@ export class FederationAgent extends Agent<Env> {
                 ? `Workspace saved: ${JSON.stringify(sd)}`
                 : `snapshot error: ${JSON.stringify(sd).slice(0, 400)}`;
             }
+          } else if (tc.function.name === "web_search") {
+            const query = (args.query || "").trim();
+            runCmd = query || "web_search";
+            const r = await this.webSearch(query, args.max_results ?? 5);
+            out = r.out;
+            runOk = r.ok;
+            if (r.ok) remember(sql, "tool", `web_search: "${query}" -> ok`, 2);
           } else {
             const cmd = args.cmd || "true";
             runCmd = cmd;
@@ -585,6 +733,9 @@ export class FederationAgent extends Agent<Env> {
     if (/error|failed|couldn't|cannot/.test(finalText.toLowerCase().slice(0, 200))) {
       state = "error";
       verb = "Hit a snag";
+    } else if (toolRuns.some((t) => t.name === "web_search")) {
+      state = "search";
+      verb = "Searched the web";
     } else if (toolRuns.some((t) => t.name === "exec")) {
       state = "code";
       verb = "Ran commands";
