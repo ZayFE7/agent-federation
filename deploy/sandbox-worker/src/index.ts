@@ -45,7 +45,7 @@ async function poolGet(env: Env, sessionId: string): Promise<Sandbox> {
         "mkdir -p /workspace && cd /workspace && echo '" +
           tar +
           "' | base64 -d | tar xzf -",
-        { timeout: 30 }
+        { timeoutMs: 30_000 }
       );
     }
   } catch {
@@ -97,7 +97,7 @@ export default {
       }
       const packed = await sbx.commands.run(
         "mkdir -p /workspace && cd /workspace && tar czf - . 2>/dev/null | base64 -w0",
-        { timeout: 30 }
+        { timeoutMs: 30_000 }
       );
       const b64 = (packed.stdout || "").trim();
       if (!b64) return json(200, { ok: true, bytes: 0, note: "workspace empty" });
@@ -116,7 +116,7 @@ export default {
         return json(502, { error: "boot: " + String(e) });
       }
       try {
-        const result = await sbx.commands.run(body.cmd, { timeout: 60 });
+        const result = await sbx.commands.run(body.cmd, { timeoutMs: 60_000 });
         // keep lease warm
         await env.SESSIONS.put(
           sid,
