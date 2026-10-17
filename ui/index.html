@@ -287,47 +287,46 @@ const fld=(k,v)=>`<div class="fld"><span>${k}</span><b style="width:auto">${v}</
 const stpv=(label)=>()=>`${fld("Status",label)}${fld("Updated","just now")}`;
 const S={
 idle:{n:"Idle",c:"#FFD66B",ic:"idle",v:["Ready","Listening"],say:"Nothing running. Ask me anything.",st:"",pv:stpv("Idle, ready for a request")},
-think:{n:"Working",c:"#FFD66B",ic:"idea",v:["Thinking","Working on it","Chewing on it"],say:"Working on it.",st:"Thinking",i:1,btn:"Details",pv:stpv("Reasoning through the request")},
-browse:{n:"Browser",c:"#62B4FF",ic:"web",v:["Browsing","Opening a page"],say:"Browsing the web.",st:"Browsing",i:2,btn:"Details",pv:stpv("Browsing the web")},
-search:{n:"Search",c:"#4FD1E8",ic:"search",v:["Searching","Reading results"],say:"Searching the web.",st:"Searching",i:1,btn:"Details",pv:stpv("Searching the web")},
-files:{n:"Documents",c:"#5FD8A6",ic:"doc",v:["Reading","Skimming"],say:"Reading files.",st:"Reading files",i:2,btn:"Details",pv:stpv("Reading files")},
-code:{n:"Terminal",c:"#FF7EB6",ic:"code",v:["Compiling","Poking the shell","Debugging"],say:"Running commands.",st:"Running commands",i:3,btn:"Details",pv:()=>`<div class="term"><span class="p">$</span> <span class="cur"></span></div>`},
-mail:{n:"Email",c:"#B59CFF",ic:"mail",v:["Drafting","Writing"],say:"Handling email.",st:"Email not connected yet",i:3,btn:"Details",pv:stpv("Email connector not connected yet")},
-pay:{n:"Wallet",c:"#FF7A6B",ic:"pay",v:["Checking","Reviewing"],say:"Reviewing payment details.",st:"Reviewing",i:4,btn:"Details",pv:stpv("Reviewing a transaction")},
+think:{n:"Working",c:"#FFD66B",ic:"idea",v:["Thinking","Working on it","Chewing on it"],say:"Working on it.",st:"Thinking",i:1,pv:stpv("Reasoning through the request")},
+browse:{n:"Browser",c:"#62B4FF",ic:"web",v:["Browsing","Opening a page"],say:"Browsing the web.",st:"Browsing",i:2,pv:stpv("Browsing the web")},
+search:{n:"Search",c:"#4FD1E8",ic:"search",v:["Searching","Reading results"],say:"Searching the web.",st:"Searching",i:1,pv:stpv("Searching the web")},
+files:{n:"Documents",c:"#5FD8A6",ic:"doc",v:["Reading","Skimming"],say:"Reading files.",st:"Reading files",i:2,pv:stpv("Reading files")},
+code:{n:"Terminal",c:"#FF7EB6",ic:"code",v:["Compiling","Poking the shell","Debugging"],say:"Running commands.",st:"Running commands",i:3,pv:()=>`<div class="term"><span class="p">$</span> <span class="cur"></span></div>`},
+mail:{n:"Email",c:"#B59CFF",ic:"mail",v:["Drafting","Writing"],say:"Handling email.",st:"Email not connected yet",i:3,pv:stpv("Email connector not connected yet")},
+pay:{n:"Wallet",c:"#FF7A6B",ic:"pay",v:["Checking","Reviewing"],say:"Reviewing payment details.",st:"Reviewing",i:4,pv:stpv("Reviewing a transaction")},
 approve:{n:"Needs your OK",c:"#FF7A6B",ic:"ask",v:["Waiting for you","Needs approval"],say:"Waiting for your approval.",st:"Paused",i:4,ask:1},
 success:{n:"Done",c:"#5FD8A6",ic:"task",v:["Done","All set"],say:"Done.",st:"Completed",pv:stpv("Completed")},
-error:{n:"Error",c:"#FF6B81",ic:"ask",v:["Hit a snag","Failed"],say:"Something failed.",st:"See the reply for details",i:2,btn:"Details",pv:stpv("Last action failed")},
+error:{n:"Error",c:"#FF6B81",ic:"ask",v:["Hit a snag","Failed"],say:"Something failed.",st:"See the reply for details",i:2,pv:stpv("Last action failed")},
 sleep:{n:"Background",c:"#8E86B8",ic:"idle",v:["Working in the background","Still on it"],say:"Working in the background."}};
 const card=k=>{if(!S[k].pv&&!S[k].ask)return"";const s=S[k],h=`<div class="ch"><div class="ico">${ic(s.ic)}</div><div><b>${s.n}</b><small>${s.st||s.say}</small></div><span class="live">Live</span></div>`;
-return s.ask?`<div class="card ask">${h}<div class="pv"><b style="font-size:18px">The agent is waiting for your approval.</b><div class="q">Approve to let it continue, or edit the action first.</div></div><div class="acts"><button class="btn">Edit</button><button class="btn p" onclick="ok()">Approve</button></div></div>`:`<div class="card">${h}<div class="pv">${s.pv()}</div><div class="acts"><button class="btn">Details</button></div></div>`};
+return s.ask?`<div class="card ask">${h}<div class="pv"><b style="font-size:18px">The agent is waiting for your approval.</b><div class="q">Approve to let it continue, or edit the action first.</div></div><div class="acts"><button class="btn">Edit</button><button class="btn p" onclick="ok()">Approve</button></div></div>`:`<div class="card">${h}<div class="pv">${s.pv()}</div></div>`};
 Object.assign(S,{
 wave:{n:"Hello",c:"#FFD66B",ic:"idle",v:["Hello","Good to see you"],say:"Hey! What are we getting done?"},
-listen:{n:"Listening",c:"#67E8F9",ic:"mic",v:["Listening","Catching that"],say:"Listening.",st:"Voice not connected yet",i:1,btn:"Details",pv:stpv("Voice input not connected yet")},
-wait:{n:"Waiting",c:"#CBD5E1",ic:"idle",v:["Waiting it out","Backing off"],say:"Waiting it out.",st:"Rate limited",i:3,btn:"Details",pv:stpv("Waiting on a provider rate limit")},
-write:{n:"Writing",c:"#FFA94D",ic:"doc",v:["Writing","Editing"],say:"Writing.",st:"Writing",i:3,btn:"Details",pv:stpv("Writing content")},
-data:{n:"Analysis",c:"#2DD4BF",ic:"chart",v:["Crunching numbers","Analyzing"],say:"Analyzing data.",st:"Analyzing",i:2,btn:"Details",pv:stpv("Analyzing data")},
-message:{n:"Messages",c:"#7C9CFF",ic:"chat",v:["Chatting","Replying"],say:"Messaging.",st:"Messaging not connected yet",i:3,btn:"Details",pv:stpv("Messaging connector not connected yet")},
-calendar:{n:"Calendar",c:"#A3E635",ic:"cal",v:["Scheduling","Checking dates"],say:"Checking the schedule.",st:"Calendar not connected yet",i:3,btn:"Details",pv:stpv("Calendar connector not connected yet")},
-shop:{n:"Shopping",c:"#E879F9",ic:"bag",v:["Shopping","Browsing items"],say:"Shopping.",st:"Shopping not connected yet",i:2,btn:"Details",pv:stpv("Shopping not connected yet")},
-create:{n:"Creating",c:"#FF8FA3",ic:"idea",v:["Making something","Creating"],say:"Creating something.",st:"Creating",i:2,btn:"Details",pv:stpv("Creating content")},
-memory:{n:"Memory",c:"#FFD66B",ic:"idea",v:["Remembering","Filing away"],say:"Remembering that.",st:"Saving to memory",i:4,btn:"Details",pv:stpv("Saving a memory")},
-delegate:{n:"Sub-agents",c:"#A78BFA",ic:"tools",v:["Delegating","Spawning helpers"],say:"Delegating work.",st:"Delegating",i:2,btn:"Details",pv:stpv("Delegating to helpers")}});
+listen:{n:"Listening",c:"#67E8F9",ic:"mic",v:["Listening","Catching that"],say:"Listening.",st:"Voice not connected yet",i:1,pv:stpv("Voice input not connected yet")},
+wait:{n:"Waiting",c:"#CBD5E1",ic:"idle",v:["Waiting it out","Backing off"],say:"Waiting it out.",st:"Rate limited",i:3,pv:stpv("Waiting on a provider rate limit")},
+write:{n:"Writing",c:"#FFA94D",ic:"doc",v:["Writing","Editing"],say:"Writing.",st:"Writing",i:3,pv:stpv("Writing content")},
+data:{n:"Analysis",c:"#2DD4BF",ic:"chart",v:["Crunching numbers","Analyzing"],say:"Analyzing data.",st:"Analyzing",i:2,pv:stpv("Analyzing data")},
+message:{n:"Messages",c:"#7C9CFF",ic:"chat",v:["Chatting","Replying"],say:"Messaging.",st:"Messaging not connected yet",i:3,pv:stpv("Messaging connector not connected yet")},
+calendar:{n:"Calendar",c:"#A3E635",ic:"cal",v:["Scheduling","Checking dates"],say:"Checking the schedule.",st:"Calendar not connected yet",i:3,pv:stpv("Calendar connector not connected yet")},
+shop:{n:"Shopping",c:"#E879F9",ic:"bag",v:["Shopping","Browsing items"],say:"Shopping.",st:"Shopping not connected yet",i:2,pv:stpv("Shopping not connected yet")},
+create:{n:"Creating",c:"#FF8FA3",ic:"idea",v:["Making something","Creating"],say:"Creating something.",st:"Creating",i:2,pv:stpv("Creating content")},
+memory:{n:"Memory",c:"#FFD66B",ic:"idea",v:["Remembering","Filing away"],say:"Remembering that.",st:"Saving to memory",i:4,pv:stpv("Saving a memory")},
+delegate:{n:"Sub-agents",c:"#A78BFA",ic:"tools",v:["Delegating","Spawning helpers"],say:"Delegating work.",st:"Delegating",i:2,pv:stpv("Delegating to helpers")}});
 
 
 const $=i=>document.getElementById(i),D=document.documentElement;
-let cur="idle",tab="chat",th=0,t0=Date.now(),vi=0,auto=0,LOG=[],MXE,pkt,NF=99,busy=false;
+let cur="idle",tab="chat",th=0,t0=Date.now(),vi=0,LOG=[],MXE,pkt,NF=99,busy=false;
 Object.assign(I,{menu:"M4 7h16M4 12h10M4 17h16",plus:"M12 5v14M5 12h14",send:"M12 19V5M6 11l6-6 6 6",sun:"M12 8a4 4 0 100 8 4 4 0 000-8zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"});
 const TH=[["Main chat","idle",""]];
 const TABS=[["chat","chat","Chat"],["tasks","task","Tasks"],["docs","doc","Docs"],["ideas","idea","Ideas"],["tools","tools","Tools"]];
-const STEPS=["Understand the ask","Make a plan","Do the work","Check and confirm"],T=k=>S[k].c,MK={files:"read"};
+const T=k=>S[k].c,MK={files:"read"};
 let TASKS=[];
 const awayState=t=>/mail|email/i.test(t)?"mail":/search|web|look/i.test(t)?"search":/code|build|script/i.test(t)?"code":/log|date|file/i.test(t)?"files":"memory";
 const LG=[];
 function pose(k){MXE.classList.remove("chg");void MXE.getBoundingClientRect();MXE.classList.add("chg");const j=MK[k]||k,q=PS[j],[la,ra,w,wd,ex,ey,by,ba,bo]=q.p,sp=(a,b)=>MXE.style.setProperty(a,b);MXE.dataset.s=j;MXE.dataset.e=q.e;MXE.dataset.m=q.m;
 sp("--la",la+"deg");sp("--ra",ra+"deg");sp("--w",w+"deg");sp("--wd",wd+"s");sp("--ex",ex+"px");sp("--ey",ey+"px");sp("--hx",(ex*.3)+"px");sp("--hy",(ey*.25)+"px");sp("--by",by+"px");sp("--ba",ba+"deg");sp("--bo",bo);sp("--bk",q.b[0]);sp("--bd",q.b[1]+"s");sp("--sk",q.b[2]?"shd":"none");sp("--ek",q.k?q.k[0]:"none");sp("--ekd",q.k?q.k[1]+"s":"3s");
-MXE.querySelectorAll(".pp").forEach(p=>p.classList.toggle("on",p.classList.contains("pp-"+j)))}
-const route=t=>{t=t.toLowerCase();return /mail|email/.test(t)?"mail":/search|find|look up/.test(t)?"search":/book|ticket|movie|website/.test(t)?"browse":/code|build|script|app/.test(t)?"code":/pay|checkout/.test(t)?"pay":/shop|cart|order|buy/.test(t)?"shop":/remind|calendar|schedule|meet/.test(t)?"calendar":/remember|save/.test(t)?"memory":/chart|data|sheet|spend/.test(t)?"data":/draw|image|design|invite/.test(t)?"create":/slack|message|text/.test(t)?"message":/file|doc|read|pdf/.test(t)?"files":/^(hi|hello|hey)/.test(t)?"wave":"think"};
-const insp=()=>{const s=S[cur],n=s.i||0;return`<h3>Live activity</h3>${card(cur)||`<div class="row" style="--t:${s.c}"><div class="ico">${ic(s.ic)}</div><div class="grow"><b>${s.n}</b><small>${s.say}</small></div></div>`}<h3>Steps</h3>${STEPS.map((x,j)=>`<div class="stp ${j+1<n?"done":j+1==n?"on":""}" style="--t:${s.c}">${j+1==n?s.st:x}</div>`).join("")}<h3>While you were away</h3>${LG.length?`<div class="tl">${LG.map(a=>`<div style="--t:${T(a[0])}">${a[2]}<small>${a[1]} am</small></div>`).join("")}</div>`:`<p style="color:var(--mu);font-size:13px">Nothing yet. Blip will log what happens while you are away.</p>`}`};
+MXE.querySelectorAll(".pp").forEach(p=>p.classList.toggle("on",p.classList.contains("pr-"+j)))}
+const insp=()=>{const s=S[cur];return`<h3>Live activity</h3>${card(cur)||`<div class="row" style="--t:${s.c}"><div class="ico">${ic(s.ic)}</div><div class="grow"><b>${s.n}</b><small>${s.say}</small></div></div>`}<h3>While you were away</h3>${LG.length?`<div class="tl">${LG.map(a=>`<div style="--t:${T(a[0])}">${a[2]}<small>${a[1]} am</small></div>`).join("")}</div>`:`<p style="color:var(--mu);font-size:13px">Nothing yet. Blip will log what happens while you are away.</p>`}`};
 const scrollEnd=()=>{const e=$("scr");setTimeout(()=>e.scrollTo({top:e.scrollHeight,behavior:"smooth"}),80)};
 const toolCard=t=>`<div class="tcard ${t.ok?"ok":"bad"}"><div class="tch">${t.ok?"&#10003;":"&#10007;"} ${String(t.name||"tool").replace(/</g,"&lt;")}</div>${t.cmd?`<div class="cmd">$ ${String(t.cmd).replace(/</g,"&lt;")}</div>`:""}${t.output?`<pre>${String(t.output).replace(/</g,"&lt;")}</pre>`:""}</div>`;
 const SC={chat:()=>{if(!LOG.length)return`<div class="thr"><div class="dv">Today</div><p style="color:var(--mu);text-align:center;padding:48px 0;font-size:14.5px">Say hi to Blip, or ask it to do something.</p></div>`;return`<div class="thr"><div class="dv">Today</div>${LOG.map(([r,t],i)=>r==="t"?toolCard(t):`<div class="m ${r}${i>=NF?" nw":""}">${t}</div>`).join("")}<div class="m a" id="amsg"></div><div class="inl" id="cardw"></div></div>`},
@@ -341,31 +340,29 @@ tools:()=>{const L=[["Terminal","code","E2B sandboxed shell: commands, Python, i
 return`<h1 class="h">Tools</h1><p class="sub">What I can touch</p>`+L.map(t=>`<div class="row" style="--t:${T(t[1])}"><div class="ico">${ic(S[t[1]].ic)}</div><div class="grow"><b>${t[0]}</b><small>${t[2]}</small></div><label class="tgl"><input type="checkbox" ${t[3]?"checked":""} ${t[4]?"disabled":""} aria-label="${t[0]}"><i></i></label></div>`).join("")}};
 const row=i=>{const t=TH[i],s=S[t[1]];return`<button class="th2" style="--c:${T(t[1])}" ${i==th&&tab=="chat"?'aria-current="true"':""} onclick="pick(${i})"><i></i><span>${t[0]}<small>${s.ask?"Waiting for you":s.st||"Idle"}</small></span>${s.ask?"<em>Needs you</em>":""}</button>`};
 const lst=q=>{q=(q||"").toLowerCase();const ids=TH.map((_,i)=>i).filter(i=>TH[i][0].toLowerCase().includes(q)),sd=ids.filter(i=>i>0);return ids.filter(i=>i==0).map(row).join("")+(sd.length?`<div class="dl">Side chats</div>`+sd.map(row).join(""):"")};
-const sideHTML=()=>`<div class="sh"><b class="logo">Blip</b></div><div id="tl2">${lst()}</div><details class="dem"><summary>Preview every state</summary><div class="chips">${Object.keys(S).map(k=>`<button class="chip" data-k="${k}" style="--c:${T(k)}" aria-pressed="${k==cur&&tab=="chat"}" onclick="st('${k}')"><i></i>${S[k].n}</button>`).join("")}</div><button class="sm" data-keep onclick="auto=!auto;this.textContent='Auto-cycle: '+(auto?'on':'off')">Auto-cycle: ${auto?"on":"off"}</button></details><div class="sf"><button class="ib" aria-label="Switch light or dark" onclick="theme()">${ic("sun")}</button><label class="sp">${ic("search")}<input placeholder="Search" aria-label="Search chats" oninput="$('tl2').innerHTML=lst(this.value)"></label><button class="ib" aria-label="New chat" onclick="newChat()">${ic("plus")}</button></div>`;
+const sideHTML=()=>`<div class="sh"><b class="logo">Blip</b></div><div id="tl2">${lst()}</div><details class="dem"><summary>Preview every state</summary><div class="chips">${Object.keys(S).map(k=>`<button class="chip" data-k="${k}" style="--c:${T(k)}" aria-pressed="${k==cur&&tab=="chat"}" onclick="st('${k}')"><i></i>${S[k].n}</button>`).join("")}</div></details><div class="sf"><button class="ib" aria-label="Switch light or dark" onclick="theme()">${ic("sun")}</button><label class="sp">${ic("search")}<input placeholder="Search" aria-label="Search chats" oninput="$('tl2').innerHTML=lst(this.value)"></label><button class="ib" aria-label="New chat" onclick="newChat()">${ic("plus")}</button></div>`;
 function upd(){const s=S[cur];D.style.setProperty("--t",s.c);t0=Date.now();vi=0;$("pi").innerHTML=ic(s.ic);$("ring").style.setProperty("--pp",s.i?(s.i-.5)*25+"%":"0%");pose(cur);
 document.querySelectorAll(".chip").forEach(c=>c.setAttribute("aria-pressed",tab=="chat"&&c.dataset.k==cur));$("insp").innerHTML=insp();
-if(tab=="chat"){$("amsg").innerHTML=busy?'<span class="tpk"><i></i><i></i><i></i></span>':"";$("cardw").innerHTML=card(cur);scrollEnd()}tick()}
+if(tab=="chat"){const am=$("amsg"),cw=$("cardw");if(am)am.innerHTML=busy?'<span class="tpk"><i></i><i></i><i></i></span>':"";if(cw)cw.innerHTML=card(cur);scrollEnd()}tick()}
 function render(){$("scr").innerHTML=tab=="chat"?SC.chat():`<div class="pgw">${SC[tab]()}</div>`;
 const nav=TABS.map(t=>`<button role="tab" aria-selected="${t[0]==tab}" onclick="go('${t[0]}')">${ic(t[1])}<span>${t[2]}</span></button>`).join("");$("dock").innerHTML=nav;$("rail").innerHTML=nav;
 $("cmp").style.display=tab=="chat"?"flex":"none";$("side").innerHTML=sideHTML();upd();NF=99}
 const go=t=>{tab=t;side(0);render();if(t=="tasks")loadTasks()},side=o=>$("app").classList.toggle("dr",!!o);
-function pick(i){th=i;cur="idle";LOG=[];auto=0;tab="chat";side(0);render()}
+function pick(i){th=i;cur="idle";LOG=[];tab="chat";side(0);render()}
 function newChat(){TH.push(["New chat","idle",""]);pick(TH.length-1)}
-function st(k){auto=0;cur=k;side(0);if(tab!="chat"){tab="chat";render()}else upd()}
+function st(k){cur=k;side(0);if(tab!="chat"){tab="chat";render()}else upd()}
 function peek(){const w=$("who"),o=!w.classList.contains("big");w.classList.toggle("big",o);$("pk").classList.toggle("on",o);clearTimeout(pkt);if(o)pkt=setTimeout(peek,5200)}
-function send(){const v=$("inp").value.trim();if(!v)return;if(!localStorage.getItem("blip_key")){const k=prompt("Agent API key (stored in this browser only):");if(!k)return;localStorage.setItem("blip_key",k.trim())}$("inp").value="";$("cmp").classList.remove("has");auto=0;LOG.push(["u",v]);NF=LOG.length-1;if(tab!="chat")tab="chat";cur="think";busy=true;t0=Date.now();render();fedChat(v)}
+function send(){const v=$("inp").value.trim();if(!v)return;if(!localStorage.getItem("blip_key")){const k=prompt("Agent API key (stored in this browser only):");if(!k)return;localStorage.setItem("blip_key",k.trim())}$("inp").value="";$("cmp").classList.remove("has");LOG.push(["u",v]);NF=LOG.length-1;if(tab!="chat")tab="chat";cur="think";busy=true;t0=Date.now();render();fedChat(v)}
 async function fedChat(v){const AGENT="https://agent-federation.agent-federation.workers.dev";try{const r=await fetch(AGENT+"/api/message",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+(localStorage.getItem("blip_key")||"").trim()},body:JSON.stringify({content:v,tier:"primary"})});const j=await r.json();if(j.error&&!j.reply){LOG.push(["a","[error] "+j.error]);cur="error";busy=false;upd();return}const reply=j.reply||"";LOG.push(["a",reply]);NF=LOG.length-1;let ran=0;if(Array.isArray(j.tools)){for(const t of j.tools){LOG.push(["t",t]);if(t.name==="schedule_task")ran++}}if(ran){const rc=$("runCount");if(rc&&rc.firstChild)rc.firstChild.nodeValue=String((parseInt(rc.firstChild.nodeValue)||0)+ran)}cur=(j.state&&S[j.state])?j.state:(j.error?"error":"success");t0=Date.now();busy=false;upd();loadTasks()}catch(e){LOG.push(["a","[network] "+e]);cur="error";busy=false;upd()}}
 async function loadTasks(){try{const r=await fetch("https://agent-federation.agent-federation.workers.dev/api/tasks",{headers:{authorization:"Bearer "+(localStorage.getItem("blip_key")||"").trim()}});const j=await r.json();if(!j.ok)return;TASKS=j.tasks||[];const live=TASKS.filter(t=>t.status!=="done");const rc=$("runCount");if(rc&&rc.firstChild)rc.firstChild.nodeValue=String(live.length);LG.length=0;TASKS.filter(t=>t.status==="done").slice(-4).reverse().forEach(t=>LG.push([awayState(t.title),t.due_at?new Date(t.due_at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):"",String(t.title).replace(/</g,"&lt;")]));if(tab=="chat"&&$("insp"))$("insp").innerHTML=insp()}catch(e){}}
-function ok(){auto=0;cur="success";upd();setTimeout(()=>{if(cur=="success"){cur="idle";upd()}},4200)}
+function ok(){cur="success";upd();setTimeout(()=>{if(cur=="success"){cur="idle";upd()}},4200)}
 let lv="";function tick(){const s=S[cur],e=Math.floor((Date.now()-t0)/1000),v=s.v[vi%s.v.length]+(s.i?"…":"");if(v!=lv){lv=v;$("verb").innerHTML=`<span class="vb">${v}</span>`}$("clk").textContent=s.i?Math.floor(e/60)+":"+String(e%60).padStart(2,"0"):""}
 function theme(){D.dataset.theme=D.dataset.theme=="dark"?"light":"dark"}
 document.querySelectorAll("[data-i]").forEach(b=>b.innerHTML=ic(b.dataset.i));
 const dd=document.createElement("div");dd.innerHTML=MXSVG;MXE=dd.firstElementChild;$("avc").appendChild(MXE);
 $("inp").addEventListener("keydown",e=>{if(e.key=="Enter")send()});$("inp").addEventListener("input",e=>$("cmp").classList.toggle("has",!!e.target.value.trim()));
-addEventListener("pointerdown",e=>{if(!e.target.closest("[data-keep]"))auto=0});
 let pq=0;addEventListener("pointermove",e=>{if(pq)return;pq=requestAnimationFrame(()=>{pq=0;const r=MXE.getBoundingClientRect(),c=(v,a,b)=>Math.max(-1,Math.min(1,(v-a)/b*2));MXE.style.setProperty("--px",c(e.clientX,r.left+r.width/2,innerWidth)*2.6+"px");MXE.style.setProperty("--py",c(e.clientY,r.top+r.height/2,innerHeight)*2.2+"px")})});
 setInterval(tick,1000);setInterval(()=>{vi++;tick()},2200);
-const ks=Object.keys(S);let n=1;/* auto-cycle removed: states come only from real replies */
 setInterval(()=>{if(cur!="idle"||tab!="chat")return;const x=["wink","twitch","hip"][Math.random()*3|0];MXE.classList.add(x);setTimeout(()=>MXE.classList.remove(x),1000)},5200);
 LOG=[];render();loadTasks();
 </script></body></html>

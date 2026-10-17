@@ -748,7 +748,7 @@ export class FederationAgent extends Agent<Env> {
     } else if (/email|mail|inbox/.test(lower)) {
       state = "mail";
     } else if (/file|read|document/.test(lower)) {
-      state = "read";
+      state = "files";
     } else if (/done|finished|complete|success/.test(lower)) {
       state = "success";
     }
