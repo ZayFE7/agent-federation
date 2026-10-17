@@ -33,11 +33,12 @@ export interface TaskRow {
   due_at: number | null;
   payload: string | null;
   created_at: number;
+  recurrence: string | null;
 }
 
 export function listTasks(sql: SqlHandle, limit = 20): TaskRow[] {
   return sql.exec<TaskRow>(
-    "SELECT id, title, status, due_at, payload, created_at FROM tasks ORDER BY created_at DESC LIMIT ?",
+    "SELECT id, title, status, due_at, payload, created_at, recurrence FROM tasks ORDER BY created_at DESC LIMIT ?",
     limit
   ).results;
 }
@@ -65,8 +66,17 @@ export function ensureSchema(sql: SqlHandle): void {
     status TEXT,
     due_at INTEGER,
     payload TEXT,
-    created_at INTEGER
+    created_at INTEGER,
+    recurrence TEXT
   )`);
+  // Existing DO SQLite databases already have `tasks` without `recurrence`, so
+  // CREATE TABLE IF NOT EXISTS will not add the column. Migrate idempotently and
+  // swallow the duplicate-column error on databases that already have it.
+  try {
+    sql.exec(`ALTER TABLE tasks ADD COLUMN recurrence TEXT`);
+  } catch {
+    // duplicate column name: recurrence. Already migrated; nothing to do.
+  }
 }
 
 function escapeLike(value: string): string {
@@ -138,20 +148,33 @@ export function enqueueTask(
   sql: SqlHandle,
   title: string,
   dueAt: number,
-  payload = ""
+  payload = "",
+  recurrence: string | null = null
 ): void {
   sql.exec(
-    "INSERT INTO tasks (title, status, due_at, payload, created_at) VALUES (?, 'pending', ?, ?, ?)",
+    "INSERT INTO tasks (title, status, due_at, payload, created_at, recurrence) VALUES (?, 'pending', ?, ?, ?, ?)",
     title,
     dueAt,
     payload,
-    Date.now()
+    Date.now(),
+    recurrence
   );
 }
 
 export function dueTasks(sql: SqlHandle, now: number): TaskRow[] {
   return sql.exec<TaskRow>(
-    "SELECT id, title, status, due_at, payload, created_at FROM tasks WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC",
+    "SELECT id, title, status, due_at, payload, created_at, recurrence FROM tasks WHERE status = 'pending' AND due_at <= ? ORDER BY due_at ASC",
     now
   ).results;
+}
+
+/**
+ * Next UTC timestamp at hh:mm strictly after fromMs. Rolls to tomorrow when
+ * today's hh:mm has already passed. Mirrors the schedule_task due-time logic.
+ */
+export function nextDailyDue(hh: number, mm: number, fromMs: number): number {
+  const next = new Date(fromMs);
+  next.setUTCHours(hh, mm, 0, 0);
+  if (next.getTime() <= fromMs) next.setUTCDate(next.getUTCDate() + 1);
+  return next.getTime();
 }

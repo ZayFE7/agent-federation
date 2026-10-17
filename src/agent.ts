@@ -15,6 +15,7 @@ import {
   ensureSchema,
   listTasks,
   logMessage,
+  nextDailyDue,
   recentMessages,
   recall,
   remember,
@@ -223,7 +224,7 @@ export class FederationAgent extends Agent<Env> {
     connection.send(JSON.stringify({ type: "chat", ...reply }));
   }
 
-  /** Alarm tick: log due tasks into memory and mark them running, then re-arm. */
+  /** Alarm tick: run due tasks, re-arm recurring ones, then re-schedule. */
   async onScheduledTask(_payload?: unknown): Promise<void> {
     const sql = this.db();
     const now = Date.now();
@@ -239,16 +240,52 @@ export class FederationAgent extends Agent<Env> {
         remember(sql, "task-done", `Task #${task.id} (${task.title}) result: ${result.reply.slice(0, 800)}`, 3);
         logMessage(sql, "assistant", `[scheduled] ${result.reply}`, "cheap");
       } catch (err) {
+        // A failed run must not kill a recurring schedule; record it and re-arm below.
         remember(sql, "error", `Task #${task.id} failed: ${String(err)}`, 3);
       }
-      sql.exec("UPDATE tasks SET status = 'done' WHERE id = ?", task.id);
+      // Re-arm daily jobs in place (reuse the row), or retire one-off jobs.
+      const daily = task.recurrence
+        ? /^daily:(\d{1,2}):(\d{1,2})$/.exec(task.recurrence)
+        : null;
+      if (daily) {
+        const nextDue = nextDailyDue(Number(daily[1]), Number(daily[2]), Date.now());
+        sql.exec(
+          "UPDATE tasks SET status = 'pending', due_at = ? WHERE id = ?",
+          nextDue,
+          task.id
+        );
+        remember(
+          sql,
+          "task",
+          `Task #${task.id} (${task.title}) re-armed for ${new Date(nextDue).toISOString()}`,
+          2
+        );
+      } else {
+        sql.exec("UPDATE tasks SET status = 'done' WHERE id = ?", task.id);
+      }
     }
     await this.armTick();
   }
 
   private async armTick(): Promise<void> {
     try {
-      await this.schedule("1 minute", "onScheduledTask");
+      const sql = this.db();
+      // Soonest pending due time (null when nothing is queued). No literal "?" here.
+      const raw = sql
+        .exec<{ m: number | null }>(
+          "SELECT MIN(due_at) AS m FROM tasks WHERE status = 'pending'"
+        )
+        .results[0]?.m;
+      // Default to the 1-minute safety poll so the tick chain never dies.
+      let delayMs = 60_000;
+      if (raw !== null && raw !== undefined) {
+        const soonest = Number(raw);
+        if (Number.isFinite(soonest)) {
+          // Near-exact, clamped to [5s, 60s] so it never storms and never sleeps long.
+          delayMs = Math.min(60_000, Math.max(5_000, soonest - Date.now()));
+        }
+      }
+      await this.schedule(delayMs, "onScheduledTask");
     } catch (err) {
       remember(this.db(), "error", `schedule failed: ${String(err)}`, 2);
     }
@@ -413,21 +450,22 @@ export class FederationAgent extends Agent<Env> {
           if (tc.function.name === "schedule_task") {
             const now = Date.now();
             let dueAt = now + 60_000;
+            let recurrence: string | null = null;
             if (args.daily_at && /^\d{1,2}:\d{2}$/.test(args.daily_at)) {
               const [h, m] = args.daily_at.split(":").map(Number);
-              const next = new Date(now);
-              next.setUTCHours(h, m, 0, 0);
-              if (next.getTime() <= now) next.setUTCDate(next.getUTCDate() + 1);
-              dueAt = next.getTime();
+              dueAt = nextDailyDue(h, m, now);
+              recurrence = `daily:${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
             } else if (typeof args.minutes_from_now === "number") {
               dueAt = now + Math.max(1, args.minutes_from_now) * 60_000;
             }
             const title = (args.title || "scheduled job").slice(0, 120);
             const instructions = (args.instructions || title).slice(0, 2000);
-            enqueueTask(sql, title, dueAt, instructions);
+            enqueueTask(sql, title, dueAt, instructions, recurrence);
             const when = new Date(dueAt).toISOString();
-            out = `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
-            remember(sql, "task", `Scheduled: ${title} at ${when}`, 2);
+            out = recurrence
+              ? `Scheduled "${title}" daily at ${args.daily_at} UTC. Next run ${when}. It will run autonomously with tool access.`
+              : `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
+            remember(sql, "task", `Scheduled: ${title} at ${when}${recurrence ? ` (${recurrence})` : ""}`, 2);
             runCmd = title;
             runOk = true;
           } else if (tc.function.name === "save_workspace") {
