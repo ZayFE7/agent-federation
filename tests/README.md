@@ -1,7 +1,10 @@
 # tests/
 
-Two tests live here: `live-matrix.mjs` (a live smoke matrix against the deployed brain) and
-`guardrails.test.mjs` (an offline unit test for `../src/guardrails.ts`). There is still no
+Four tests live here: `live-matrix.mjs` (a live smoke matrix against the deployed brain),
+`guardrails.test.mjs` (an offline unit test for `../src/guardrails.ts`), `markdown.test.mjs`
+(an offline test of the `md()` renderer shipped in `ui/index.html`), and `memory.test.mjs`
+(an offline test that compiles `src/memory.ts` and drives the real recall + task functions
+against a live `node:sqlite` database). There is still no
 fixture directory, no `npm test` script (`../package.json` defines only `dev`, `deploy`,
 `typecheck`), no vitest/jest/playwright in the dependencies, and no CI at all (no `.github/`,
 no workflow files anywhere in the project).
@@ -72,3 +75,30 @@ i.e. dead code. That was wrong; the code wins.)
   it is not.
 - `guardrails.test.mjs` is the only offline test. `live-matrix.mjs` still needs a live router
   with real provider keys for every assertion.
+
+## Offline UI + memory tests (added)
+
+Both run on plain Node, no framework, exit 0 on pass / 1 on any failure.
+
+### `markdown.test.mjs`
+
+`node tests/markdown.test.mjs`
+
+It does **not** re-implement the renderer. It reads `../ui/index.html`, extracts the shipped
+`esc()` and `md()` function bodies by source anchors, evals them, and asserts the produced
+HTML on 14 cases: fenced code blocks (and that the ```lang fence label is stripped), inline
+code, bold, italic, headings, `<ul>`/`<ol>`, safe `[text](https://…)` links, rejection of
+`javascript:` links, escaping of `<script>`/`<img>`, no formatting inside code spans, and
+multi-paragraph splitting. This is the XSS-safety + correctness gate for chat markdown.
+
+### `memory.test.mjs`
+
+`node tests/memory.test.mjs`
+
+Compiles `../src/memory.ts` to JS with esbuild, imports it, and drives the real exported
+functions (`remember`, `recall`, `enqueueTask`, `dueTasks`, one-off lifecycle) against an
+in-memory `node:sqlite` `DatabaseSync`. It proves text recall ordering (importance then
+recency, empty query returns top memories) and that a served one-off task is deleted while a
+daily recurrence is re-armed, not removed. esbuild is found via `BLIP_DEPLOY_NM` or the
+sibling `../project/agent-federation/node_modules` layout; set `BLIP_DEPLOY_NM` if your trees
+are not adjacent.

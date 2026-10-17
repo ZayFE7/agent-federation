@@ -37,6 +37,16 @@ async function poolGet(env: Env, sessionId: string): Promise<Sandbox> {
     }
   }
   const sbx = await createSandbox(env.E2B_API_KEY);
+  // E2B "base" ships python3 but no `python` alias; the model reaches for
+  // `python` and gets exit 127. Create the alias once per fresh boot.
+  try {
+    await sbx.commands.run(
+      'ln -sf "$(command -v python3)" /usr/local/bin/python 2>/dev/null || true',
+      { timeoutMs: 15_000, onError: () => {} }
+    );
+  } catch {
+    /* non-fatal: alias is best-effort */
+  }
   // Persistent workspaces: restore last snapshot into /workspace on fresh boots.
   try {
     const tar = await env.SESSIONS.get(`ws:tar:${sessionId}`);
@@ -115,14 +125,18 @@ export default {
       } catch (e) {
         return json(502, { error: "boot: " + String(e) });
       }
+      const keepWarm = () =>
+        env.SESSIONS.put(sid, JSON.stringify({ id: sbx.sandboxId }), {
+          expirationTtl: POOL_TTL,
+        });
+      // onError swallows the throw on non-zero exit so we can return the real
+      // stdout/stderr/exitCode. A command that fails is data, not a worker error.
       try {
-        const result = await sbx.commands.run(body.cmd, { timeoutMs: 60_000 });
-        // keep lease warm
-        await env.SESSIONS.put(
-          sid,
-          JSON.stringify({ id: sbx.sandboxId }),
-          { expirationTtl: POOL_TTL }
-        );
+        const result = await sbx.commands.run(body.cmd, {
+          timeoutMs: 60_000,
+          onError: () => {},
+        });
+        await keepWarm();
         return json(200, {
           stdout: result.stdout ?? "",
           stderr: result.stderr ?? "",
@@ -131,7 +145,26 @@ export default {
           sandboxId: sbx.sandboxId,
         });
       } catch (e) {
-        return json(500, { error: String(e), sessionId: sid, sandboxId: sbx.sandboxId });
+        const err = e as { exitCode?: number; stdout?: string; stderr?: string };
+        if (
+          typeof err.exitCode === "number" ||
+          err.stdout !== undefined ||
+          err.stderr !== undefined
+        ) {
+          await keepWarm();
+          return json(200, {
+            stdout: err.stdout ?? "",
+            stderr: err.stderr ?? "",
+            exitCode: err.exitCode ?? 1,
+            sessionId: sid,
+            sandboxId: sbx.sandboxId,
+          });
+        }
+        return json(502, {
+          error: "run: " + String(e),
+          sessionId: sid,
+          sandboxId: sbx.sandboxId,
+        });
       }
     }
 

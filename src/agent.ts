@@ -358,7 +358,9 @@ export class FederationAgent extends Agent<Env> {
         // A failed run must not kill a recurring schedule; record it and re-arm below.
         remember(sql, "error", `Task #${task.id} failed: ${String(err)}`, 3);
       }
-      // Re-arm daily jobs in place (reuse the row), or retire one-off jobs.
+      // Re-arm daily jobs in place (reuse the row). One-off jobs are retired the
+      // moment they fire: the row is removed, and the result already lives in the
+      // task-done memory and the [scheduled] assistant message logged above.
       const daily = task.recurrence
         ? /^daily:(\d{1,2}):(\d{1,2})$/.exec(task.recurrence)
         : null;
@@ -376,7 +378,8 @@ export class FederationAgent extends Agent<Env> {
           2
         );
       } else {
-        sql.exec("UPDATE tasks SET status = 'done' WHERE id = ?", task.id);
+        sql.exec("DELETE FROM tasks WHERE id = ?", task.id);
+        remember(sql, "task", `One-off #${task.id} (${task.title}) served; removed from board`, 1);
       }
     }
     await this.armTick();
@@ -482,9 +485,17 @@ export class FederationAgent extends Agent<Env> {
         error?: string;
       };
       const ok = sres.ok && sd.exitCode === 0;
-      const out = sres.ok
-        ? `exit ${sd.exitCode}\nstdout:\n${clip(sd.stdout || "", 4000)}\nstderr:\n${clip(sd.stderr || "", 1500)}`
-        : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
+      let out: string;
+      if (sres.ok) {
+        const head = ok
+          ? "exit 0 (success)"
+          : `command FAILED with exit ${sd.exitCode}; read stderr before retrying`;
+        out = `${head}\nstdout:\n${clip(sd.stdout || "", 4000)}\nstderr:\n${clip(sd.stderr || "", 1500)}`;
+      } else {
+        out = `sandbox infrastructure error (${sres.status}): ${(
+          sd.error || JSON.stringify(sd)
+        ).slice(0, 600)}`;
+      }
       return { out, ok };
     } catch (e) {
       return { out: "sandbox error: " + String(e), ok: false };
@@ -586,11 +597,15 @@ export class FederationAgent extends Agent<Env> {
         function: {
           name: "exec",
           description:
-            "Run a shell command in the agent's Linux sandbox (python3, common CLI tools, internet). Use for files, code, downloads, data work, anything that needs a computer.",
+            "Run one shell command in the agent's persistent Linux sandbox: files, Python, downloads, data work, installs, anything that needs a real machine. Internet works. Your home working directory is /workspace (save_workspace snapshots it so files survive restarts). Always gets back exit code, stdout, and stderr: on a non-zero exit read stderr before retrying, and never report success for a command that failed. Prefer python3 for Python; write multi-line scripts to a file and run the file rather than inlining them.",
           parameters: {
             type: "object",
             properties: {
-              cmd: { type: "string", description: "The shell command to execute" },
+              cmd: {
+                type: "string",
+                description:
+                  "A single shell command line, e.g. 'python3 solve.py' or 'ls -la /workspace'. Times out after 60s; background long-running work (e.g. 'sleep 120 &').",
+              },
             },
             required: ["cmd"],
           },

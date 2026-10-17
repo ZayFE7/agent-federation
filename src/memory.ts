@@ -77,6 +77,11 @@ export function ensureSchema(sql: SqlHandle): void {
   } catch {
     // duplicate column name: recurrence. Already migrated; nothing to do.
   }
+  // One-off jobs are now removed the moment they fire, but rows completed under
+  // the old "mark done" behavior would linger forever (the away timeline only
+  // surfaces the newest few, so old ones never age out). Prune that backlog: a
+  // served one-off is status='done' with no recurrence. Runs once per isolate.
+  sql.exec(`DELETE FROM tasks WHERE status = 'done' AND recurrence IS NULL`);
 }
 
 function escapeLike(value: string): string {
