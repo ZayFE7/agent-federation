@@ -1,93 +1,90 @@
-# agent-federation
+# agent-federation (BLIP)
 
-A personal AI agent deployed as a federation of free, no-card services.
+BLIP is a personal AI agent built entirely on free, no-card tiers: a Cloudflare Worker brain
+backed by one Durable Object with SQLite memory across sessions, driven from a single-file web
+console. Chat fans out through a tiered model router (`primary` / `cheap`, `jev` reserved), the
+edge twin of the user's old local 9router API-key layer. The model gets three tools, sandbox
+`exec`, `schedule_task`, `save_workspace`, and jobs fire from a self-rearming 1 minute alarm.
 
-- Cloudflare Workers Free + Durable Objects + Agents SDK is the always-on agent brain (persistent memory in DO SQLite, alarm-based autonomous ticks).
-- Pipedream free Python workflow is the OpenAI-compatible model router in front of the user's cloud model providers.
-- Sandbox execution comes later behind an interface.
+Runtime: Worker `src/index.ts` + DO `FederationAgent` (binding `FEDERATION_AGENT`, sqlite
+migration, `wrangler.jsonc:15-28`) + Assets from `./ui` as `ASSETS`, `run_worker_first: true`
+(`:6-10`) + service bindings `ROUTER` -> `zay-router`, `SANDBOX` -> `zay-sandbox` (`:11-14`) +
+cron `*/10 * * * *` (`:31-33`), whose handler only pings `RENDER_URL/health` (`src/index.ts:253-263`).
 
-## Architecture
+## File map
 
-```
-  +--------+        +--------------------------------------+
-  |  UI /  |  HTTP  |  Worker (src/index.ts)              |
-  | client +-------->  GET  /health                        |
-  |        |  WS    |  POST /api/message                  |
-  +--------+        |  WS   /   {type:"chat",...}         |
-                    +------------------+-------------------+
-                                       |  stub / idFromName
-                                       v
-                    +--------------------------------------+
-                    |  FederationAgent (DO, SQLite memory) |
-                    |  this.sql.exec(...) storage          |
-                    |  schedule("1 minute") alarms         |
-                    +------------------+-------------------+
-                                       |  POST + X-Tier header
-                                       v
-                    +--------------------------------------+
-                    |  Pipedream router (Python, free)     |
-                    |  OpenAI chat-completions passthrough |
-                    +------------------+-------------------+
-                                       |
-                    +----------+-------+----------+
-                    v          v                  v
-               primary     cheap tier        jev tier
-               provider    provider          provider
-```
+- `src/index.ts` (264 lines): the HTTP surface listed below.
+- `src/agent.ts` (521): the DO. Persona `You are Blip` (`:34-35`), hard rule (`:56-57`), prompt
+  builder (`:73-90`), router POST with `X-Tier` and 25 s abort (`:365-375`), tier to model
+  (`:257-262`), tool loop capped at 4 rounds (`:362`), deterministic mascot state (`:496-518`).
+- `src/memory.ts` (157) and `src/vault.ts` (104): the `memories` / `messages` / `tasks` tables
+  (`memory.ts:46-79`) and the chunked blob vault (`MAX_CHUNK_BYTES = 1_400_000`, `vault.ts:8`).
+- `src/types.ts` (71): tiers (`:3`), `AgentReply` (`:28-36`), `Env` (`:47-71`), defaults (`:44-45`).
+- `ui/index.html` (371): console titled `Blip app v7`; mascot SVG and state table `S` (`:288-300`),
+  tabs chat/tasks/docs/ideas/tools (`:321`). Plain `fetch`, no WebSocket, no markdown renderer,
+  reply text injected raw, demo placeholder strings still present (`:322`, `:330`, `:338`).
+- `pipedream/router.py` + README: abandoned predecessor router, superseded by `deploy/router-worker`.
+- `tests/live-matrix.mjs`: the only test, see `tests/README.md`.
 
-## Quickstart
+## HTTP surface, as read from `src/index.ts`
+
+| Route | Line | Auth | Returns |
+|---|---|---|---|
+| WS upgrade passthrough | 33 | none | forwarded to the DO stub |
+| `GET /health` | 38 | none | `{ok:true}` |
+| `POST /api/message` | 42 | `AGENT_API_KEY` | full `AgentReply`: `reply`, `state`, `verb`, `tools[]` |
+| `GET /api/tasks` | 62 | `AGENT_API_KEY` | `{ok:true, tasks:[...]}` |
+| `POST /api/decide` | 71 | `AGENT_API_KEY` | LLM mascot decider, unused by the UI; `context:"__debug_url"` probe `:85-95` |
+| `POST /internal/vault/push` | 156 | `STATE_KEY` | one base64 chunk, `{ok, idx, total}` |
+| `GET /internal/vault/chunk` \| `pull` \| `health` | 179, 201, 221 | `STATE_KEY` | one chunk plus `x-vault-total` \| whole blob octet-stream \| metadata |
+| `DELETE /internal/vault` | 233 | `STATE_KEY` | `{ok:true}` |
+| anything else | 246 | none | served from `ASSETS` (the console) |
+
+Vault auth also requires `STATE_KEY.length > 0` (`:152-154`), so all five vault routes 401
+until that secret exists.
+
+## Env (names only, never values)
+
+`ROUTER_URL`, `MODEL_PRIMARY`, `MODEL_CHEAP` are plain vars (`wrangler.jsonc:37-41`);
+`ROUTER_KEY` and `AGENT_API_KEY` are secrets documented at `:42-44`; `STATE_KEY`
+(`src/types.ts:58`) and `SBOX_TOKEN` (`:68`) are secrets **no wrangler config mentions**;
+`RENDER_URL` (`:60`) is optional and absent from `wrangler.jsonc`; bindings are `ASSETS`,
+`ROUTER`, `SANDBOX`, `FEDERATION_AGENT`.
+
+`.dev.vars` is byte-identical to `.dev.vars.example` and contains **no working credentials**:
+`ROUTER_URL` and `ROUTER_KEY` empty, `AGENT_API_KEY=generate-me`, models still at the
+`meta/muse-spark-1.3*` fallbacks, `STATE_KEY` and `SBOX_TOKEN` missing. Anyone who reads it
+expecting live credentials will waste time.
+
+## Deployables and local dev
+
+Order: `deploy/router-worker`, then `deploy/sandbox-worker` (the brain binds to both by name,
+`wrangler.jsonc:11-14`), then this brain, then `deploy/telegram-bridge` if wanted. Each satellite
+carries its own `wrangler.jsonc`, KV ids and secrets.
 
 ```sh
 npm install
-cp .dev.vars.example .dev.vars
-# fill in .dev.vars: ROUTER_URL, ROUTER_KEY, AGENT_API_KEY
-npm run dev
+cp .dev.vars.example .dev.vars   # pointless as-pulled: identical file, no secrets
+npm run dev                      # wrangler dev on :8787
+npm run typecheck                # tsc --noEmit, src only
 ```
 
-Deploy:
+## Structural gotchas
 
-```sh
-npx wrangler login
-# set ROUTER_URL in the vars block of wrangler.jsonc (MODEL_* defaults are fine)
-wrangler secret put ROUTER_KEY
-wrangler secret put AGENT_API_KEY
-npm run deploy
-```
+1. `wrangler.jsonc` sets no `compatibility_flags`, but the Agents SDK requires
+   `["nodejs_compat"]` (`node_modules/agents/docs/configuration.md:56-62`), used at `src/agent.ts:1`.
+2. Cross-worker `services` bindings do not resolve in a standalone `wrangler dev`, so sandbox
+   tools answer `sandbox not configured` (`src/agent.ts:435,455`) and chat uses the public
+   `ROUTER_URL`. Also `tsconfig.json:14` is `include: ["src"]` while `deploy/sandbox-worker` and
+   `deploy/telegram-bridge` have no `tsconfig.json`, so `deploy/**` is never typechecked.
 
-Typecheck:
+## Obsolete content in the previous version of this file
 
-```sh
-npm run typecheck
-```
+An older copy (still inside `BLIP-export.zip`, dated 2026-10-11) must not be trusted: it named
+Pipedream as *the* router, claimed `POST /api/message` returns `{reply}` only, wrote "Sandbox
+execution comes later", listed Pipedream env trios as the live contract, and never mentioned
+`STATE_KEY`, `SBOX_TOKEN`, `RENDER_URL` or the `ROUTER`/`SANDBOX` bindings. This file supersedes it.
 
-## HTTP surface
-
-- `GET /health` returns `{ok:true}`.
-- `POST /api/message` with bearer `AGENT_API_KEY`, body `{content: string, tier?: "primary"|"cheap"}` returns `{reply: string}`.
-- WebSocket at `/` accepts the same JSON messages: `{type:"chat", content, tier}`.
-
-## Router contract
-
-The Worker POSTs an OpenAI chat-completions JSON body to `ROUTER_URL` with header `X-Tier: primary|cheap|jev`. The router responds with standard OpenAI chat-completions JSON (non-stream MVP). The router may check `Authorization: bearer <ROUTER_KEY>` if that env is set on its side.
-
-Router env (Pipedream): `ROUTER_KEY` (optional), `PRIMARY_BASE_URL`, `PRIMARY_API_KEY`, `PRIMARY_MODEL`, `CHEAP_BASE_URL`, `CHEAP_API_KEY`, `CHEAP_MODEL`, optional `JEV_BASE_URL`, `JEV_API_KEY`, `JEV_MODEL`.
-
-Worker env vars: `ROUTER_URL`, `ROUTER_KEY`, `MODEL_PRIMARY` (default `meta/muse-spark-1.3`), `MODEL_CHEAP` (default `meta/muse-spark-1.3-contributor`), `AGENT_API_KEY`.
-
-## Connector checklist
-
-Things you need to connect before this runs end to end:
-
-- [ ] Cloudflare account + `npx wrangler login` (Workers Free tier).
-- [ ] Pipedream account + a deployed workflow exposing `ROUTER_URL`.
-- [ ] Provider keys for the model tiers (primary, cheap, and later jev).
-- [ ] Set secrets: `wrangler secret put ROUTER_KEY`, `wrangler secret put AGENT_API_KEY`.
-- [ ] Later: E2B account for sandbox execution behind the sandbox interface.
-
-## TODO (supervisor and workers)
-
-- Supervisor/worker fanout across multiple Durable Object instances.
-- Streaming responses from the router (optional bonus).
-- Sandbox execution behind an interface (E2B or similar).
-- Richer memory schema in DO SQLite beyond the MVP chat log.
-- Autonomous tick scheduling beyond the 1 minute alarm.
+Not verifiable from this machine, and nothing here was run or deployed: deployed cloud state,
+router KV contents, whether `wrangler dev` works with fresh secrets, provider key validity.
+See `../../GAPS.md` and `../../RECOVERY.md`.
