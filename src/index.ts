@@ -30,7 +30,19 @@ export default {
 
     // WebSocket upgrades (path /) go straight to the agent DO; the Agents SDK
     // performs the hibernation handshake and dispatches frames to onMessage.
+    // Gate the upgrade with the shared secret: handleChat can exec shell/Python
+    // in the sandbox, so an unauthenticated socket is remote code execution by
+    // URL. Browsers cannot set WS headers, so also accept ?token=<AGENT_API_KEY>.
+    // Fail closed when no key is configured.
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      const key = (env.AGENT_API_KEY ?? "").trim();
+      const headerAuth = (request.headers.get("Authorization") ?? "")
+        .replace(/^Bearer\s+/i, "")
+        .trim();
+      const queryAuth = (url.searchParams.get("token") ?? "").trim();
+      if (!key || (headerAuth !== key && queryAuth !== key)) {
+        return new Response("unauthorized", { status: 401 });
+      }
       const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
       return stub.fetch(request);
     }
