@@ -7,6 +7,11 @@ export { FederationAgent };
 interface AgentStub {
   chat(content: string, tier?: ChatTier): Promise<AgentReply>;
   jobList(): Promise<unknown[]>;
+  planState(): Promise<{ plan: unknown[]; pending: unknown }>;
+  approveAction(
+    id: number,
+    approve: boolean
+  ): Promise<{ ok: boolean; reply: string; state: string; output?: string }>;
   vaultPut(key: string, idx: number, total: number, dataB64: string): Promise<void>;
   vaultPull(key: string): Promise<Uint8Array | null>;
   vaultChunk(key: string, idx: number): Promise<string | null>;
@@ -78,6 +83,33 @@ export default {
       }
       const list = await agentStub(env).jobList();
       return Response.json({ ok: true, tasks: list });
+    }
+
+    if (url.pathname === "/api/plan" && request.method === "GET") {
+      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+      if (auth !== env.AGENT_API_KEY.trim()) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const { plan, pending } = await agentStub(env).planState();
+      return Response.json({ ok: true, plan, pending });
+    }
+
+    if (url.pathname === "/api/approve" && request.method === "POST") {
+      const auth = (request.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+      if (auth !== env.AGENT_API_KEY.trim()) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      let body: { id?: number; approve?: boolean };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return Response.json({ error: "invalid JSON body" }, { status: 400 });
+      }
+      if (!Number.isInteger(body.id)) {
+        return Response.json({ error: "integer id required" }, { status: 400 });
+      }
+      const result = await agentStub(env).approveAction(Number(body.id), body.approve === true);
+      return Response.json(result);
     }
 
     if (url.pathname === "/api/decide" && request.method === "POST") {

@@ -35,8 +35,8 @@
   // Local dev: .dev.vars overrides these for the keys it defines.
   // RENDER_URL is added after the Render service has its public URL.
   "vars": {
-    "MODEL_PRIMARY": "deepseek-v4.1-flash-free",
-    "MODEL_CHEAP": "deepseek-v4.1-flash-free"
+    "MODEL_PRIMARY": "cf/@cf/qwen/qwen3.8-27b",
+    "MODEL_CHEAP": "cf/@cf/qwen/qwen3.8-27b"
   },
   // Secrets (never put these in vars):
   //   wrangler secret put ROUTER_KEY        (bearer for the model router)

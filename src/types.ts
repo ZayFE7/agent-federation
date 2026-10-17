@@ -33,6 +33,10 @@ export interface AgentReply {
   verb?: string;
   /** Tool cards the UI renders; empty when the model only talked. */
   tools?: ToolRun[];
+  /** Set when a high-risk command was held for human approval instead of run. */
+  pending?: { id: number; cmd: string };
+  /** Current ordered plan checklist, when the agent decomposed the task. */
+  plan?: Array<{ ord: number; title: string; status: string }>;
 }
 
 /** Inbound body for POST /api/message and WebSocket {type:"chat"}. */
@@ -41,8 +45,8 @@ export interface ChatRequest {
   tier?: ChatTier;
 }
 
-export const DEFAULT_MODEL_PRIMARY = "deepseek-v4.1-flash-free";
-export const DEFAULT_MODEL_CHEAP = "deepseek-v4.1-flash-free";
+export const DEFAULT_MODEL_PRIMARY = "cf/@cf/qwen/qwen3.8-27b";
+export const DEFAULT_MODEL_CHEAP = "cf/@cf/qwen/qwen3.8-27b";
 
 export interface Env {
   /** HTTPS URL of the Pipedream router workflow. */

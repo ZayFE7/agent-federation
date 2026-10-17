@@ -1,9 +1,16 @@
 # tests/
 
-`live-matrix.mjs` is the only test in this repo. Nothing else exists: no unit tests, no
+Two tests live here: `live-matrix.mjs` (a live smoke matrix against the deployed brain) and
+`guardrails.test.mjs` (an offline unit test for `../src/guardrails.ts`). There is still no
 fixture directory, no `npm test` script (`../package.json` defines only `dev`, `deploy`,
 `typecheck`), no vitest/jest/playwright in the dependencies, and no CI at all (no `.github/`,
 no workflow files anywhere in the project).
+
+`guardrails.test.mjs` runs on plain Node with no framework. Node 24+ strips the TypeScript
+types from `../src/guardrails.ts` on import, so it needs no build step; that module is
+dependency-free by design so it stays importable this way. It asserts 36 risky commands are
+flagged and 25 safe ones are not, and exits 0 on pass, 1 on any failure. Run it with
+`node tests/guardrails.test.mjs`.
 
 ## What it actually checks
 
@@ -35,26 +42,33 @@ Two hard blockers:
   and exits 2 before the first request (`:27-30`).
 - `:12` hardcodes `https://agent-federation.agent-federation.workers.dev/api/message`, the
   old account's URL, so even with a key it tests whatever is deployed there, not your build.
-  `ui/index.html:357` and `:358` hardcode the same host.
+  The console (`ui/index.html`) now keeps that host in a single `const AGENT` near the top of
+  its script block and every fetch (`fedChat`, `loadTasks`, `loadPlan`, `decide`) reads from
+  it, so the UI has one place to repoint; `live-matrix.mjs` still has its own literal at `:12`.
 
 Minimal fix: set a fresh hex-only `AGENT_API_KEY` in `.dev.vars` (`[a-f0-9]+` matches it) and
 push the same value to the brain as a secret, then point `:12` at the worker you actually
 deployed, ideally via `process.env.BLIP_URL` with a fallback rather than one literal.
 
-## Expect probe 2 to fail for the wrong reason
+## Probe 2 is deterministic now, but still needs the sandbox
 
-Its label says "deterministic", but `DIRECT_RUN_RE` (`../src/agent.ts:65`) is declared and
-never referenced anywhere in `src/`: the deterministic `run:` short-circuit the comment
-promises is dead code. So probe 2 depends on the model choosing the `exec` tool and on the
-`SANDBOX` service binding answering, which is untestable while `e2b` is not installed
-(`../deploy/sandbox-worker/package.json:6`). See `../../../GAPS.md`.
+`DIRECT_RUN_RE` (`../src/agent.ts:80`) is wired: `handleChat` runs it at `../src/agent.ts:530`
+and, on a `run:`/`exec:`/`execute:` prefix, short-circuits straight to `execSandbox(cmd)`
+without calling the model. So probe 2 no longer depends on the model choosing the `exec`
+tool. It does still depend on the `SANDBOX` service binding answering, which is untestable
+while `e2b` is not installed (`../deploy/sandbox-worker/package.json:6`). See `../../../GAPS.md`.
+
+(An earlier revision of this file claimed `DIRECT_RUN_RE` was declared and never referenced,
+i.e. dead code. That was wrong; the code wins.)
 
 ## Coverage gaps worth knowing
 
 - `npm run typecheck` covers `src` only (`../tsconfig.json:14` is `include: ["src"]`), and
   `deploy/sandbox-worker` and `deploy/telegram-bridge` have no `tsconfig.json` at all, so
   `deploy/**` is never typechecked (except `deploy/router-worker`, which has its own).
-- Nothing tests the vault endpoints, the `/api/decide` route, the cron handler, or the DO
-  memory and task schemas.
-- There is no offline or mock-mode test; every assertion needs a live router with real
-  provider keys.
+- Nothing tests the vault endpoints, the `/api/decide`, `/api/plan`, or `/api/approve` routes,
+  the cron handler, or the DO memory, task, plan, and pending-action schemas. The guardrail
+  classifier itself is covered offline by `guardrails.test.mjs`; the approve/hold flow around
+  it is not.
+- `guardrails.test.mjs` is the only offline test. `live-matrix.mjs` still needs a live router
+  with real provider keys for every assertion.

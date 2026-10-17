@@ -12,14 +12,24 @@ import { DEFAULT_MODEL_CHEAP, DEFAULT_MODEL_PRIMARY } from "./types";
 import {
   dueTasks,
   enqueueTask,
+  ensurePlanSchema,
   ensureSchema,
+  getPendingAction,
+  holdAction,
+  latestPending,
+  listPlan,
   listTasks,
   logMessage,
+  markPlanStep,
   nextDailyDue,
   recentMessages,
   recall,
   remember,
+  setPendingStatus,
+  setPlan,
   type MemoryRow,
+  type PendingRow,
+  type PlanRow,
   type SqlHandle,
   type TaskRow,
 } from "./memory";
@@ -30,6 +40,7 @@ import {
   vaultMeta,
   vaultPutChunk,
 } from "./vault";
+import { isRisky } from "./guardrails";
 
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
@@ -45,6 +56,8 @@ export const CAPABILITIES = [
   "- Linux sandbox: when a sandbox is configured, you can run shell commands and Python (exec tool) in a real Linux computer with internet access; important files can be snapshotted so they survive restarts (save_workspace tool). The user can also prefix a message with \"run:\" to execute a command directly with no model round trip.",
   "- Background jobs: you can schedule one-off or daily recurring jobs from plain text (schedule_task tool); they run autonomously with full tool access, e.g. every morning at 8.",
   "- Web search: you can search the live web for current facts, news, prices, and documentation (web_search tool); you get back titles, URLs, and text excerpts to reason over and cite.",
+  "- Task planning: for any multi-step ask, break the work into an ordered checklist first (plan tool) and mark each step off as you actually finish it (plan_done tool), so the user can follow your progress.",
+  "- Safety gate: high-risk commands (destructive, irreversible, outward-facing, or spending money) are never run automatically; they are held for the user's explicit approval. When a command is held, say so plainly and wait; do not try to work around it.",
   "- A web console shows your live status and full replies.",
   "- NOT connected yet: email, calendar, messaging apps, a full web browser (you can search the web but not drive a browser), payments. Say so honestly if asked; do not pretend these exist.",
   "Call a tool when the ask needs one. When no tool is needed, answer normally and conversationally: never reply with a plan you are not executing, and never invent activity the tools did not report.",
@@ -190,6 +203,7 @@ export class FederationAgent extends Agent<Env> {
     if (!this.schemaReady) {
       ensureSchema(handle);
       ensureVaultSchema(handle);
+      ensurePlanSchema(handle);
       this.schemaReady = true;
     }
     return handle;
@@ -245,6 +259,53 @@ export class FederationAgent extends Agent<Env> {
    */
   async jobList(): Promise<TaskRow[]> {
     return listTasks(this.db(), 20);
+  }
+
+  /**
+   * Plan + held-action RPC for the UI: the current decomposition checklist and the
+   * most recent command awaiting approval (so the approve card survives a refresh).
+   */
+  async planState(): Promise<{ plan: PlanRow[]; pending: PendingRow | null }> {
+    const sql = this.db();
+    return { plan: listPlan(sql), pending: latestPending(sql) };
+  }
+
+  /**
+   * Human-in-the-loop gate. Approve: run the held command in the sandbox and mark
+   * it ran. Deny: mark it denied and run nothing. Returns a UI-ready result.
+   */
+  async approveAction(
+    id: number,
+    approve: boolean
+  ): Promise<{ ok: boolean; reply: string; state: string; output?: string }> {
+    const sql = this.db();
+    const row = getPendingAction(sql, id);
+    if (!row) {
+      return { ok: false, reply: `No held action #${id}.`, state: "error" };
+    }
+    if (row.status !== "held") {
+      return {
+        ok: false,
+        reply: `Action #${id} was already ${row.status}.`,
+        state: "idle",
+      };
+    }
+    if (!approve) {
+      setPendingStatus(sql, id, "denied");
+      logMessage(sql, "assistant", `[denied] ${row.cmd}`, "primary");
+      remember(sql, "tool", `User DENIED action #${id}: ${row.cmd}`, 3);
+      return { ok: true, reply: "Denied. That command will not run.", state: "idle" };
+    }
+    const r = await this.execSandbox(row.cmd);
+    setPendingStatus(sql, id, r.ok ? "approved" : "failed");
+    logMessage(sql, "assistant", `[approved] ${row.cmd}\n${r.out}`, "primary");
+    remember(sql, "tool", `User APPROVED action #${id}: ${row.cmd} -> ${r.ok ? "ok" : "fail"}`, 3);
+    return {
+      ok: r.ok,
+      reply: r.ok ? "Approved and ran." : "Approved, but the command failed.",
+      state: r.ok ? "success" : "error",
+      output: r.out.slice(0, 4000),
+    };
   }
 
   /** WebSocket frames: {type:"chat"|"status", content, tier}. */
@@ -396,6 +457,40 @@ export class FederationAgent extends Agent<Env> {
     }
   }
 
+  /**
+   * One place that runs a shell command in the E2B sandbox. Shared by the
+   * deterministic "run:" path, the exec tool, and approveAction, so the sandbox
+   * network contract lives once. Never throws: failures come back as text.
+   */
+  private async execSandbox(cmd: string): Promise<{ out: string; ok: boolean }> {
+    if (!this.env.SANDBOX) {
+      return { out: "sandbox not configured", ok: false };
+    }
+    try {
+      const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.env.SBOX_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ cmd, sessionId: "agent" }),
+      });
+      const sd = (await sres.json()) as {
+        stdout?: string;
+        stderr?: string;
+        exitCode?: number;
+        error?: string;
+      };
+      const ok = sres.ok && sd.exitCode === 0;
+      const out = sres.ok
+        ? `exit ${sd.exitCode}\nstdout:\n${clip(sd.stdout || "", 4000)}\nstderr:\n${clip(sd.stderr || "", 1500)}`
+        : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
+      return { out, ok };
+    } catch (e) {
+      return { out: "sandbox error: " + String(e), ok: false };
+    }
+  }
+
   private async handleChat(content: string, tier?: ChatTier): Promise<AgentReply> {
     const sql = this.db();
     const chatTier: ChatTier = tier === "cheap" ? "cheap" : "primary";
@@ -430,40 +525,15 @@ export class FederationAgent extends Agent<Env> {
     // Deterministic exec: "run: <cmd>" / "exec: <cmd>" / "execute <cmd>" runs
     // straight in the sandbox with no LLM round trip, so computer use stays
     // reliable even when a free model ignores the system prompt and skips tools.
+    // The human typed this command, so it is already authorized and bypasses the
+    // isRisky approval gate that guards MODEL-emitted commands.
     const directRun = DIRECT_RUN_RE.exec(content);
     if (directRun) {
       const cmd = (directRun[2] || "").trim();
-      let reply: string;
-      let ok = false;
-      if (!this.env.SANDBOX) {
-        reply = "Sandbox not configured yet, so I can't run that command.";
-      } else {
-        try {
-          const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${this.env.SBOX_TOKEN}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({ cmd, sessionId: "agent" }),
-          });
-          const sd = (await sres.json()) as {
-            stdout?: string;
-            stderr?: string;
-            exitCode?: number;
-            error?: string;
-          };
-          ok = sres.ok && sd.exitCode === 0;
-          reply = sres.ok
-            ? `exit ${sd.exitCode}\nstdout:\n${clip(sd.stdout || "", 4000)}\nstderr:\n${clip(sd.stderr || "", 1500)}`
-            : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
-          remember(sql, "tool", `direct exec: ${cmd} -> exit ${sd.exitCode ?? "?"}`, 2);
-        } catch (e) {
-          reply = "sandbox error: " + String(e);
-        }
-      }
-      logMessage(sql, "assistant", reply, chatTier);
-      return { reply, state: ok ? "idle" : "error", verb: "Ran" };
+      const r = await this.execSandbox(cmd);
+      remember(sql, "tool", `direct exec: ${cmd} -> ${r.ok ? "ok" : "fail"}`, 2);
+      logMessage(sql, "assistant", r.out, chatTier);
+      return { reply: r.out, state: r.ok ? "idle" : "error", verb: "Ran" };
     }
 
     // Deterministic web search: "search: <query>" hits Parallel with no LLM
@@ -499,8 +569,10 @@ export class FederationAgent extends Agent<Env> {
         "- chat and remember you across sessions (persistent memory)\n" +
         sandboxLine +
         searchLine +
+        "- break a multi-step ask into a plan checklist and work through it step by step\n" +
         "- schedule one-off or daily background jobs from plain text, like \"every morning at 8 check X\"\n" +
         "- snapshot sandbox files so your work survives restarts\n" +
+        "Safety: high-risk commands (destructive, irreversible, outward-facing, or spending money) are held for your explicit approval before they run.\n" +
         "Not connected yet: email, calendar, messaging apps, a full browser (I can search the web but not drive one), payments.";
       logMessage(sql, "assistant", reply, chatTier);
       remember(sql, "exchange", `User: ${content}\nAgent: ${reply}`, 1);
@@ -574,6 +646,45 @@ export class FederationAgent extends Agent<Env> {
           parameters: { type: "object", properties: {} },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "plan",
+          description:
+            "Break the current request into an ordered checklist of concrete steps and store it so the user can watch progress. Call this FIRST for any multi-step task (research + build + deliver, 'do A then B then C'). Replaces any previous plan. Keep steps short and actionable.",
+          parameters: {
+            type: "object",
+            properties: {
+              steps: {
+                type: "array",
+                items: { type: "string" },
+                description:
+                  "Ordered list of short step titles. Example: ['Find 3 open-source LLM routers','Compare their free tiers','Summarize the best fit'].",
+              },
+            },
+            required: ["steps"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "plan_done",
+          description:
+            "Mark one plan step as finished after you actually complete it. Call it as you go so the checklist stays honest. Use the step number (ord) from the plan.",
+          parameters: {
+            type: "object",
+            properties: {
+              ord: { type: "number", description: "The 1-based step number to mark done." },
+              status: {
+                type: "string",
+                description: "Optional status; defaults to 'done'. Use 'blocked' if the step could not finish.",
+              },
+            },
+            required: ["ord"],
+          },
+        },
+      },
     ];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -581,6 +692,10 @@ export class FederationAgent extends Agent<Env> {
     let finalText = "";
     /** Envelope tool cards for the UI: what the model actually called, in order. */
     const toolRuns: ToolRun[] = [];
+    /** Set when a high-risk command is held for approval; short-circuits the loop. */
+    let pending: { id: number; cmd: string } | null = null;
+    /** True once the model touched the plan, so we echo the checklist back. */
+    let planTouched = false;
 
     for (let round = 0; round < 4; round++) {
       let response: Response;
@@ -634,8 +749,41 @@ export class FederationAgent extends Agent<Env> {
             instructions?: string;
             minutes_from_now?: number;
             daily_at?: string;
+            steps?: string[];
+            ord?: number;
+            status?: string;
           };
-          if (tc.function.name === "schedule_task") {
+          if (tc.function.name === "plan") {
+            const steps = (Array.isArray(args.steps) ? args.steps : [])
+              .map((s) => String(s ?? "").trim())
+              .filter((s) => s.length > 0)
+              .slice(0, 12);
+            runCmd = `${steps.length} steps`;
+            if (steps.length === 0) {
+              out = "plan needs a non-empty 'steps' array. Retry with the ordered step titles.";
+            } else {
+              setPlan(sql, steps);
+              planTouched = true;
+              runOk = true;
+              out = `Plan set (${steps.length} steps):\n${steps
+                .map((s, i) => `${i + 1}. ${s}`)
+                .join("\n")}\nWork them in order and call plan_done after each.`;
+              remember(sql, "task", `Plan set: ${steps.join(" | ")}`, 2);
+            }
+          } else if (tc.function.name === "plan_done") {
+            const ord = Number(args.ord) || 0;
+            const status = args.status === "blocked" ? "blocked" : "done";
+            runCmd = `step ${ord} -> ${status}`;
+            if (ord < 1) {
+              out = "plan_done needs 'ord' (the 1-based step number). Retry with which step finished.";
+            } else {
+              const plan = markPlanStep(sql, ord, status);
+              planTouched = true;
+              runOk = true;
+              const remaining = plan.filter((p) => p.status === "pending").length;
+              out = `Marked step ${ord} ${status}. ${remaining} step(s) still pending.`;
+            }
+          } else if (tc.function.name === "schedule_task") {
             const now = Date.now();
             let dueAt = now + 60_000;
             let recurrence: string | null = null;
@@ -685,28 +833,19 @@ export class FederationAgent extends Agent<Env> {
           } else {
             const cmd = args.cmd || "true";
             runCmd = cmd;
-            if (!this.env.SANDBOX) {
-              out = "sandbox not configured";
+            if (isRisky(cmd)) {
+              // High-risk: never auto-run a model-emitted destructive/irreversible/
+              // outward-facing command. Hold it for explicit human approval.
+              const id = holdAction(sql, cmd);
+              pending = { id, cmd };
+              runOk = false;
+              out = `HELD for approval (#${id}): this command is high-risk (destructive, irreversible, outward-facing, or spends money), so it was NOT run. Tell the user it needs their approval in the panel; do not try to work around it.`;
+              remember(sql, "tool", `exec HELD for approval (#${id}): ${cmd}`, 3);
             } else {
-              const sres = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
-                method: "POST",
-                headers: {
-                  authorization: `Bearer ${this.env.SBOX_TOKEN}`,
-                  "content-type": "application/json",
-                },
-                body: JSON.stringify({ cmd, sessionId: "agent" }),
-              });
-              const sd = (await sres.json()) as {
-                stdout?: string;
-                stderr?: string;
-                exitCode?: number;
-                error?: string;
-              };
-              runOk = sres.ok && sd.exitCode === 0;
-              out = sres.ok
-                ? `exit ${sd.exitCode}\nstdout:\n${clip(sd.stdout || "", 4000)}\nstderr:\n${clip(sd.stderr || "", 1500)}`
-                : `sandbox error: ${(sd.error || JSON.stringify(sd)).slice(0, 600)}`;
-              remember(sql, "tool", `exec: ${cmd} -> exit ${sd.exitCode ?? "?"}`, 2);
+              const r = await this.execSandbox(cmd);
+              out = r.out;
+              runOk = r.ok;
+              remember(sql, "tool", `exec: ${cmd} -> ${r.ok ? "ok" : "fail"}`, 2);
             }
           }
         } catch (e) {
@@ -720,8 +859,38 @@ export class FederationAgent extends Agent<Env> {
         });
         msgs.push({ role: "tool", tool_call_id: tc.id, content: out });
       }
+      // A held high-risk command ends the turn: the user must approve before the
+      // agent continues, so do not burn more router rounds on a blocked action.
+      if (pending) break;
     }
+
+    // A held action short-circuits everything: surface the approval card and stop.
+    if (pending) {
+      const heldReply =
+        finalText && finalText.trim()
+          ? finalText
+          : `I need your approval to run a high-risk command:\n\n  ${pending.cmd}\n\nApprove or deny it in the panel.`;
+      logMessage(sql, "assistant", heldReply, chatTier);
+      const heldPlan = listPlan(sql);
+      return {
+        reply: heldReply,
+        state: "approve",
+        verb: "Needs approval",
+        tools: toolRuns,
+        pending,
+        plan: heldPlan.length ? heldPlan : undefined,
+      };
+    }
+
     if (!finalText) finalText = "(hit the tool round limit; try a simpler ask)";
+
+    // Self-critique (phase 1): one bounded cheap-tier pass over the answer when
+    // tools ran, so the agent can catch an incomplete or unsupported reply before
+    // it reaches the user. Best-effort: any failure keeps the original draft.
+    if (toolRuns.length > 0) {
+      const improved = await this.selfCritique(sql, content, finalText, toolRuns);
+      if (improved) finalText = improved;
+    }
 
     logMessage(sql, "assistant", finalText, chatTier);
     remember(sql, "exchange", `User: ${content}\nAgent: ${finalText}`, 2);
@@ -745,6 +914,12 @@ export class FederationAgent extends Agent<Env> {
     } else if (/search|google|look up|find out|web/.test(lower)) {
       state = "search";
       verb = "Digging";
+    } else if (/checkout|payment|invoice|purchase|wallet|\bcharge\b|place (an )?order|\bbuy\b/.test(lower)) {
+      state = "pay";
+      verb = "Reviewing";
+    } else if (/browse|open (the )?(page|site|url|link)|navigate|headless browser/.test(lower)) {
+      state = "browse";
+      verb = "Browsing";
     } else if (/email|mail|inbox/.test(lower)) {
       state = "mail";
     } else if (/file|read|document/.test(lower)) {
@@ -752,6 +927,80 @@ export class FederationAgent extends Agent<Env> {
     } else if (/done|finished|complete|success/.test(lower)) {
       state = "success";
     }
-    return { reply: finalText, state, verb, tools: toolRuns };
+    const plan = listPlan(sql);
+    return {
+      reply: finalText,
+      state,
+      verb,
+      tools: toolRuns,
+      plan: plan.length ? plan : undefined,
+    };
+  }
+
+  /**
+   * Self-critique phase 1: one bounded pass that re-reads the user's ask, the tool
+   * outputs, and the draft answer, and returns a corrected answer only when the
+   * draft is genuinely incomplete or unsupported. Never loops, never blocks: any
+   * router failure, timeout, or unparseable verdict returns null (keep the draft).
+   */
+  private async selfCritique(
+    sql: SqlHandle,
+    userAsk: string,
+    draft: string,
+    toolRuns: ToolRun[]
+  ): Promise<string | null> {
+    const { tier: routerTier, model } = this.tierModel("cheap");
+    const toolLog = toolRuns
+      .map((t) => `- ${t.name} [${t.cmd}] -> ${t.ok ? "ok" : "FAILED"}: ${clip(t.output, 600)}`)
+      .join("\n");
+    const sys =
+      "You are a strict reviewer for an AI agent's answer. Given the user's request, the tool outputs the agent relied on, and its draft answer, decide whether the draft fully and correctly answers the request using ONLY what the tools actually returned. " +
+      'Reply with ONLY a compact JSON object, no prose, no markdown: {"verdict":"ok"|"revise","final":"<the final answer to show the user, plain text>"}. ' +
+      'Use verdict "ok" when the draft is already correct and complete (put the draft, lightly cleaned, in "final"). Use "revise" only when something is missing, wrong, or not supported by the tool outputs, and put the corrected answer in "final". Never invent facts the tools did not return.';
+    const user = [
+      `USER REQUEST:\n${userAsk}`,
+      `TOOL OUTPUTS:\n${toolLog}`,
+      `AGENT DRAFT:\n${draft}`,
+    ].join("\n\n");
+    let response: Response;
+    try {
+      response = await fetch(this.env.ROUTER_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.env.ROUTER_KEY}`,
+          "X-Tier": routerTier,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: sys },
+            { role: "user", content: user },
+          ],
+          max_tokens: 800,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch {
+      return null;
+    }
+    if (!response.ok) return null;
+    const data = (await response.json()) as RouterChatResponse;
+    let raw = data.choices?.[0]?.message?.content ?? "";
+    raw = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
+    const m = raw.match(/\{[\s\S]*\}/);
+    let parsed: { verdict?: string; final?: string } | null = null;
+    try {
+      parsed = JSON.parse(m ? m[0] : raw) as { verdict?: string; final?: string };
+    } catch {
+      return null;
+    }
+    const final = (parsed?.final || "").trim();
+    if (parsed?.verdict === "revise" && final && final !== draft.trim()) {
+      remember(sql, "tool", "self-critique revised the answer before delivery", 1);
+      return final;
+    }
+    return null;
   }
 }
