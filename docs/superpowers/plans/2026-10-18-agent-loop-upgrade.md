@@ -102,7 +102,7 @@ Nothing downstream works until these pass. No new architecture here.
 - Modify: `tests/live-matrix.mjs` (make it runnable at all)
 
 **Interfaces:**
-- Produces: `npm test` runs every offline test file. `fakeSql()` returns a `SqlHandle`-shaped object that records statements and answers `SELECT` from an in-memory map of arrays; `fakeSql().query(sql, ...bindings)` seeds the rows a later test expects back. `tests/live-matrix.mjs` reads its base URL from `process.env.BLIP_URL` with **no default host** and its key with a line parse (`^AGENT_API_KEY=(.+)$`), so a placeholder value yields a clear "set a real key" message instead of a regex miss.
+- Produces: `npm test` runs every offline test file. `fakeSql()` returns a `SqlHandle`-shaped object that records statements and answers `SELECT` from an in-memory map of arrays; `fakeSql().query(needle, rows)` seeds the rows a later test expects back when a statement contains `needle`, and it answers **only** statements starting with `SELECT` (a write statement returns `{ results: [] }`, like the real `ctx.storage.sql`), and `exec()` returns `{ results, meta: { changes } }` so a store test can assert on affected-row counts. `tests/live-matrix.mjs` reads its base URL from `process.env.BLIP_URL` with **no default host** and its key with a line parse (`^AGENT_API_KEY=(.+)$`), so a placeholder value yields a clear "set a real key" message instead of a regex miss.
 
 - [ ] **Step 1: Read the peer contract before installing**
 
