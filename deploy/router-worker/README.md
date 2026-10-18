@@ -43,7 +43,9 @@ SQLite at `E:/Users/Zay%20L/AppData/Roaming/9router/db/data.sqlite` (`:18`) and 
 (`:214-218`), never token values.
 
 Counts it claimed on the last real extract, per `../../../memory/personal-agent-project.md`
-line 13: 40 api-key connections with prefixes `smn LR JDW kk hc AR tr ai OR ab sr buds`.
+line 13: 40 api-key connections, each keyed by a short account prefix. The prefix values are
+personal relay account identifiers and are deliberately not reproduced here; the count is the
+only part of that line this repo needs.
 `refresh-notes.md` section 4 counts 11 active antigravity OAuth rows, section 3 notes 2 of
 those 11 were already past `expiresAt`, and section 5 adds that 4 of 11 had no `projectId`.
 `_superseded/HANDOFF.md` recorded the deployed worker answering 41 connections and
