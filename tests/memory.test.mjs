@@ -3,6 +3,7 @@
 // actual exported functions. Proves: text recall (#26) and the one-off prune
 // (#25). Run: node tests/memory.test.mjs
 import { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,11 +12,26 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 
 // esbuild lives in the deploy tree (repo-clone has no node_modules of its own).
-// Default to the sibling ../project/agent-federation/node_modules layout; set
-// BLIP_DEPLOY_NM to override when the trees are not adjacent.
-const DEPLOY_NM =
-  process.env.BLIP_DEPLOY_NM ||
-  join(here, "..", "..", "project", "agent-federation", "node_modules");
+// Take the first candidate that actually holds esbuild/lib/main.js, so this file
+// runs from either tree with no env var set: BLIP_DEPLOY_NM when present, this
+// tree's own node_modules, then the sibling ../project/agent-federation layout.
+const NM_CANDIDATES = [
+  process.env.BLIP_DEPLOY_NM,
+  join(root, "node_modules"),
+  join(here, "..", "..", "project", "agent-federation", "node_modules"),
+].filter(Boolean);
+
+const hasEsbuild = (nm) => existsSync(join(nm, "esbuild", "lib", "main.js"));
+const DEPLOY_NM = NM_CANDIDATES.find(hasEsbuild);
+
+if (!DEPLOY_NM) {
+  console.log("  FAIL esbuild/lib/main.js not found, cannot compile src/memory.ts");
+  console.log("  searched:");
+  for (const nm of NM_CANDIDATES) console.log("    " + nm);
+  console.log("  set BLIP_DEPLOY_NM to a node_modules directory that contains esbuild");
+  process.exit(1);
+}
+
 const { build } = await import(
   pathToFileURL(join(DEPLOY_NM, "esbuild", "lib", "main.js")).href
 );

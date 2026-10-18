@@ -1,11 +1,12 @@
 # tests/
 
-Nine files live here. Offline, framework-free, run by `npm test`:
+Eleven files live here. Offline, framework-free, run by `npm test`:
 `guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
-the `md()` renderer shipped in `ui/index.html`), and `memory.test.mjs` (a test that compiles
+the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
 `src/memory.ts` and drives the real recall + task functions against a live `node:sqlite`
-database). The harness is `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory
-`SqlHandle` fake for the pure-store tests, not yet used by any test). Live-only, never run by
+database), and `fake-sql.test.mjs` (a contract test for the shared fixture). The harness is
+`run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
+pure-store tests, contract-tested by `fake-sql.test.mjs`). Live-only, never run by
 `npm test` because they do not end in `.test.mjs`: `live-matrix.mjs`, `live-deep.mjs`,
 `live-tools2.mjs`, `live-probe.sh`.
 
@@ -90,15 +91,18 @@ i.e. dead code. That was wrong; the code wins.)
   the cron handler, or the DO memory, task, plan, and pending-action schemas. The guardrail
   classifier itself is covered offline by `guardrails.test.mjs`; the approve/hold flow around
   it is not.
-- `npm test` runs three offline files (`guardrails`, `markdown`, `memory`). No offline test
-  touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is not
-  in the glob.
-- `fake-sql.mjs` is a fixture with no consumer yet; it exists for the pure-store tests that
-  later tasks add. Nothing imports it today.
+- `npm test` runs four offline files (`fake-sql`, `guardrails`, `markdown`, `memory`). No offline
+  test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
+  not in the glob.
+- `fake-sql.mjs` is the fixture the pure-store tests of later tasks build on, and
+  `fake-sql.test.mjs` is its contract test: it asserts the `stmts` order, the `results` log,
+  the `rows.slice()` copy semantics, first-needle-wins, that only `SELECT` statements are
+  answered, and that `exec()` reports `meta.changes`. No `src/` module imports it (it is a test
+  fixture by design).
 
-## Offline UI + memory tests (added)
+## Offline tests, file by file
 
-Both run on plain Node, no framework, exit 0 on pass / 1 on any failure.
+All run on plain Node, no framework, exit 0 on pass / 1 on any failure.
 
 ### `markdown.test.mjs`
 
@@ -119,6 +123,23 @@ Compiles `../src/memory.ts` to JS with esbuild, imports it, and drives the real 
 functions (`remember`, `recall`, `enqueueTask`, `dueTasks`, one-off lifecycle) against an
 in-memory `node:sqlite` `DatabaseSync`. It proves text recall ordering (importance then
 recency, empty query returns top memories) and that a served one-off task is deleted while a
-daily recurrence is re-armed, not removed. esbuild is found via `BLIP_DEPLOY_NM` or the
-sibling `../project/agent-federation/node_modules` layout; set `BLIP_DEPLOY_NM` if your trees
-are not adjacent.
+daily recurrence is re-armed, not removed. esbuild is located by an existence check over an
+ordered candidate list: `BLIP_DEPLOY_NM` when set, this tree's own `node_modules`, then the
+sibling `../../project/agent-federation/node_modules`. The first candidate that actually holds
+`esbuild/lib/main.js` wins, so the file runs from either tree with no env var; if none does it
+prints the list it searched and exits 1.
+
+### `fake-sql.test.mjs`
+
+`node tests/fake-sql.test.mjs`
+
+A contract test for `fake-sql.mjs`, the fixture the store tasks (`registry-store`, `session
+store`) will seed through. 29 checks: `query(needle, rows, changes)` returns the fake for
+chaining and `exec()` replies `{ results, meta: { changes } }`; `stmts` records
+`[query, bindings]` in call order with bindings never interpolated; `results` logs one reply
+per `exec`; the reply array is a `slice()` copy of the seed (the row objects inside it are
+still shared, and the test says so); the first registered needle wins. It also pins the
+`SELECT` gate: `rowsFor` answers only statements matching `/^\s*select\b/i`, so
+`DELETE FROM sessions WHERE id = ?` returns `{ results: [] }` even though its text contains the
+seeded `"FROM sessions"` needle, exactly like the real `ctx.storage.sql`, and a declared
+`changes` count comes back on the write that matched its own needle (default `0`).

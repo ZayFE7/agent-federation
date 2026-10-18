@@ -24,8 +24,9 @@ cron `*/10 * * * *` (`:31-33`), whose handler only pings `RENDER_URL/health` (`s
   tabs chat/tasks/docs/ideas/tools (`:321`). Plain `fetch`, no WebSocket, no markdown renderer,
   reply text injected raw, demo placeholder strings still present (`:322`, `:330`, `:338`).
 - `pipedream/router.py` + README: abandoned predecessor router, superseded by `deploy/router-worker`.
-- `tests/`: `npm test` (`node tests/run-all.mjs`) runs the three offline `.test.mjs` files
-  (`guardrails`, `markdown`, `memory`); `tests/fake-sql.mjs` is a fixture for later store tests.
+- `tests/`: `npm test` (`node tests/run-all.mjs`) runs the four offline `.test.mjs` files
+  (`fake-sql`, `guardrails`, `markdown`, `memory`); `tests/fake-sql.mjs` is the `SqlHandle`
+  fixture later store tests seed, contract-tested by `tests/fake-sql.test.mjs`.
   `tests/live-matrix.mjs` is live-only, needs `BLIP_URL` plus a real `AGENT_API_KEY`, and is not
   run by `npm test`. See `tests/README.md`.
 
