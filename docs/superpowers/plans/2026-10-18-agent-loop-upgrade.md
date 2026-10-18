@@ -122,7 +122,7 @@ Run `npm test`. Expected: `PASS tests/guardrails.test.mjs` then `1/1 files passe
 
 - [ ] **Step 5: Write `tests/fake-sql.mjs`**
 
-`export function fakeSql()` returning `{ results: [], stmts: [], exec(query, ...bindings) { this.stmts.push([query, bindings]); return { results: this.rowsFor(query) }; }, rowsFor(query) }` where `rowsFor` reads a `Map<string, unknown[]>` keyed by a substring the test registered with `query(needle, rows)`. Keep it dependency-free and under 40 lines.
+`export function fakeSql()` returns a dependency-free object with: `stmts` (every `[query, bindings]` pushed in call order), `log` (the `{ results, meta }` each `exec` returned), `query(needle, rows, changes = 0)` to seed (chainable), and `exec(query, ...bindings)` returning `{ results, meta: { changes } }`. `rowsFor`/`changesFor` resolve the **first** seeded needle contained in the statement. Only statements matching `/^\s*select\b/i` get rows; a write returns `{ results: [] }`, like the real `ctx.storage.sql`, so a store test cannot accidentally pass on a `DELETE`. `meta.changes` is whatever the seed declared, default 0, so `deleteSession` can assert on affected rows. `tests/fake-sql.test.mjs` is the contract test; `src/memory.ts`'s `SqlHandle` type gains the `meta` field in Task 5, which owns that widening.
 
 - [ ] **Step 6: Make `live-matrix.mjs` runnable**
 
