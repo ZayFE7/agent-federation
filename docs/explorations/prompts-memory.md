@@ -210,17 +210,22 @@ Tasks tab shows yesterday's stale checklist indefinitely (`ui/index.html:362-364
 `planTouched` is set at `src/agent.ts:713`, `:781`, `:796` and **never read** — the comment
 "so we echo the checklist back" describes code that does not exist.
 
-**[Major] "Cheap" tier is the same model as primary, so self-critique costs a full-price second
-generation.** `DEFAULT_MODEL_CHEAP === DEFAULT_MODEL_PRIMARY` (`src/types.ts:48-49`) and both
-wrangler vars are set to the identical `cf/@cf/qwen/qwen3.8-27b` (`wrangler.jsonc:37-40`).
-`tierModel("cheap")` therefore returns the same model string
-(`src/agent.ts:412-417`); the `X-Tier: cheap` header is the only difference
-(`src/agent.ts:982-987`), and the cloud router resolves purely on `model`
-(`deploy/router-worker/src/index.ts:396-423`), not on the tier header. So the "bounded
-cheap-tier pass" comment at `src/agent.ts:902-904` is inaccurate: it is a second full model
-call on the same model. Cost: +1 generation per tool-using turn. Latency: adds real time to
-every turn that used a tool — worst case +20 s (`:998`) on top of up to 4 × 25 s rounds;
-`tests/live-matrix.mjs:13` already has to allow 120 s for a probe.
+**[Major, now closed on the model side] "Cheap" tier was the same model as primary, so
+self-critique cost a full-price second generation.** This was written when
+`DEFAULT_MODEL_CHEAP === DEFAULT_MODEL_PRIMARY` (`src/types.ts:48-49`) and both wrangler vars were
+set to the identical `cf/@cf/qwen/qwen3.8-27b` (`wrangler.jsonc:37-40`). `tierModel("cheap")`
+therefore returned the same model string (`src/agent.ts:420-425`), the `X-Tier: cheap` header was
+the only difference, and the cloud router resolved purely on `model`
+(`deploy/router-worker/src/index.ts:396-423`), not on the tier header, so the "bounded cheap-tier
+pass" comment was inaccurate: a second full model call on the same model. Both halves of that are
+no longer true. The vars are pinned to two different probed ids (`gemini3.7flash` for primary,
+`gemini3.8flash` for cheap, `wrangler.jsonc:38-39`), `src/types.ts:48-49` now defaults to the same
+pair, and `X-Tier` was deleted outright in `e85d0c3` (Task 3), so nothing is sent that the router
+ignores. What still holds is the cost shape: the `Self-critique (phase 1)` block in `src/agent.ts`
+is one more full generation on every tool-using turn, worst case 20 s of extra latency on top of
+up to 4 rounds of 25 s, and `tests/live-matrix.mjs:13` still has to allow 120 s for a probe. The
+difference is that the extra generation now runs on an id measured at zero cost on the local
+omniroute (`docs/explorations/router-capability-probe.md`) instead of the priced one.
 
 **[Major] The critic sees strictly less than the writer and cannot fix facts.** Tool outputs
 are re-clipped to 600 chars for the critic (`src/agent.ts:969`) while the writer saw 4000+
@@ -533,9 +538,10 @@ Cost: ≤2 cheap-tier calls/day worst case, ~0 most days; a few SQL statements o
 2. Are you willing to attach a Workers AI binding to the brain (free 10,000 neurons/day, no
    card) and create one Vectorize index, or do you want the no-new-service Path B (SQLite
    BLOB + brute-force) first? B is strictly smaller and migrates into A.
-3. What is the *actual* cheap lane? Right now `MODEL_CHEAP === MODEL_PRIMARY`
-   (`src/types.ts:48-49`), so "cheap-tier" self-critique is not cheap. Name the cheap model
-   or drop the tier pretense.
+3. What is the *actual* cheap lane? `MODEL_CHEAP` is now a distinct probed id
+   (`gemini3.8flash`, `src/types.ts:48-49` and `wrangler.jsonc:39`), so the tier is no longer a
+   no-op; the open part is whether a zero-measured-cost free tier is a lane you want to depend on.
+   Confirm it, or drop the tier pretense.
 4. Self-critique: keep it as a gated pass (failures/long deliverables only), keep it always-on
    and pay +1 full generation per tool turn, or cut it? Do you have any anecdote where it
    actually caught a wrong answer?

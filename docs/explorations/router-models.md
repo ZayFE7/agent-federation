@@ -63,14 +63,18 @@ Every ordered list is `sort((a,b)=>a.priority-b.priority)` — lower number wins
 walks candidates in that order (`:423`).
 
 ### Tier → upstream mapping
-`tierModel()` (`src/agent.ts:412-417`) returns `{tier, model}`: cheap→`MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP`,
-primary→`MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY`. In the committed config both resolve to the
-same string `cf/@cf/qwen/qwen3.8-27b` (`wrangler.jsonc:38-39`, `src/types.ts:48-49`) — so
-**MODEL_CHEAP === MODEL_PRIMARY today**: the two "tiers" hit the identical upstream. The
-differentiation is only the `X-Tier` header (`src/agent.ts:723`, `:987`; `src/index.ts:155`) and
-the model string. **The router never reads `X-Tier`** (no reference anywhere in
-`deploy/router-worker/src/index.ts`; corroborated by `docs/explorations/streaming.md:234`). So at
-the edge twin the tier header is dead; only the alternate `pipedream/router.py:191-195` honors it.
+`tierModel()` (`src/agent.ts:420-425`) returns `{tier, model}`: cheap→`MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP`,
+primary→`MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY`. They no longer resolve to the same string: the
+committed config (`wrangler.jsonc:38-39`) pins `gemini3.7flash` for primary and `gemini3.8flash`
+for cheap, the two ids probed on the local omniroute in
+`docs/explorations/router-capability-probe.md`, and `src/types.ts:48-49` defaults to the same pair.
+So **MODEL_CHEAP !== MODEL_PRIMARY**: the two tiers hit different upstream models at different
+measured costs, and the earlier state (both `cf/@cf/qwen/qwen3.8-27b`, one identical upstream) is
+history. `X-Tier` no longer exists at all: it was deleted in `e85d0c3` (Task 3) because it was the
+only thing still distinguishing the tiers once the ids differed, no reference to it survives
+anywhere in `src/`, and **the router never read it** (no reference anywhere in
+`deploy/router-worker/src/index.ts`; corroborated by `docs/explorations/streaming.md:234`). The
+alternate `pipedream/router.py:191-195` still honors it, and only that path can see a tier header.
 The `.dev.vars.example:3-4` shows the intended shape once tiers diverge
 (`meta/muse-spark-1.3` vs `meta/muse-spark-1.3-contributor`) — the `meta/` prefix then resolves
 via resolve() step 3a.
@@ -294,9 +298,11 @@ re-`wrangler secret put ROUTER_URL`, and the user sees a bare 530 with no explan
 2. Do we seed `zay-router` KV (`router:config`) and re-mint a fresh KV namespace (the bound id is an
    old-account resource, `wrangler.jsonc:9`), or keep the brain pinned to local `omniroute` until
    the edge twin is fully wired?
-3. Is the tier distinction real, or should it be removed? `MODEL_CHEAP === MODEL_PRIMARY`
-   (`wrangler.jsonc:38-39`, `src/types.ts:48-49`) and the router ignores `X-Tier` entirely — do you
-   want a cheap lane pointed at a genuinely cheaper model, or drop the header/masquerade?
+3. Is the tier distinction real, or should it be removed? `MODEL_CHEAP === MODEL_PRIMARY` is no
+   longer true: the ids diverged in `ec59a4b` (`wrangler.jsonc:38-39`) and `X-Tier` was deleted in
+   `e85d0c3`, so a tier is now purely a model id. Is `gemini3.8flash` (measured cost 0.0000000 on
+   the local omniroute, `docs/explorations/router-capability-probe.md`) cheap enough to be the
+   real cheap lane, or should the tier be dropped entirely?
 4. The OpenCode free lane is a documented dead end (`README.md:70-71`) and the only consumer of the
    buggy `aggregateSSE` — should it be deleted (which removes the whole collapse path) or fixed?
 5. Are Anthropic-format clients / `builtin` providers ever meant to interoperate (there is no

@@ -45,8 +45,16 @@ export interface ChatRequest {
   tier?: ChatTier;
 }
 
-export const DEFAULT_MODEL_PRIMARY = "cf/@cf/qwen/qwen3.8-27b";
-export const DEFAULT_MODEL_CHEAP = "cf/@cf/qwen/qwen3.8-27b";
+/**
+ * Fallbacks when the wrangler vars are unset. They match the ids pinned in
+ * `wrangler.jsonc` and measured by `tests/router-probe.mjs`
+ * (docs/explorations/router-capability-probe.md): both tool-call, stream, and complete the
+ * tool round trip on the local omniroute. The previous pair, `cf/@cf/qwen/qwen3.8-27b`, is not
+ * routable in the `zay-router` Worker at all, so a worker launched without vars fell back to an
+ * id that 404s on every call.
+ */
+export const DEFAULT_MODEL_PRIMARY = "gemini3.7flash";
+export const DEFAULT_MODEL_CHEAP = "gemini3.8flash";
 
 export interface Env {
   /** HTTPS URL of the Pipedream router workflow. */
