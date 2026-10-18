@@ -41,6 +41,7 @@ import {
   vaultPutChunk,
 } from "./vault";
 import { isRisky } from "./guardrails";
+import { fetchRouter } from "./router";
 
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
@@ -512,7 +513,7 @@ export class FederationAgent extends Agent<Env> {
   private async handleChat(content: string, tier?: ChatTier): Promise<AgentReply> {
     const sql = this.db();
     const chatTier: ChatTier = tier === "cheap" ? "cheap" : "primary";
-    const { tier: routerTier, model } = this.tierModel(chatTier);
+    const { model } = this.tierModel(chatTier);
 
     let memories: MemoryRow[] = [];
     try {
@@ -722,17 +723,14 @@ export class FederationAgent extends Agent<Env> {
     for (let round = 0; round < 4; round++) {
       let response: Response;
       try {
-        response = await fetch(this.env.ROUTER_URL, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${this.env.ROUTER_KEY}`,
-            "X-Tier": routerTier,
-          },
-          body: JSON.stringify({ model, messages: msgs, tools }),
+        response = await fetchRouter(
+          this.env,
+          "/v1/chat/completions",
+          { model, messages: msgs, tools },
+          false,
           // Hung tunnel must fail fast with a clear reply, not hang the UI.
-          signal: AbortSignal.timeout(25_000),
-        });
+          AbortSignal.timeout(25_000)
+        );
       } catch (err) {
         const timedOut =
           err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
@@ -977,7 +975,7 @@ export class FederationAgent extends Agent<Env> {
     draft: string,
     toolRuns: ToolRun[]
   ): Promise<string | null> {
-    const { tier: routerTier, model } = this.tierModel("cheap");
+    const { model } = this.tierModel("cheap");
     const toolLog = toolRuns
       .map((t) => `- ${t.name} [${t.cmd}] -> ${t.ok ? "ok" : "FAILED"}: ${clip(t.output, 600)}`)
       .join("\n");
@@ -992,24 +990,20 @@ export class FederationAgent extends Agent<Env> {
     ].join("\n\n");
     let response: Response;
     try {
-      response = await fetch(this.env.ROUTER_URL, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${this.env.ROUTER_KEY}`,
-          "X-Tier": routerTier,
-        },
-        body: JSON.stringify({
+      response = await fetchRouter(
+        this.env,
+        "/v1/chat/completions",
+        {
           model,
           messages: [
             { role: "system", content: sys },
             { role: "user", content: user },
           ],
           max_tokens: 800,
-          stream: false,
-        }),
-        signal: AbortSignal.timeout(20_000),
-      });
+        },
+        false,
+        AbortSignal.timeout(20_000)
+      );
     } catch {
       return null;
     }

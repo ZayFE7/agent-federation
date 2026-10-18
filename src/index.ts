@@ -1,4 +1,5 @@
 import { FederationAgent } from "./agent";
+import { fetchRouter } from "./router";
 import type { AgentReply, ChatRequest, ChatTier, Env } from "./types";
 
 export { FederationAgent };
@@ -153,27 +154,19 @@ export default {
         "States: " + states.join(", ") + ". " +
         'Examples: {"state":"search","verb":"Digging the web"} {"state":"code","verb":"Poking the shell"} {"state":"idle","verb":"Ready"}.';
       try {
-        const init: RequestInit = {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${env.ROUTER_KEY}`,
-            "X-Tier": "cheap",
-          },
-          body: JSON.stringify({
+        const res = await fetchRouter(
+          env,
+          "/v1/chat/completions",
+          {
             model: env.MODEL_CHEAP || "gemini3.7flash",
             messages: [
               { role: "system", content: sysPrompt },
               { role: "user", content: body.context },
             ],
             max_tokens: 600,
-            stream: false,
-          }),
-        };
-        // Service binding avoids workers.dev fetch challenges between Workers.
-        const res = env.ROUTER
-          ? await env.ROUTER.fetch(new Request(env.ROUTER_URL, init))
-          : await fetch(env.ROUTER_URL, init);
+          },
+          false
+        );
         const text = await res.text();
         let parsed: { state?: string; verb?: string } | null = null;
         try {
