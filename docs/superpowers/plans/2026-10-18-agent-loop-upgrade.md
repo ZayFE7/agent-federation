@@ -159,9 +159,20 @@ git commit -m "P0: pin agents 0.28.1, add ai SDK provider deps, make tests runna
 
 Tool pass: HTTP 200 and `choices[0].message.tool_calls[0].function.name === "echo_probe"`. Stream pass: HTTP 200, `content-type` includes `text/event-stream`, at least 3 `data:` lines arrive, and `tool_calls` deltas are reassemblable across chunks. Print one row per id: `id | tool=ok|fail | stream=ok|fail | http | note`. Print no header value and no key.
 
-- [ ] **Step 3: Run it against the candidate set**
+- [ ] **Step 3: Run the sweep**
 
-Candidates, all router-resolvable and none in a forbidden family: `gemini3.7flash`, `gemini3.8flash`, `opus5`, `opus5thinking`, `z-ai/glm-5.1`, `moonshotai/kimi-k2.6`, `deepseek-ai/deepseek-v4-pro`, `qmodel_latest`. Run `node tests/router-probe.mjs gemini3.7flash opus5 z-ai/glm-5.1 ...` from the deploy tree. Expected: at least one id passes both columns. If none does, stop and report; a model that cannot tool-call makes Phase 2 impossible and that is a decision for the user, not a workaround.
+**Layer warning, measured on 2026-10-18.** The `x-router-conn` header the next step reads is emitted only by `zay-router` (`deploy/router-worker/src/index.ts:483`, `:491`). Port 20128 answers a 3309-entry `/v1/models` and is **omniroute**, which the tunnel in `wrangler.jsonc vars.ROUTER_URL` fronts. Task 3 moves every call onto the `ROUTER` service binding, which is zay-router, and zay-router resolves ids through its own aliases, combos and connection prefixes (`:81-133`). So the sweep must be read as an upstream-capability measurement, not a production-router measurement, and a pinned id additionally has to be routable by zay-router. Verified against the live config: `gemini3.7flash` and `gemini3.8flash` are combos that resolve to the builtin gemini provider with upstream models `gemini-3.7-flash` and `gemini-3.8-flash` (the same upstream the raw probe returned), and `qmodel_latest` aliases to prefix `qd`, matches nothing, and is a 404 in production no matter what omniroute does with it. `opus5` and `opus5thinking` resolve to two `type: "anthropic"` relay connections, which the router asks for an OpenAI-shaped body without translating anything, so their sweep rows are not evidence about the production path.
+
+Run the sweep against the **local** router, not the tunnel: the tunnel rotates and is currently dead (curl cannot connect), and localhost is the same omniroute with none of that failure mode. Run from the deploy tree so the base URL comes from `.dev.vars` rather than argv, and append the output to a file so a killed run does not lose the evidence:
+
+```bash
+cd project/agent-federation
+EV=<repo-clone>/.superpowers/sdd/2026-10-18-agent-loop-upgrade/task-2-evidence.txt
+BLIP_ROUTER_URL=$(grep -E "^ROUTER_URL=" .dev.vars | cut -d= -f2-) \
+  node tests/router-probe.mjs gemini3.7flash opus5 z-ai/glm-5.1 >> "$EV" 2>&1
+```
+
+Batch 2-3 ids per command (one reasoning id can take 150s before it emits a byte), run each id once, and read the file back instead of trusting stdout already seen. Expected: at least one id passes both columns. If none does, stop and report; a model that cannot tool-call makes Phase 2 impossible and that is a decision for the user, not a workaround.
 
 - [ ] **Step 4: Write the findings**
 
