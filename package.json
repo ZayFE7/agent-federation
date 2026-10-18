@@ -5,10 +5,13 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/run-all.mjs"
   },
   "dependencies": {
-    "agents": "latest"
+    "@ai-sdk/openai-compatible": "3.0.71",
+    "agents": "0.28.1",
+    "ai": "7.0.143"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",

@@ -1,19 +1,33 @@
 #!/usr/bin/env node
 // Live smoke matrix for the deployed Blip agent.
-// Usage: node tests/live-matrix.mjs
+// Usage: point BLIP_URL at the origin you deployed, put a real key in .dev.vars,
+// then run: node tests/live-matrix.mjs
 // Reads AGENT_API_KEY from ../.dev.vars, POSTs 4 probes to the worker,
 // prints status / reply preview / tools / state / PASS-FAIL per probe.
-// Exit code 0 only when all four probes PASS.
+// Exit code 0 only when all four probes PASS, 1 on any FAIL, 2 on setup errors.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const URL_ENDPOINT = "https://agent-federation.agent-federation.workers.dev/api/message";
 const TIMEOUT_MS = 120_000;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEV_VARS = join(HERE, "..", ".dev.vars");
+
+// No default host, on purpose: with a fallback this script tests somebody
+// else's deployment instead of yours and prints PASS for work you did not ship.
+const BASE = process.env.BLIP_URL;
+if (!BASE) {
+  console.error("FATAL: BLIP_URL is not set. set BLIP_URL to the origin of the");
+  console.error("worker you deployed (scheme + host only, no path), for example:");
+  console.error('  cmd:  set BLIP_URL=<your origin> then run this file again');
+  console.error('  sh:   export BLIP_URL="<your origin>"');
+  process.exit(2);
+}
+const URL_ENDPOINT = `${BASE.replace(/\/+$/, "")}/api/message`;
+
+const PLACEHOLDER_RE = /^(generate-me|change-me|replace-me|your[-_]?key[-_]?here|todo|xxx+)$/i;
 
 function readApiKey() {
   let raw;
@@ -23,12 +37,21 @@ function readApiKey() {
     console.error(`FATAL: cannot read ${DEV_VARS}: ${err.message}`);
     process.exit(2);
   }
-  const m = raw.match(/AGENT_API_KEY=([a-f0-9]+)/);
-  if (!m) {
-    console.error(`FATAL: AGENT_API_KEY=([a-f0-9]+) not found in ${DEV_VARS}`);
-    process.exit(2);
+  for (const line of raw.split(/\r?\n/)) {
+    const m = line.match(/^AGENT_API_KEY=(.+)$/);
+    if (!m) continue;
+    const value = m[1].trim().replace(/^["']|["']$/g, "");
+    if (PLACEHOLDER_RE.test(value)) {
+      console.error(
+        `FATAL: AGENT_API_KEY in ${DEV_VARS} is still the placeholder "${value}".`
+      );
+      console.error("Set a real key there (and as a secret on the worker) and re-run.");
+      process.exit(2);
+    }
+    return value;
   }
-  return m[1];
+  console.error(`FATAL: no AGENT_API_KEY= line found in ${DEV_VARS}. Set a real key there.`);
+  process.exit(2);
 }
 
 const CASES = [
@@ -128,7 +151,7 @@ async function runCase(kase, apiKey) {
 
 const apiKey = readApiKey();
 console.log(`live-matrix -> ${URL_ENDPOINT}`);
-console.log(`key         : ${apiKey.slice(0, 4)}...${apiKey.slice(-4)} (${apiKey.length} chars)`);
+console.log(`key         : redacted (${apiKey.length} chars read from .dev.vars)`);
 console.log(`timeout     : ${TIMEOUT_MS}ms per probe\n`);
 
 let allPass = true;

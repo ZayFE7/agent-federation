@@ -24,7 +24,10 @@ cron `*/10 * * * *` (`:31-33`), whose handler only pings `RENDER_URL/health` (`s
   tabs chat/tasks/docs/ideas/tools (`:321`). Plain `fetch`, no WebSocket, no markdown renderer,
   reply text injected raw, demo placeholder strings still present (`:322`, `:330`, `:338`).
 - `pipedream/router.py` + README: abandoned predecessor router, superseded by `deploy/router-worker`.
-- `tests/live-matrix.mjs`: the only test, see `tests/README.md`.
+- `tests/`: `npm test` (`node tests/run-all.mjs`) runs the three offline `.test.mjs` files
+  (`guardrails`, `markdown`, `memory`); `tests/fake-sql.mjs` is a fixture for later store tests.
+  `tests/live-matrix.mjs` is live-only, needs `BLIP_URL` plus a real `AGENT_API_KEY`, and is not
+  run by `npm test`. See `tests/README.md`.
 
 ## HTTP surface, as read from `src/index.ts`
 
@@ -63,10 +66,11 @@ Order: `deploy/router-worker`, then `deploy/sandbox-worker` (the brain binds to 
 carries its own `wrangler.jsonc`, KV ids and secrets.
 
 ```sh
-npm install
+npm install                     # agents is pinned to 0.28.1, ai 7.0.143, @ai-sdk/openai-compatible 3.0.71
 cp .dev.vars.example .dev.vars   # pointless as-pulled: identical file, no secrets
 npm run dev                      # wrangler dev on :8787
 npm run typecheck                # tsc --noEmit, src only
+npm test                         # node tests/run-all.mjs, offline .test.mjs files only
 ```
 
 ## Structural gotchas
