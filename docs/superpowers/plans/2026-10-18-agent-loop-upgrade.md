@@ -153,7 +153,7 @@ git commit -m "P0: pin agents 0.28.1, add ai SDK provider deps, make tests runna
 
 - [ ] **Step 1: Write the probe**
 
-`tests/router-probe.mjs` reads `.dev.vars` from the deploy tree by path (`../.dev.vars` relative to the repo root, resolved with `new URL`), takes the base URL from `process.env.BLIP_ROUTER_URL` or `deploy/router-worker/inspect-router-config.mjs`'s host, and for each candidate model id from `process.argv.slice(2)` POSTs `<base>/v1/chat/completions` twice: once with a one-tool `tools` array asking the model to call `echo_probe`, once with `stream: true`.
+`tests/router-probe.mjs` reads secrets at runtime and never stores one: it resolves its own tree from `import.meta.url` (not a cwd-relative `../.dev.vars`, which silently probes nothing when the file is run from a tree without secrets) and honours `VAR_DIR` for the directory holding `.dev.vars`. It takes the base URL from `process.env.BLIP_ROUTER_URL`, falling back to `vars.ROUTER_URL` in the tree's `wrangler.jsonc`, and accepts an origin, a `/v1` prefix or the full `/v1/chat/completions` path without ever producing a doubled path. For each candidate id from `process.argv.slice(2)` it measures four phases: a non-stream one-tool call asking for `echo_probe`, the same call with `stream: true`, the tool call with `stream_options.include_only_deltas`, and a round trip that replays the model's own tool call plus a tool result and demands an answer readable only from that result. It negotiates which key the base accepts once up front, against a model id that cannot exist, so a stale key cannot produce a column of 401s that reads like a capability verdict.
 
 - [ ] **Step 2: Define what counts as a pass, in the script itself**
 
@@ -165,7 +165,11 @@ Candidates, all router-resolvable and none in a forbidden family: `gemini3.7flas
 
 - [ ] **Step 4: Write the findings**
 
-`docs/explorations/router-capability-probe.md`: the table printed, the two ids chosen, which provider served them via the `x-router-conn` response header, and the note that the router does no OpenAI/Anthropic body translation, so an id's tool-calling behavior is the upstream's, not the router's.
+`docs/explorations/router-capability-probe.md`: the table printed, the two ids chosen with the measured per-call cost behind each, and the note that the router does no OpenAI/Anthropic body translation, so an id's tool-calling behavior is the upstream's, not the router's.
+
+It must also state **which layer was measured**, because the two routers are not the same service. The probe reaches omniroute (`.dev.vars ROUTER_URL`, port 20128, a 3309-entry `/v1/models`), which is what the cloudflared tunnel in `wrangler.jsonc vars.ROUTER_URL` fronts. It does not reach `zay-router`, the Worker that Task 3 switches every call to through the `ROUTER` service binding, and `zay-router` resolves an id its own way (`deploy/router-worker/src/index.ts:81-133`) via aliases, combos and connection prefixes before forwarding. So an id that answers at omniroute can still be a 404 in production, and `x-router-conn` (`:483`, `:491`) is present only on a zay-router response: a probe row with no `x-router-conn` measured the wrong layer and must not be described as the production router's provider attribution. For each pinned id the doc records its `zay-router` resolution, in the redacted form below.
+
+Redaction, binding on this doc (the repo is public): name upstream models and provider *classes* (builtin catalog provider, openrouter fallback, an `anthropic`-type third-party relay), never a connection `label`, its `anthropic-compatible-<uuid>` provider id, or an account `prefix`. Those identify which relay accounts the user routes through, which is attack surface rather than documentation.
 
 - [ ] **Step 5: Commit the choice into config**
 
@@ -219,8 +223,9 @@ git commit -m "P0: chat and decide use the ROUTER service binding; delete the de
 ### Task 4: Make the sandbox home directory real
 
 **Files:**
-- Modify: `deploy/sandbox-worker/src/index.ts` (`/run`, `/workspace/snapshot`, restore)
-- Modify: `src/agent.ts` prompt text and the `save_workspace` description
+- Modify: `deploy/sandbox-worker/src/index.ts` (the `/run` call at `:135`, the restore command at `:55`, the snapshot command at `:109`)
+- Modify: `src/agent.ts` prompt text and the `save_workspace` description (`/workspace` appears at `:607`, `:614`, `:667`, `:834`)
+- Create: `src/capabilities.ts`
 - Create: `tests/paths.test.mjs`
 
 **Interfaces:**
@@ -228,7 +233,11 @@ git commit -m "P0: chat and decide use the ROUTER service binding; delete the de
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/paths.test.mjs` reads `src/agent.ts`, `src/capabilities.ts`, and `deploy/sandbox-worker/src/index.ts` as text and asserts: the count of `/workspace` occurrences in `src/agent.ts` is 0; `SANDBOX_HOME` is exported and equals `"/home/user"`; and every `tar` command string in the sandbox worker targets `SANDBOX_HOME` or `${SANDBOX_HOME}` rather than a literal `/workspace`.
+`tests/paths.test.mjs` reads `src/agent.ts`, `src/capabilities.ts`, and `deploy/sandbox-worker/src/index.ts` as text and asserts: `src/agent.ts` contains no `/workspace` occurrence that is not inside the literal `zay-sandbox/workspace/snapshot`; `SANDBOX_HOME` is exported from `src/capabilities.ts` and equals `"/home/user"`; the sandbox worker declares its own `const SANDBOX_HOME` with the identical value; and every `tar` command string in the sandbox worker interpolates `SANDBOX_HOME` rather than a literal `/workspace`.
+
+**Why the route keeps its name.** Of the four `/workspace` mentions in `src/agent.ts`, three (`:607`, `:614`, `:667`) promise a filesystem directory that does not exist, which is the bug this task fixes. The fourth (`:834`) is the path half of `https://zay-sandbox/workspace/snapshot`, an endpoint name on the private service binding to the sandbox worker, matched by `url.pathname === "/workspace/snapshot"` there. Renaming it would move a wire contract for no user benefit, and Task 30 owns that endpoint's future. So the assertion is written as an exception, not as a zero count: a test that demanded zero occurrences could only pass by breaking the fetch or the route.
+
+**Why the sandbox worker declares its own const.** `deploy/sandbox-worker/` is a separate Worker with its own `wrangler.jsonc` and `package.json`, and the root `tsconfig.json` has `"include": ["src"]`, so it cannot import `src/capabilities.ts`. The two declarations are kept honest by this text test rather than by a shared import.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -236,11 +245,11 @@ Run `tests/paths.test.mjs` with node. Expected: a failing assertion naming the `
 
 - [ ] **Step 3: Fix the sandbox worker**
 
-Add `cwd: SANDBOX_HOME` to the `sbx.commands.run(cmd, ...)` call for `/run`. Change the snapshot command to `cd /home/user && tar czf - .` and the restore to extract into `/home/user`. Drop the `mkdir -p /workspace`. Keep the `python` to `python3` alias step.
+Declare `const SANDBOX_HOME = "/home/user"` at the top of `deploy/sandbox-worker/src/index.ts`. Add `cwd: SANDBOX_HOME` to the `sbx.commands.run(cmd, ...)` call for `/run`. Change the snapshot command to interpolate `SANDBOX_HOME` for both the `cd` and the extract target, and do the same for the restore. Drop the `mkdir -p /workspace`. Keep the `python` to `python3` alias step. The `url.pathname === "/workspace/snapshot"` match stays exactly as it is: it is an endpoint name, not a directory.
 
 - [ ] **Step 4: Fix the prompt and the tool description**
 
-Replace the four `/workspace` mentions in `src/agent.ts` with the home path, and say plainly that the directory is snapshotted at the end of a turn (Phase 4 makes that true; until then the description says "on request" rather than promising automation).
+Replace the three `/workspace` mentions that describe a directory (`:607`, `:614`, `:667`) with the home path, and say plainly that the directory is snapshotted at the end of a turn (Phase 4 makes that true; until then the description says "on request" rather than promising automation). Do not touch `:834`.
 
 - [ ] **Step 5: Run the test and typecheck**
 
