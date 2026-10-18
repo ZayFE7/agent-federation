@@ -4,6 +4,14 @@ Nine read-only analysts, one per subsystem, explored the codebase (and the relev
 official docs) and wrote a report next to this file. None of them edited source.
 This README is the index and the prioritized plan.
 
+**Superseded in part on 2026-10-18.** The streaming, tools, prompts-memory, e2b-sandbox and
+cron items below were re-examined against the installed `agents@0.28.1` type definitions, and
+the conclusion changed: most of these gaps are SDK primitives BLIP never wired up, not things
+to hand-build. The current plan is
+[`docs/superpowers/specs/2026-10-18-agent-loop-upgrade-design.md`](../superpowers/specs/2026-10-18-agent-loop-upgrade-design.md).
+Read that first; treat the P0/P1 lists below as still-accurate diagnosis but not as the build
+order.
+
 Verification key: **[V]** = I (the controller) independently confirmed the finding by
 reading the actual code or the installed SDK. **[2+]** = two or more agents flagged it
 independently. **[1]** = single-source, plausible, verify before acting.
@@ -21,6 +29,7 @@ independently. **[1]** = single-source, plausible, verify before acting.
 | [router-models.md](router-models.md) | LLM router | The 530 is transport (rotating quick tunnel); `aggregateSSE` drops `tool_calls`. |
 | [web-search.md](web-search.md) | Web search | Paid provider advertised as free; over-fetches 10 results, shows 5; defaults to the priciest mode. |
 | [ui-ux.md](ui-ux.md) | Console UI | Chat history is browser-RAM only; the API key sits in localStorage; Docs/Ideas are placeholders. |
+| [live-test-report.md](live-test-report.md) | Live prod e2e test | Every tool exercised against the deployed worker. Confirms the P0 fixes are live; finds the real blockers: quick-tunnel timeouts, /api/decide dead (model not routable on zay-router), save_workspace broken (/workspace permission denied), streaming absent. |
 
 ## P0, do first: tiny fixes, big blast radius
 
