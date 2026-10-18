@@ -49,20 +49,28 @@ New files (all under `repo-clone/`):
 | `src/frames.ts` | Pure. Harness events and AI SDK `UIMessageChunk`s in, `StreamFrame`s out. No I/O, no SDK side effects. |
 | `src/approval.ts` | Pure. `needsApproval(toolName, input)`; the one caller of `isRisky`. |
 | `src/registry-store.ts` | Pure SQL over a `SqlHandle`: the session index schema and its CRUD. Mirrors `src/memory.ts`. |
-| `src/auth.ts` | `safeEq`, `tokenOk`, `authed`, `vaultAuthed`. Extracted from `src/index.ts` so an offline test can load it: that file imports the SDK and cannot. |
+| `src/auth.ts` | `safeEq`, `authed` (Task 7), `tokenOk` (Task 22), `vaultAuthed` (Task 35). Moved out of `src/index.ts` so an offline test can load it: that file imports the SDK and cannot. |
+| `src/routes.ts` | Worker-side HTTP: session CRUD, submit-and-return, the SSE proxy. Dependency-free (types plus `./auth`), for the same reason as `src/auth.ts`. Task 7. |
 | `src/directives.ts` | Pure `parseDirective(text)`: the `run:` and `search:` prefix grammar, one definition. |
 | `src/reply.ts` | Pure projection from a harness transcript onto the compat `AgentReply` shape. |
 | `src/harness-config.ts` | Pure. Builds the `ThinkHarnessOptions` object. Separate from `src/harness.ts` because that one constructs the class and cannot load under plain Node. |
 | `src/titles.ts` | Pure. The auto-title prompt, and `parseTitle` that sanitizes model output. |
+| `src/registry.ts` | `class RegistryAgent extends Agent<Env>`: the session index DO. Task 6. |
 | `src/capabilities.ts` | Pure. The single capability table, rendered to text for prompt, API, and UI. Also owns `SANDBOX_HOME` and `EXPECTED_TOOLS`. |
 | `src/tools.ts` | The AI SDK `tool()` set: `exec`, `web_search`, `schedule_task`, `save_workspace`, `delegate`. Descriptions and zod schemas only; behavior calls into the agent. |
 | `src/harness.ts` | `buildHarness(options)`: one `ThinkHarness` wired with model, tools, hooks, approval, compaction, `maxSteps`. |
-| `src/session-scope.ts` | Pure given `env`: `assertSessionScope(ctx, env, sessionId)`. |
+| `src/stream-hub.ts` | `class StreamHub`: writes `StreamFrame`s to an injected `StreamPort`, one terminal frame per stream. Task 19. |
+| `src/session-scope.ts` | Pure: `assertSessionScope(ctx, idFromName, sessionId)`, the DO's own check that a session belongs to it. Task 8. |
+| `src/workspace-keys.ts` | Pure R2 key naming for per-session workspaces, with the traversal guard. Task 26. |
+| `src/child.ts` | `class Researcher extends Agent<Env>`: a dynamic-agent facet with a bounded tool set and no `delegate`. Task 31. |
 | `tests/run-all.mjs` | Spawns every `tests/*.test.mjs`, reports the count, exits non-zero on any failure. |
 | `tests/fake-sql.mjs` | In-memory `SqlHandle` fake for the pure-store tests. |
 | `tests/router-probe.mjs` | Live probe that decides which router model ids are usable for tool calling and streaming. |
 | `tests/live-stream.mjs` | Live check that a turn streams: first-token latency, frame types seen. |
-| `deploy/sandbox-worker/r2.ts` | R2-backed snapshot and restore for the sandbox worker. |
+| `tests/no-drift.test.mjs` | Fails if `ui/index.html` carries capability prose that `src/capabilities.ts` does not back. Task 29. |
+| `deploy/sandbox-worker/workspace.ts` | R2-backed snapshot and restore behind injected `SandboxPort`/`R2Port`. Task 27. |
+| `deploy/sandbox-worker/pool.ts` | `MAX_LIVE_SANDBOXES` and `pickEviction`. Task 28. |
+| `docs/explorations/router-capability-probe.md` | The probe's findings, committed with the model ids it chose. Task 2. |
 
 Modified files:
 
@@ -71,7 +79,7 @@ Modified files:
 | `package.json` | Pin `agents`, add `ai` + `@ai-sdk/openai-compatible`, add `test` script. |
 | `src/types.ts` | `WORKSPACE_R2`, `REGISTRY` DO namespace, model-id fields, remove the dead `ChatTier` tier claim. |
 | `src/agent.ts` | Loses the 4-round loop, `plan`/`plan_done`, the blocking self-critique call, `recentMessages(sql, 6)`, and the `sessionId: "agent"` hardcode. Gains the harness install and the session-scoped methods. |
-| `src/index.ts` | Session routes, submit-and-return message route, SSE proxy route, `?token=` auth, vault auth through `safeEq`, `/api/plan` removed, `/api/message` kept as an alias until Task 26. |
+| `src/index.ts` | Thin: authenticates, delegates every `/api/*` to `src/routes.ts`, serves assets. `/api/plan` removed, `/api/message` kept as an alias until Task 25. |
 | `src/memory.ts` | Keeps `memories` and `tasks`; `messages` table reads/writes deleted. |
 | `ui/index.html` | Session list, `EventSource` client, incremental append, live tool widgets, stop button. Design untouched. |
 | `deploy/sandbox-worker/src/index.ts` | `/home/user` cwd, R2 snapshot/restore, per-session sandboxes, idle GC. |
@@ -177,7 +185,7 @@ git commit -m "P0: probe the router for tool-calling and streaming, pin usable m
 
 **Interfaces:**
 - Consumes: `Env.ROUTER?: Fetcher`, `Env.ROUTER_URL: string`, `Env.ROUTER_KEY: string`.
-- Produces: `routerUrl(env: Env, path: string): string`, `routerRequest(env: Env, path: string, body: unknown, stream: boolean): Request`, `async fetchRouter(env: Env, path: string, body: unknown, stream: boolean): Promise<Response>`. `src/provider.ts` in Task 12 reuses `routerUrl`.
+- Produces: `routerUrl(env: Env, path: string): string`, `routerRequest(env: Env, path: string, body: unknown, stream: boolean): Request`, `async fetchRouter(env: Env, path: string, body: unknown, stream: boolean): Promise<Response>`. `src/provider.ts` in Task 11 reuses `routerUrl`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -323,20 +331,22 @@ git commit -m "P1: registry DO holds the session index"
 ### Task 7: Session-scoped addressing in the worker
 
 **Files:**
+- Create: `src/routes.ts`, `src/auth.ts`, `tests/routes.test.mjs`
 - Modify: `src/index.ts`, `src/types.ts`
-- Create: `tests/routes.test.mjs`
 
 **Interfaces:**
 - Consumes: `RegistryAgent` RPC, `FederationAgent` stub RPC.
-- Produces: `agentStubFor(env: Env, sessionId: string): unknown` in `src/index.ts`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`. Route responses: list `{ok: true, sessions: SessionRow[]}`; create `{ok: true, session: SessionRow}`; rename and delete `{ok: boolean}`; messages `{ok: true, messages: UIMessage[]}`. Every one of them 401s when `authed()` fails and 400s on a malformed body.
+- Produces: `src/auth.ts` with `safeEq(a: string, b: string): boolean` and `authed(request: Request, env: Env): boolean`, moved out of `src/index.ts` (Task 22 later adds `tokenOk` to this same file; Task 35 adds `vaultAuthed`). `src/routes.ts` with `handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and `agentStubFor(env: Env, sessionId: string): AgentStub`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`. Route responses: list `{ok: true, sessions: SessionRow[]}`; create `{ok: true, session: SessionRow}`; rename and delete `{ok: boolean}`; messages `{ok: true, messages: UIMessage[]}`. Every one of them 401s when `authed()` fails and 400s on a malformed body.
+
+**Why `src/routes.ts` is its own file.** `src/index.ts:1` value-imports `./agent`, and `src/agent.ts` value-imports `agents`, which pulls in `cloudflare:workers`. Node cannot resolve that, so no offline test can import `src/index.ts` or anything under `src/agent.ts`. `src/routes.ts` must therefore import nothing but types (`import type { Env } from "./types"`) plus `./auth`, and take the DO namespaces from the `env` argument rather than importing the classes.
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/routes.test.mjs` imports the default export of `src/index.ts`? No: it imports a newly extracted `handleFetch(request, env)` from `src/index.ts` which the test calls with a fake env whose `FEDERATION_AGENT.get()` and `REGISTRY.get()` return recorded stubs. Assert: `POST /api/sessions` with no auth is 401; with `Authorization: Bearer k` and `AGENT_API_KEY: "k"` it calls `registry.put` and returns 200 with a session id of 26 chars; `GET /api/sessions` returns the registry's list; `PATCH /api/sessions/abc` with body `{title:"New"}` calls `rename("abc","New")`; `DELETE` calls `remove`; a path with an unknown shape 404s; and with `AGENT_API_KEY: ""` every route 401s.
+`tests/routes.test.mjs` imports `handleFetch` from `src/routes.ts` and calls it with a fake env whose `FEDERATION_AGENT.get()` and `REGISTRY.get()` return recorded stubs. Assert: `POST /api/sessions` with no auth is 401; with `Authorization: Bearer k` and `AGENT_API_KEY: "k"` it calls `registry.put` and returns 200 with a session id of 26 chars; `GET /api/sessions` returns the registry's list; `PATCH /api/sessions/abc` with body `{title:"New"}` calls `rename("abc","New")`; `DELETE` calls `remove`; a path with an unknown shape 404s; and with `AGENT_API_KEY: ""` every route 401s. Add the import-guard assertion from the Global Constraints: the test asserts `src/routes.ts` source contains no non-type `import` of `./agent` or `agents`.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
-`node tests/routes.test.mjs`. Expected: no exported `handleFetch`.
+`node tests/routes.test.mjs`. Expected: `Cannot find module` for `src/routes.ts` (or, if the file is created empty, "no exported handleFetch").
 
 - [ ] **Step 3: Implement**
 
@@ -347,7 +357,7 @@ Extract the body of the worker's `fetch` into `export async function handleFetch
 `node tests/routes.test.mjs` exits 0, then `npm test` exits 0.
 
 ```bash
-git add src/index.ts src/types.ts tests/routes.test.mjs
+git add src/routes.ts src/auth.ts src/index.ts src/types.ts tests/routes.test.mjs
 git commit -m "P1: per-session DO routing and session CRUD routes; main survives as a session"
 ```
 
@@ -778,7 +788,9 @@ git commit -m "P3: frame protocol mapping harness events onto the existing widge
 
 - [ ] **Step 3: Implement, then inject the real capability**
 
-`constructor(private port: StreamPort, private sql: SqlHandle)` in `src/stream-hub.ts`. In `src/agent.ts`: `const streams = new Streams({ maxChunkBytes: 64 * 1024 }); this.lifecycle.use(streams); this.hub = new StreamHub(streams, this.db());`. Think owns an internal `Streams` for its own in-flight replay, so this second instance is deliberate and needs a comment saying why: without it, a reader "simplifies" it away and reintroduces the duplicate capability id that `Lifecycle.use` refuses.
+`constructor(private port: StreamPort, private sql: SqlHandle)` in `src/stream-hub.ts`. In `src/agent.ts`: `const streams = new Streams({ maxChunkBytes: 64 * 1024 }); this.lifecycle.use(streams); this.hub = new StreamHub(streams, this.db());`.
+
+Why a second `Streams` instance is correct, not a mistake (verified in `agents@0.28.1`, put this in the code comment): `ThinkHarness` keeps its own `Streams` in a **private field** (`harness/think/index.js:841`, `_classPrivateFieldInitSpec(this, _streams, new Streams({...}))`) and binds it directly in `onStart()` (`:860`); it never passes it to `Lifecycle.use`, so there is no duplicate capability id to collide with. `sseResponse` needs a `Streams` it can be handed, and the harness's is unreachable, so we construct our own. Both instances read and write the **same two tables**, `cf_agents_streams` and `cf_agents_stream_blocks` (`streams-lsHMJhRW.js:694,712`; the names are fixed and not configurable), which is what makes one DO's storage visible to both. Id namespaces do not collide: the harness uses `` `think:${crypto.randomUUID()}` `` (`harness/think/index.js:1457`) and we use `s:<sessionId>:<operationId>` from `streamIdFor`.
 
 - [ ] **Step 4: Wire the mirror**
 
@@ -844,13 +856,12 @@ git commit -m "P3: every tool reports live progress"
 ### Task 22: Serve SSE from the DO, authenticated by query token
 
 **Files:**
-- Create: `src/auth.ts`
-- Modify: `src/index.ts`, `src/agent.ts`
+- Modify: `src/auth.ts` (created in Task 7), `src/routes.ts` (Task 7), `src/agent.ts`, `src/index.ts`
 - Create: `tests/sse-auth.test.mjs`
 
 **Interfaces:**
-- Consumes: `sseResponse(streams, streamId, { request, heartbeatMs })`, `StreamHub`.
-- Produces: `tokenOk(request: Request, url: URL, env: Env): boolean` in `src/auth.ts`, which also becomes the home of `safeEq` and `authed` moved out of `src/index.ts`: `src/index.ts` imports the SDK through `./agent`, so an offline test can only reach these helpers from a module that imports nothing. Worker route `GET /api/sessions/:id/stream/:streamId` proxies to the owning DO stub; DO internal route `GET /internal/stream/:streamId`.
+- Consumes: `sseResponse(streams, streamId, { request, heartbeatMs })`, `StreamHub`, `safeEq` and `authed` from `src/auth.ts` (Task 7).
+- Produces: `tokenOk(request: Request, url: URL, env: Env): boolean` added to `src/auth.ts`, the module that already holds `safeEq` and `authed` for exactly this reason: `src/index.ts` imports the SDK through `./agent`, so an offline test can only reach these helpers from a module that imports nothing. Route handlers `sessionStreamProxy(request, env, sessionId, streamId)` in `src/routes.ts` (worker side, proxies to the owning DO stub) and `internalStream(request, streamId)` on the DO (serves `sseResponse`). The worker route is `GET /api/sessions/:id/stream/:streamId`; the DO internal route is `GET /internal/stream/:streamId`, and it verifies scope with Task 8's `assertSessionScope`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -869,7 +880,7 @@ Reuse the WS upgrade gate's shape at `src/index.ts:64-72` as precedent. `sseResp
 Deploy, submit a turn, then `curl -N "<base>/api/sessions/<id>/stream/<streamId>?token=<key>"` and confirm `data:` frames arrive incrementally over seconds rather than all at once, that a wrong token 401s, and that `Last-Event-ID` on reconnect resumes mid-stream. Paste the frame count, not a claim.
 
 ```bash
-git add src/index.ts src/agent.ts tests/sse-auth.test.mjs
+git add src/auth.ts src/routes.ts src/index.ts src/agent.ts tests/sse-auth.test.mjs
 git commit -m "P3: SSE served from the owning DO with fail-closed query-token auth"
 ```
 
@@ -1245,7 +1256,7 @@ git commit -m "P5: guardrails catch interpreter, decoded, staged, and exfil bypa
 - Modify: `src/index.ts`, `src/auth.ts`
 
 **Interfaces:**
-- Consumes: `safeEq` already in `src/auth.ts` from Task 22.
+- Consumes: `safeEq` already in `src/auth.ts` from Task 7.
 - Produces: `vaultAuthed(request: Request, env: Env): boolean` in `src/auth.ts` beside `tokenOk`, using `safeEq` on the bearer token against a trimmed `STATE_KEY`, false when the key is unset or whitespace.
 
 - [ ] **Step 1: Write the test**
