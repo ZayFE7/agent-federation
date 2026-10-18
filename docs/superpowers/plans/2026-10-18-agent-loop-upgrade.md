@@ -193,7 +193,16 @@ git commit -m "P0: probe the router for tool-calling and streaming, pin usable m
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/router.test.mjs` imports `../src/router.ts` and asserts, with a fake env: `routerUrl({ROUTER_URL: "https://h.example/base/"}, "/v1/chat/completions") === "https://h.example/base/v1/chat/completions"`; `routerRequest(env, "/v1/chat/completions", {model: "m"}, true).headers.get("authorization") === "Bearer test-key"`; `content-type` is `application/json`; the parsed body has `stream: true`; and the header map contains no key whose lowercase name is `x-tier`. Use `node:assert/strict`.
+`tests/router.test.mjs` imports `../src/router.ts` and asserts, with a fake env: `routerUrl` maps **every shape `ROUTER_URL` actually takes** to exactly one `/v1/chat/completions`, and the full-endpoint row is the one that matters because it is what is configured today:
+
+- `routerUrl({ROUTER_URL: "https://h.example/v1/chat/completions"}, "/v1/chat/completions") === "https://h.example/v1/chat/completions"`
+- `routerUrl({ROUTER_URL: "https://h.example/base/"}, "/v1/chat/completions") === "https://h.example/base/v1/chat/completions"`
+- `routerUrl({ROUTER_URL: "https://h.example/v1"}, "/v1/chat/completions") === "https://h.example/v1/chat/completions"`
+- `routerUrl({ROUTER_URL: "https://h.example"}, "/v1/chat/completions") === "https://h.example/v1/chat/completions"`
+
+`ROUTER_URL` is configured as a complete endpoint, not an origin: `.dev.vars` holds `http://127.0.0.1:20128/v1/chat/completions`, and the three existing call sites already use the value verbatim as the request URL (`src/agent.ts:725`, `src/agent.ts:995`, `src/index.ts:175-176`). A `routerUrl` that appends without checking therefore produces `.../v1/chat/completions/v1/chat/completions` and 404s on every call in both trees, while a test that only seeded a base URL would pass and never notice. Strip a trailing `/v1/chat/completions` or `/chat/completions` before appending, keep any path prefix the host carries, and assert the function is idempotent: `routerUrl(env, p)` applied to its own output changes nothing.
+
+Then with a fake env: `routerRequest(env, "/v1/chat/completions", {model: "m"}, true).headers.get("authorization") === "Bearer test-key"`; `content-type` is `application/json`; the parsed body has `stream: true`; and the header map contains no key whose lowercase name is `x-tier`. Use `node:assert/strict`.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -201,7 +210,7 @@ Run `node tests/router.test.mjs`. Expected: `Cannot find module ... src/router.t
 
 - [ ] **Step 3: Implement `src/router.ts`**
 
-Three exported functions plus `fetchRouter`, which is `env.ROUTER ? env.ROUTER.fetch(request) : fetch(request)`. Dependency-free: it must import only `./types.ts` types, so the test can load the `.ts` directly. Set no `X-Tier` header anywhere in this file, by construction.
+Three exported functions plus `fetchRouter`, which is `env.ROUTER ? env.ROUTER.fetch(request) : fetch(request)`. Dependency-free: it must import only `./types.ts` types, so the test can load the `.ts` directly. Set no `X-Tier` header anywhere in this file, by construction. `Env.ROUTER?: Fetcher` is already declared at `src/types.ts:68` and the `ROUTER` service binding to `zay-router` is already in `wrangler.jsonc:11-12`, so neither needs adding; changing no `wrangler.jsonc` value in this task means the two trees stay as they are.
 
 - [ ] **Step 4: Re-run the test**
 
