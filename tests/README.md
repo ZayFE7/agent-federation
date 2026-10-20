@@ -1,6 +1,6 @@
 # tests/
 
-Twenty entries live here, this README included. Twelve are offline, framework-free, and run by
+Twenty-one entries live here, this README included. Thirteen are offline, framework-free, and run by
 `npm test`:
 `guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
 the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
@@ -21,7 +21,10 @@ the worker's HTTP surface), `session-scope.test.mjs` (a test of `src/session-sco
 one copy of the session-id shape and of the guard the DO runs on itself, and since the fix
 round the single home of `MAIN_DO_NAME`, the name three files used to spell), `sql-handle.test.mjs` (a
 test of `src/sql-handle.ts`, the one exec adapter both Durable Objects build their `db()`
-from, against a real `node:sqlite` database), and `fake-sql.test.mjs` (a contract test for the
+from, against a real `node:sqlite` database), `titles.test.mjs` (a test of `src/titles.ts`, the
+title parser that cuts at 40 codepoints rather than UTF-16 units, strips wrapping quotes,
+accepts the JSON object form the cheap model often returns, and falls back deterministically),
+and `fake-sql.test.mjs` (a contract test for the
 shared fixture). The harness is
 `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
 pure-store tests, contract-tested by `fake-sql.test.mjs`). Live-only, never run by
@@ -109,9 +112,9 @@ i.e. dead code. That was wrong; the code wins.)
   the cron handler, or the DO memory, task, plan, and pending-action schemas (the `sessions`
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the approve/hold flow around it is not.
-- `npm test` runs twelve offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
-  `registry`, `registry-input`, `registry-store`, `router`, `routes`, `session-scope`,
-  `sql-handle`). No offline
+- `npm test` runs thirteen offline files (`fake-sql`, `guardrails`, `markdown`, `memory`,
+  `paths`, `registry`, `registry-input`, `registry-store`, `router`, `routes`, `session-scope`,
+  `sql-handle`, `titles`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
 - `routes.test.mjs` covers the six worker-side session routes: `GET /api/sessions?limit=N`,
