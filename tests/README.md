@@ -1,6 +1,7 @@
 # tests/
 
-Nineteen files live here. Eleven are offline, framework-free, and run by `npm test`:
+Nineteen entries live here, this README included. Eleven are offline, framework-free, and run by
+`npm test`:
 `guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
 the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
 `src/memory.ts` and drives the real recall + task functions against a live `node:sqlite`
@@ -97,7 +98,7 @@ i.e. dead code. That was wrong; the code wins.)
 
 ## Coverage gaps worth knowing
 
-- `npm run typecheck` covers `src` only (`../tsconfig.json:14` is `include: ["src"]`), and
+- `npm run typecheck` covers `src` only (`../tsconfig.json:15` is `include: ["src"]`), and
   `deploy/sandbox-worker` and `deploy/telegram-bridge` have no `tsconfig.json` at all, so
   `deploy/**` is never typechecked (except `deploy/router-worker`, which has its own). It also
   never typechecks `tests/**`, so the `.mjs` files here are only ever exercised by running them.
@@ -200,7 +201,7 @@ The first offline test that reaches the worker's HTTP surface. It imports the re
 `env`: a fake registry DO stub that records `list`/`put`/`rename`/`remove`/`touch` in call
 order, and a fake `FEDERATION_AGENT` namespace whose stub answers `chat` and `messages` from a
 fixture table and records the exact arity each call used. No browser, no dev server and no
-Durable Object. 34 checks cover the six routes: the `{ ok, sessions, truncated }` list and its
+Durable Object. The checks cover the six routes: the `{ ok, sessions, truncated }` list and its
 `limit` clamp, the created row, the rename title rule, the delete, the transcript read from the
 addressed session, and the reply passthrough with `touch(id)` and no opts, plus the 401, 400 and
 404 paths. Two rules that nothing else can test are pinned in the same file: R39, a source scan
@@ -211,5 +212,8 @@ and the six `/internal/vault/*` routes while delegating only the `/api/sessions`
 
 What it cannot prove: every agent-side answer here is a stub, so nothing about the Durable
 Object's own behaviour is established, and the file never opens `project/agent-federation`, so
-it cannot see deploy-tree drift. Silent on success (exit 0), prints every failure and exits 1
-otherwise.
+it cannot see deploy-tree drift. It also cannot prove the ordering `src/index.ts` now relies on:
+every request it builds has no `Upgrade` header, so a WebSocket upgrade aimed at
+`/api/sessions/:id/messages` is answered by the upgrade gate and forwarded to the **main** DO,
+not the addressed session. That is deliberate (the delegation sits below the gate on purpose) and
+untested. Silent on success (exit 0), prints every failure and exits 1 otherwise.
