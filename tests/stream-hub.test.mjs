@@ -50,6 +50,24 @@ function fakePort() {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const sql = { exec: () => ({ results: [] }) };
 
+function stateSql() {
+  const terminal = new Set();
+  return {
+    exec(query, ...bindings) {
+      const text = query.trimStart();
+      if (text.startsWith("CREATE TABLE")) return { results: [] };
+      if (text.startsWith("SELECT terminal")) {
+        return { results: terminal.has(bindings[0]) ? [{ terminal: 1 }] : [] };
+      }
+      if (text.startsWith("INSERT INTO stream_state")) {
+        terminal.add(bindings[0]);
+        return { results: [] };
+      }
+      return { results: [] };
+    },
+  };
+}
+
 await check("streamIdFor is the one namespace this build owns", () => {
   assert.equal(streamIdFor("abc", "op1"), "s:abc:op1");
 });
@@ -122,6 +140,48 @@ await check("finish writes the done frame and then closes, once", async () => {
   assert.deepEqual(fake.appends.at(-1).chunk, { t: "done", reply: "the reply" });
   assert.equal(fake.appends.filter((entry) => entry.chunk.t === "done").length, 1);
   assert.equal(fake.closes.length, 1);
+});
+
+await check("close settles the id and a second close is a no-op", async () => {
+  const fake = fakePort();
+  const hub = new StreamHub(fake.port, sql);
+  await hub.open("s:abc:op1", "abc");
+  assert.equal(hub.close("s:abc:op1"), true);
+  assert.equal(hub.settled("s:abc:op1"), true);
+  assert.equal(hub.close("s:abc:op1"), false);
+  assert.equal(fake.closes.length, 1);
+});
+
+await check("fail settles the id and close cannot run afterwards", async () => {
+  const fake = fakePort();
+  const hub = new StreamHub(fake.port, sql);
+  await hub.open("s:abc:op1", "abc");
+  assert.equal(hub.fail("s:abc:op1", "boom"), true);
+  assert.equal(hub.settled("s:abc:op1"), true);
+  assert.equal(hub.close("s:abc:op1"), false);
+  assert.equal(fake.closes.length, 0);
+});
+
+await check("a fresh hub over the same storage refuses a second terminal frame", async () => {
+  const state = stateSql();
+  const first = fakePort();
+  const hub = new StreamHub(first.port, state);
+  await hub.open("s:abc:op1", "abc");
+  hub.finish("s:abc:op1", "abc", "the reply");
+  assert.equal(first.appends.filter((entry) => entry.chunk.t === "done").length, 1);
+
+  // Simulated eviction: same DO storage, no in-memory writer, no terminal set.
+  const second = fakePort();
+  const restarted = new StreamHub(second.port, state);
+  assert.equal(restarted.settled("s:abc:op1"), true);
+  assert.equal(restarted.write("s:abc:op1", { t: "done", reply: "again" }), false);
+  restarted.finish("s:abc:op1", "abc", "again");
+  restarted.fail("s:abc:op1", "again");
+  await tick();
+  assert.equal(second.opened.length, 0, "a settled stream must not reopen after eviction");
+  assert.deepEqual(second.appends, []);
+  assert.deepEqual(second.closes, []);
+  assert.deepEqual(second.errors, []);
 });
 
 await check("the hub exposes the port it was given", () => {
