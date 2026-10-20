@@ -39,6 +39,14 @@
 export const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 /**
+ * The one definition of the name that owns the global memory store and the
+ * scheduler tick (R45, R46). It is also legacy session `main`, because a session
+ * id IS the DO name (R38), so three files used to spell the same literal: this
+ * module is the only place that may.
+ */
+export const MAIN_DO_NAME = "main";
+
+/**
  * The one copy of the rule (Task 23 imports this instead of restating the regex,
  * R38). Anything else, including an empty string, is not a session id.
  */

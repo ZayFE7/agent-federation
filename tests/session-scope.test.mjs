@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+  MAIN_DO_NAME,
   SESSION_ID_RE,
   ScopeError,
   assertSessionScope,
@@ -76,6 +77,27 @@ check("SESSION_ID_RE is the one definition of a session id (R38)", () => {
     "a generated 26-hex id must pass, or every create is followed by a 400"
   );
   assert.equal(isSessionId("s:main"), false, "the deleted prefix must not be reachable (R38)");
+});
+
+// The name that owns global memory and the scheduler tick (R45, R46) lives HERE, next to
+// the rule that makes it a session id, because src/agent.ts, src/registry.ts and
+// src/index.ts all address the same DO. A literal in a second file is the drift.
+check("MAIN_DO_NAME is the one spelling of the name the guards and the seed share", () => {
+  assert.equal(MAIN_DO_NAME, "main", "R38: the legacy DO name is a bare session id");
+  assert.equal(isSessionId(MAIN_DO_NAME), true, "main must pass the shape rule with no special case");
+  for (const file of ["agent.ts", "registry.ts", "index.ts"]) {
+    const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
+    assert.match(
+      source,
+      /MAIN_DO_NAME/,
+      `${file} must import MAIN_DO_NAME rather than define or spell its own copy`
+    );
+    assert.equal(
+      /const (MAIN_DO_NAME|LEGACY_SESSION_ID) = "main"/.test(source),
+      false,
+      `${file} redefines the main name locally`
+    );
+  }
 });
 
 // --------------------------------------------------------- sessionScopeOk ----

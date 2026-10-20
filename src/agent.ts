@@ -36,7 +36,7 @@ import {
   type TaskRow,
 } from "./memory";
 import { toSqlHandle, type SqlTag } from "./sql-handle";
-import { sessionScopeOk } from "./session-scope";
+import { MAIN_DO_NAME, sessionScopeOk } from "./session-scope";
 import {
   ensureVaultSchema,
   vaultDelete as vaultDeleteChunks,
@@ -46,13 +46,6 @@ import {
 } from "./vault";
 import { isRisky } from "./guardrails";
 import { fetchRouter } from "./router";
-
-/**
- * The DO name of the instance that owns the global memory store and the scheduler
- * tick (R45, R46). It is also legacy session `main`: a session id IS the DO name
- * (R38), and src/index.ts has always addressed the agent as `idFromName("main")`.
- */
-const MAIN_DO_NAME = "main";
 
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
@@ -214,12 +207,23 @@ export class FederationAgent extends Agent<Env> {
    * `this.ctx` and `this.env` are the protected members the Agents SDK's
    * `DurableObject` base gives every subclass; neither is a field invented here.
    */
+  /**
+   * This class's own namespace, addressed by DO name. One dereference, so the
+   * guard in `chat` and `isMainInstance` cannot drift apart (R77: `this.env` is
+   * the SDK's real accessor, not a field invented here).
+   */
+  private idFor(name: string) {
+    return this.env.FEDERATION_AGENT.idFromName(name);
+  }
+
+  /**
+   * True when this instance IS the `main` DO, which is the only holder of the
+   * global memory store (R45) and of the scheduler tick (R46). The predicate is the
+   * same one the session guard uses, with `MAIN_DO_NAME` as the claimed session, so
+   * there is no second copy of "does this DO own that id".
+   */
   private isMainInstance(): boolean {
-    return sessionScopeOk(
-      this.ctx,
-      (name) => this.env.FEDERATION_AGENT.idFromName(name),
-      MAIN_DO_NAME
-    );
+    return sessionScopeOk(this.ctx, (name) => this.idFor(name), MAIN_DO_NAME);
   }
 
   /**
@@ -228,9 +232,7 @@ export class FederationAgent extends Agent<Env> {
    * is an RPC to the instance that holds it (R45).
    */
   private mainStub(): FederationAgent {
-    const stub = this.env.FEDERATION_AGENT.get(
-      this.env.FEDERATION_AGENT.idFromName(MAIN_DO_NAME)
-    );
+    const stub = this.env.FEDERATION_AGENT.get(this.idFor(MAIN_DO_NAME));
     // Cast avoids depending on version-specific DurableObjectNamespace generics; the
     // stub's methods are this class's RPC surface.
     return stub as unknown as FederationAgent;
@@ -245,8 +247,11 @@ export class FederationAgent extends Agent<Env> {
    * `DEFAULT_PERSONA`, the first `CAPABILITIES` bullet and the capability answer below
    * ("remember you across sessions") false in the same deploy.
    *
-   * Best-effort like every other memory write here: a failed hop is recorded locally
-   * and never costs the turn the answer it belongs to.
+   * Best-effort like every other memory write here: a failed hop is logged and never
+   * costs the turn the answer it belongs to. It does NOT write a local row: this DO's
+   * own `memories` table is never read by `recallGlobal` (R45 asks main from every
+   * instance), so a row dropped here would be invisible to every future recall while
+   * still growing that session's database.
    */
   private async rememberGlobal(
     kind: string,
@@ -260,7 +265,7 @@ export class FederationAgent extends Agent<Env> {
     try {
       await this.mainStub().memoryRemember(kind, text, importance);
     } catch (err) {
-      remember(this.db(), "error", `global remember failed: ${String(err)}`, 2);
+      console.error(`global remember failed: ${String(err)}`);
     }
   }
 
@@ -268,6 +273,53 @@ export class FederationAgent extends Agent<Env> {
   private async recallGlobal(query: string, limit: number): Promise<MemoryRow[]> {
     if (this.isMainInstance()) return recall(this.db(), query, limit);
     return this.mainStub().memoryRecall(query, limit);
+  }
+
+  /**
+   * R46, THE SCHEDULER LIVES ON MAIN ONLY. A task row is only ever fired by the alarm
+   * of the DO that armed it, `onStart` arms on main and nowhere else, and
+   * `GET /api/tasks` reads main (src/index.ts), so a session DO that inserted into its
+   * own `tasks` table would produce a row nothing lists and nothing runs, while the
+   * tool reply promised "It will run autonomously with tool access". Same shape as
+   * R45: the write hops to the one DO that owns the store.
+   *
+   * Returns false when main refused the hop, so the tool can say so instead of
+   * promising a wake that will not come. Task 33 owns the real scheduling redesign;
+   * this is the honest version of the current one.
+   */
+  private async enqueueGlobal(
+    title: string,
+    dueAt: number,
+    payload: string,
+    recurrence: string | null
+  ): Promise<boolean> {
+    if (this.isMainInstance()) {
+      enqueueTask(this.db(), title, dueAt, payload, recurrence);
+      await this.armTick();
+      return true;
+    }
+    try {
+      await this.mainStub().taskEnqueue(title, dueAt, payload, recurrence);
+      return true;
+    } catch (err) {
+      console.error(`global enqueue failed: ${String(err)}`);
+      return false;
+    }
+  }
+
+  /**
+   * R46: the RPC that makes main's `tasks` table writable from a session DO. Re-arming
+   * here is the point, not a bonus: the insert used to leave the wake to whatever alarm
+   * was already set, so a job due in seconds waited up to the 60s poll.
+   */
+  async taskEnqueue(
+    title: string,
+    dueAt: number,
+    payload: string,
+    recurrence: string | null
+  ): Promise<void> {
+    enqueueTask(this.db(), title, dueAt, payload, recurrence);
+    await this.armTick();
   }
 
   /**
@@ -288,9 +340,10 @@ export class FederationAgent extends Agent<Env> {
     // Every DO keeps its own schema: a session DO needs its own `messages` table for
     // its own transcript (R41), which is the one thing that DOES shard.
     this.db();
-    // R46: only main arms the tick. One alarm per DO is the platform's budget,
-    // `armTick` re-arms unconditionally, and `/api/tasks` only ever reads main, so a
-    // per-session alarm is pure burn. Task 33 owns the real scheduling fix.
+    // R46: only main arms the tick. One alarm per DO is the platform's budget, and
+    // `GET /api/tasks` only ever reads main, so a per-session alarm would be pure
+    // burn; `enqueueGlobal` is what keeps that safe by making sure no session DO ever
+    // holds a task row for that alarm to be needed for. Task 33 owns the redesign.
     if (!this.isMainInstance()) return;
     await this.armTick();
   }
@@ -309,7 +362,7 @@ export class FederationAgent extends Agent<Env> {
     // `code` survives, which src/routes.ts turns into a 403.
     if (
       sessionId !== undefined &&
-      !sessionScopeOk(this.ctx, (name) => this.env.FEDERATION_AGENT.idFromName(name), sessionId)
+      !sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)
     ) {
       return { reply: "", code: "invalid_session" };
     }
@@ -975,18 +1028,31 @@ export class FederationAgent extends Agent<Env> {
             }
             const title = (args.title || "scheduled job").slice(0, 120);
             const instructions = (args.instructions || title).slice(0, 2000);
-            enqueueTask(sql, title, dueAt, instructions, recurrence);
-            const when = new Date(dueAt).toISOString();
-            out = recurrence
-              ? `Scheduled "${title}" daily at ${args.daily_at} UTC. Next run ${when}. It will run autonomously with tool access.`
-              : `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
-            await this.rememberGlobal(
-              "task",
-              `Scheduled: ${title} at ${when}${recurrence ? ` (${recurrence})` : ""}`,
-              2
-            );
             runCmd = title;
-            runOk = true;
+            // Refuse BEFORE storing anything. `Math.max(1, NaN)` is NaN, so a
+            // `minutes_from_now: NaN` (or a value that overflows the largest Date this
+            // platform can represent) used to pass straight through: `enqueueTask`
+            // wrote the row, then `toISOString()` threw `RangeError: Invalid time
+            // value` on the line after it, leaving a board entry with no date in the
+            // reply that promised it. 8.64e15 is ECMAScript's max time value.
+            if (!Number.isFinite(dueAt) || Math.abs(dueAt) > 8.64e15) {
+              runOk = false;
+              out = "schedule_task needs a due time this worker can represent. Retry with 'minutes_from_now' as a finite number of minutes, or 'daily_at' as HH:MM (24h UTC).";
+            } else if (!(await this.enqueueGlobal(title, dueAt, instructions, recurrence))) {
+              runOk = false;
+              out = "scheduling failed: the main session did not accept the job, so nothing will run it. Tell the user; do not retry the same call.";
+            } else {
+              const when = new Date(dueAt).toISOString();
+              out = recurrence
+                ? `Scheduled "${title}" daily at ${args.daily_at} UTC. Next run ${when}. It will run autonomously with tool access.`
+                : `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
+              await this.rememberGlobal(
+                "task",
+                `Scheduled: ${title} at ${when}${recurrence ? ` (${recurrence})` : ""}`,
+                2
+              );
+              runOk = true;
+            }
           } else if (tc.function.name === "save_workspace") {
             runCmd = "save_workspace";
             if (!this.env.SANDBOX) {

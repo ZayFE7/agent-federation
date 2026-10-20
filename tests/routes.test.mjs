@@ -430,10 +430,10 @@ check("src/agent.ts's chat guard is the first statement, ahead of the try, and r
   const beforeTry = chat.slice(0, chat.indexOf("try {"));
   assert.notEqual(chat.indexOf("try {"), -1, "chat no longer wraps its body in the try this guard must stay ahead of");
   assert.ok(
-    /sessionScopeOk\(\s*this\.ctx,\s*\(name\)\s*=>\s*this\.env\.FEDERATION_AGENT\.idFromName\(name\),\s*sessionId\s*\)/.test(
+    /sessionScopeOk\(\s*this\.ctx,\s*\(name\)\s*=>\s*this\.idFor\(name\),\s*sessionId\s*\)/.test(
       beforeTry
     ),
-    "chat must check sessionScopeOk(this.ctx, idFromName, sessionId) ahead of the try"
+    "chat must check sessionScopeOk(this.ctx, this.idFor, sessionId) ahead of the try"
   );
   assert.ok(
     /return\s+\{\s*reply:\s*"",\s*code:\s*"invalid_session"\s*\}/.test(beforeTry),
@@ -443,6 +443,42 @@ check("src/agent.ts's chat guard is the first statement, ahead of the try, and r
   // An absent id stays unscoped (the brief's Interfaces block), which is what keeps
   // src/index.ts:84 and onScheduledTask compiling until Task 22.
   assert.ok(/sessionId\s*!==\s*undefined\s*&&/.test(beforeTry), "an absent sessionId must not be refused");
+});
+
+// Fix-round 1 (reviewer findings B6 and B3): one dereference of this class's own
+// namespace, one spelling of the main DO name, and no memory row written where no
+// reader can ever look. All three are order/location facts a compiler cannot see, so
+// they join the other src/agent.ts text checks.
+check("src/agent.ts dereferences its own namespace and names main in exactly one place each", () => {
+  const code = stripComments(AGENT_SOURCE);
+  assert.equal(
+    (code.match(/idFromName\(/g) ?? []).length,
+    1,
+    "idFromName must live only in idFor(); a second copy is how the guard and the stub drift apart"
+  );
+  const idFor = AGENT_SOURCE.match(/private\s+idFor\(name:\s*string\)\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(/this\.env\.FEDERATION_AGENT\.idFromName\(name\)/.test(idFor), "idFor must be the one dereference");
+  assert.ok(
+    /sessionScopeOk\(\s*this\.ctx,\s*\(name\)\s*=>\s*this\.idFor\(name\),\s*MAIN_DO_NAME\s*\)/.test(code),
+    "isMainInstance must reuse idFor(), not re-derive the id"
+  );
+  assert.ok(/this\.env\.FEDERATION_AGENT\.get\(\s*this\.idFor\(MAIN_DO_NAME\)\s*\)/.test(code), "mainStub must reuse idFor()");
+  assert.equal(/const MAIN_DO_NAME\s*=/.test(code), false, "src/agent.ts must import MAIN_DO_NAME from src/session-scope.ts");
+  assert.ok(/import \{[^}]*MAIN_DO_NAME[^}]*\} from "\.\/session-scope"/.test(AGENT_SOURCE), "the import must name MAIN_DO_NAME");
+  assert.ok(/import \{ MAIN_DO_NAME \} from "\.\/session-scope"/.test(INDEX_SOURCE), "src/index.ts must take the shared name");
+  assert.equal(/idFromName\("main"\)/.test(INDEX_SOURCE), false, "src/index.ts must not spell the literal");
+});
+
+check("src/agent.ts does not write a memory row to a store nothing recalls from", () => {
+  const global = AGENT_SOURCE.match(/private\s+async\s+rememberGlobal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(global, "src/agent.ts declares no rememberGlobal to read");
+  const catchArm = global.slice(global.indexOf("catch"));
+  assert.equal(
+    /remember\(\s*this\.db\(\)/.test(catchArm),
+    false,
+    "a failed hop written to this DO's own store is invisible to recallGlobal (R45), so it is a row nothing can ever read"
+  );
+  assert.ok(/console\.error\(/.test(catchArm), "the failure belongs in the DO's logs");
 });
 
 check("src/agent.ts threads a real session id to the sandbox instead of the literal agent", () => {
@@ -477,6 +513,33 @@ check("src/agent.ts arms the tick on main only (R46, Step 3c)", () => {
     onStart.indexOf("this.isMainInstance()") < onStart.indexOf("this.armTick()"),
     "armTick() is reachable on a session DO: the guard sits after the call"
   );
+});
+
+// Fix-round 1 (reviewer finding B1): once R46 made main the only DO that arms an
+// alarm, the arm's local INSERT stored a row nothing could list or fire, while the copy
+// promised an autonomous run. This pins the row to main and pins both honest refusals.
+check("src/agent.ts schedules jobs where the alarm that fires them can see them (R46, fix-round 1)", () => {
+  const arm = AGENT_SOURCE.match(/"schedule_task"\)\s*\{[\s\S]*?\n {10}\} else if/s)?.[0] ?? "";
+  assert.ok(arm, "src/agent.ts has no schedule_task arm to read");
+  assert.equal(
+    /enqueueTask\(\s*sql/.test(arm),
+    false,
+    "the arm must not insert into the RUNNING DO's own tasks table: a session DO arms no alarm (onStart) and /api/tasks reads only main, so the row would never fire while the reply promised it would"
+  );
+  assert.ok(/await this\.enqueueGlobal\(/.test(arm), "the arm must hand the row to main through enqueueGlobal");
+  assert.ok(/Number\.isFinite\(dueAt\)/.test(arm), "a due time the platform cannot represent must be refused BEFORE anything is stored");
+  assert.equal((arm.match(/runOk = false/g) ?? []).length, 2, "both refusals (unrepresentable due time, failed hop) must report runOk false");
+
+  const hop = AGENT_SOURCE.match(/private\s+async\s+enqueueGlobal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(hop, "src/agent.ts declares no enqueueGlobal");
+  assert.ok(/if\s*\(this\.isMainInstance\(\)\)/.test(hop), "main writes locally, exactly as rememberGlobal does");
+  assert.ok(/taskEnqueue\(/.test(hop), "a session DO must reach main's tasks table by RPC");
+  assert.ok(/Promise<boolean>/.test(hop), "the hop must report whether the row landed, or the tool lies again");
+
+  const rpc = AGENT_SOURCE.match(/\n {2}async\s+taskEnqueue\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(rpc, "src/agent.ts declares no public taskEnqueue RPC");
+  assert.ok(/enqueueTask\(\s*this\.db\(\)/.test(rpc), "taskEnqueue must write the receiving DO's own store");
+  assert.ok(/await this\.armTick\(\)/.test(rpc), "an insert must re-arm, or a job due in seconds waits the full 60s poll");
 });
 
 // R45: "simplify" here means every memory the user already accumulated goes silently
@@ -915,16 +978,19 @@ await checkAsync("only code invalid_session refuses; another code is still a 200
 });
 
 // Amendment 4 (R73): `idFromName` cannot report absence, so gate 3 is the only thing
-// standing between any 26-hex name and a DO instance nobody can list again.
+// standing between any 26-hex name and a DO instance nobody can list again. PATCH is in
+// this loop because gate 3 guards it for a different reason: rename is a whole-row
+// UPDATE, so an absent id would otherwise answer { ok: true } for nothing.
 await checkAsync("a well-formed id with no registry row is 404 and never addresses a DO (amendment 4)", async () => {
   const GHOST = "0123456789abcdef0123456789abcdef";
-  for (const [path, method] of [
-    [`/api/sessions/${GHOST}/message`, "POST"],
-    [`/api/sessions/${GHOST}/messages`, "GET"],
+  for (const [path, method, body] of [
+    [`/api/sessions/${GHOST}/message`, "POST", JSON.stringify({ content: "hello" })],
+    [`/api/sessions/${GHOST}/messages`, "GET", undefined],
+    [`/api/sessions/${GHOST}`, "PATCH", JSON.stringify({ title: "renamed" })],
   ]) {
     const world = setup();
     const res = await handleFetch(
-      req(path, method, method === "GET" ? {} : { body: JSON.stringify({ content: "hello" }) }),
+      req(path, method, body === undefined ? {} : { body }),
       world.env,
       world.ctx
     );
@@ -972,9 +1038,12 @@ await checkAsync("a decoded-hostile :id is 400 before any idFromName call (R76 g
 // Amendment 1 (R71), as it actually measures. A `%2e%2e` SEGMENT is normalized by the
 // URL parser exactly like a literal `..` (both are "double-dot path segments", and
 // the encoding is decoded for that comparison), so `/api/sessions/%2e%2e/message`
-// reaches this module as `/api/message`: outside the prefix, answered 404 by the
-// fall-through, never 400 by the guard. The encoded form therefore proves nothing
-// about the guard, and both spellings are the same fact.
+// reaches this module as `/api/message`: outside the prefix, so this module's fall-
+// through answers 404 and the guard never runs, which is why the case can never be a
+// 400. What the WORKER then does with it is src/index.ts's business, and it is not a
+// refusal: `/api/message` is a live route, authed and pinned to main. `/api/etc/
+// message` is the one that truly 404s. The encoded form therefore proves nothing about
+// the guard, and both spellings are the same fact.
 await checkAsync("a path that normalises out of the prefix is a 404, not a 400 (amendment 1)", async () => {
   for (const path of [
     "/api/sessions/../etc/message",

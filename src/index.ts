@@ -2,6 +2,7 @@ import { FederationAgent } from "./agent";
 import { RegistryAgent } from "./registry";
 import { fetchRouter } from "./router";
 import { authed, safeEq } from "./auth";
+import { MAIN_DO_NAME } from "./session-scope";
 import { handleFetch } from "./routes";
 import type { AgentStub, ChatRequest, ChatTier, Env } from "./types";
 
@@ -10,7 +11,7 @@ import type { AgentStub, ChatRequest, ChatTier, Env } from "./types";
 export { FederationAgent, RegistryAgent };
 
 function mainAgentId(env: Env): DurableObjectId {
-  return env.FEDERATION_AGENT.idFromName("main");
+  return env.FEDERATION_AGENT.idFromName(MAIN_DO_NAME);
 }
 
 /**

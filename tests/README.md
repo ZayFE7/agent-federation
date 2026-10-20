@@ -17,7 +17,9 @@ and its `registry_meta` markers, against `fake-sql.mjs` and then against a real 
 database), `router.test.mjs` (a test that every router call reaches the `ROUTER` binding at
 exactly one endpoint and hands the caller's AbortSignal to fetch), `routes.test.mjs` (a test
 that drives the real `src/routes.ts` against a fake `env`, the first offline test to reach
-the worker's HTTP surface), `sql-handle.test.mjs` (a
+the worker's HTTP surface), `session-scope.test.mjs` (a test of `src/session-scope.ts`, the
+one copy of the session-id shape and of the guard the DO runs on itself, and since the fix
+round the single home of `MAIN_DO_NAME`, the name three files used to spell), `sql-handle.test.mjs` (a
 test of `src/sql-handle.ts`, the one exec adapter both Durable Objects build their `db()`
 from, against a real `node:sqlite` database), and `fake-sql.test.mjs` (a contract test for the
 shared fixture). The harness is

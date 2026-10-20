@@ -34,6 +34,7 @@ import {
   writeRegistryMeta,
   type SessionRow,
 } from "./registry-store";
+import { MAIN_DO_NAME } from "./session-scope";
 
 /**
  * Boot seed for the conversation that already exists.
@@ -58,7 +59,7 @@ const MAIN_SEED_STATEMENT =
 const SEEDED_KEY = "main_seeded";
 
 /** The legacy session id, which is also the legacy DO name (R38: ids are bare). */
-const LEGACY_SESSION_ID = "main";
+const LEGACY_SESSION_ID = MAIN_DO_NAME;
 
 /** Length-check then constant-time string compare (no early exit on mismatch). */
 function safeEq(a: string, b: string): boolean {

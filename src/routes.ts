@@ -30,6 +30,11 @@
 //   3. registry.exists(id)      404 on a well-formed id with no row, BEFORE the DO
 //   4. the DO                   200, or 403 for a reply carrying code "invalid_session"
 //
+// Gate 3 guards the three routes that could otherwise report a success that changed
+// nothing: PATCH, GET messages, POST message. DELETE answers ok:true for an absent id
+// by design (the handler below says why). PATCH runs the read INSIDE its handler, so a
+// blank title still 400s ahead of the 404, as the order above requires.
+//
 // Step 2 is where an attacker-controlled string is actually stopped, and it covers
 // `messages` as well as `chat`: the rule has ONE copy, `isSessionId()` in
 // src/session-scope.ts (R38), which this module is allowed to value-import (R75)
@@ -43,16 +48,21 @@
 //
 // TRAVERSAL IS NOT WHAT STEP 2 STOPS, because the URL layer gets there first. A path
 // whose NORMALIZED form leaves the prefix never reaches any of this: the prefix test
-// fails and src/index.ts answers the 404. That includes the percent-encoded double
-// dot, because WHATWG path normalization counts a whole `%2e%2e` segment as a double
-// dot (measured: `/api/sessions/%2e%2e/message` is `/api/message` before this module
-// sees it, upper- or lowercase alike). What step 2 does stop is the segment that
-// SURVIVES normalization and only turns hostile when decoded, because `idFromSegment`
-// runs `decodeURIComponent` after the URL layer is finished: `abc%2fdef` reads as
-// `abc/def`, `a%20b` as `a b`, `abc%2e%2edef` as `abc..def`, `..%2f..%2fetc` as
-// `../../etc`, and a double-encoded `%252e%252e` as a literal `%2e%2e`. Those are the
-// shapes that would otherwise reach `idFromName` and let a client steer which DO id it
-// names.
+// fails and the request goes back to src/index.ts. What happens then depends on where
+// the dots land, and it is NOT always a 404: a whole `%2e%2e` segment counts as a
+// double dot to WHATWG normalization (measured: `/api/sessions/%2e%2e/message` is
+// `/api/message` before this module sees it, upper- or lowercase alike), and
+// `/api/message` is a live route served by src/index.ts, authed and pinned to main, so
+// that spelling is served rather than refused. `/api/sessions/../etc/message` ->
+// `/api/etc/message` is what actually 404s. Either way this module is not involved,
+// which is the only claim the prefix test makes for itself.
+//
+// What step 2 does stop is the segment that SURVIVES normalization and only turns
+// hostile when decoded, because `idFromSegment` runs `decodeURIComponent` after the URL
+// layer is finished: `abc%2fdef` reads as `abc/def`, `a%20b` as `a b`, `abc%2e%2edef` as
+// `abc..def`, `..%2f..%2fetc` as `../../etc`, and a double-encoded `%252e%252e` as a
+// literal `%2e%2e`. Those are the shapes that would otherwise reach `idFromName` and let
+// a client steer which DO id it names.
 
 // The four value imports below carry their `.ts` extension, because plain Node
 // (which runs tests/routes.test.mjs, and nothing else can) is a strict ESM resolver:
@@ -141,11 +151,19 @@ async function createSession(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, session: row });
 }
 
-/** Title only. A rename deliberately does NOT bump updated_at (R37). */
+/**
+ * Title only. A rename deliberately does NOT bump updated_at (R37).
+ *
+ * Gate 3 lives HERE rather than in the dispatcher, because R76's order is shape 400
+ * then existence 404: the title is this route's shape, so a blank title must stay a 400
+ * even on an id with no row. `rename` is a whole-row UPDATE, and without the read an
+ * absent id answered { ok: true } for a rename that touched zero rows.
+ */
 async function renameSession(request: Request, env: Env, id: string): Promise<Response> {
   const body = (await readJson(request)) as { title?: unknown } | null;
   const title = typeof body?.title === "string" ? body.title.trim() : "";
   if (!title) return fail(400, "title required");
+  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
   await registryStubFor(env).rename(id, title);
   return json({ ok: true });
 }
@@ -267,6 +285,10 @@ export async function handleFetch(
   // PATCH /api/sessions/:id  |  DELETE /api/sessions/:id
   if (parts.length === 1) {
     if (request.method === "PATCH") return renameSession(request, env, id);
+    // DELETE is the one `:id` route gate 3 does not cover, on purpose: removing an id
+    // that is not there leaves the caller in exactly the state it asked for, and
+    // `remove` returns void by contract (R37, R58), so there is no false success to
+    // prevent and a 404 here would only break idempotent retries.
     if (request.method === "DELETE") {
       await registryStubFor(env).remove(id);
       return json({ ok: true });
