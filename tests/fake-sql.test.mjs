@@ -1,6 +1,8 @@
 // Contract test for the tests/fake-sql.mjs fixture that the store tasks build on.
 // Proves: stmts order, the results log, rows.slice() copy semantics, first-needle-
-// wins, SELECT-only answering, and the meta.changes field.
+// wins, SELECT-only answering, and that a reply carries `results` and nothing else:
+// the platform has no per-statement affected-row count (R37), so neither does the
+// fake, and no store test can depend on one.
 // Run: node tests/fake-sql.test.mjs   (exit 0 pass / 1 fail, no framework)
 import { fakeSql } from "./fake-sql.mjs";
 
@@ -27,8 +29,8 @@ check("query() returns the fake for chaining", s.query("FROM sessions", SEED_ROW
 
 const r1 = s.exec(SELECT_A, 10);
 check("seeded SELECT rows come back", json(r1.results) === json(SEED_ROWS), json(r1.results));
-check("reply carries meta.changes", r1.meta && typeof r1.meta.changes === "number", json(r1));
-check("changes defaults to 0", r1.meta.changes === 0, json(r1.meta));
+check("a reply is exactly { results }, the shape production returns",
+  json(r1) === json({ results: SEED_ROWS }) && Object.keys(r1).join() === "results", json(r1));
 check("bindings are recorded, not interpolated", s.stmts.length === 1 &&
   s.stmts[0][0] === SELECT_A && json(s.stmts[0][1]) === json([10]), json(s.stmts));
 check("results logs every exec", s.results.length === 1 && s.results[0] === r1, json(s.results));
@@ -68,7 +70,7 @@ check("INSERT does not answer a SELECT-only fixture",
 check("UPDATE returns []", json(w.exec("UPDATE sessions SET title = ? WHERE id = ?", "t", "z").results) === json([]));
 check("CREATE TABLE returns []", json(w.exec("CREATE TABLE IF NOT EXISTS sessions (id TEXT)").results) === json([]));
 check("writes are still recorded in stmts", w.stmts.length === 4, json(w.stmts.map((x) => x[0])));
-check("a write on an unseeded needle reports changes 0", del.meta.changes === 0, json(del.meta));
+check("a write replies with exactly { results: [] }", json(del) === json({ results: [] }), json(del));
 
 // ---- the gate itself ----
 const g = fakeSql();
@@ -81,19 +83,30 @@ check("a word starting with select is not a SELECT",
 check("rowsFor mirrors exec for SELECTs", json(g.rowsFor("SELECT n FROM t")) === json([{ n: 1 }]) &&
   json(g.rowsFor("DROP TABLE t")) === json([]));
 
-// ---- declared changes (Task 6 deleteSession / renameSession) ----
+// ---- no affected-row channel (R37) ----
+// ctx.storage.sql.exec() hands back a SqlStorageCursor whose only counters are
+// rowsRead/rowsWritten, and src/agent.ts's db() adapter returns { results }. A
+// store function that needed "how many rows did that write" could not be tested
+// here without inventing the answer, so the fake gives it no way to.
 const c = fakeSql();
-c.query("DELETE FROM sessions", [], 1).query("UPDATE sessions", [], 3);
+c.query("DELETE FROM sessions", []).query("UPDATE sessions", []);
 const one = c.exec(DELETE_A, "a");
-check("declared changes comes back on exec", one.meta.changes === 1, json(one));
 const three = c.exec("UPDATE sessions SET title = ? WHERE id = ?", "x", "a");
-check("second write needle keeps its own changes", three.meta.changes === 3, json(three));
-check("undeclared write needle still returns 0",
-  c.exec("DELETE FROM memories WHERE id = ?", "m").meta.changes === 0);
-check("the declared write reply is still empty results", json(one.results) === json([]) &&
-  json(three.results) === json([]));
-check("changes log is per exec, in order",
-  json(c.results.map((x) => x.meta.changes)) === json([1, 3, 0]), json(c.results));
+check("a seeded write needle still replies with empty results",
+  json(one.results) === json([]) && json(three.results) === json([]), json([one, three]));
+check("no reply on the write path carries meta",
+  c.results.every((x) => Object.keys(x).join() === "results"), json(c.results));
+check("the fake exposes no meta or changes accessor",
+  c.meta === undefined && c.changes === undefined && c.changesFor === undefined,
+  json(Object.keys(c)));
+check("query() ignores a third argument: there is no changes channel left to seed", (() => {
+  const d = fakeSql();
+  d.query("FROM t", [{ n: 1 }], 7);
+  return json(d.exec("SELECT n FROM t")) === json({ results: [{ n: 1 }] });
+})());
+check("the write path is still logged twice, in call order",
+  c.stmts.length === 2 && json(c.stmts[0]) === json([DELETE_A, ["a"]]) &&
+  json(c.stmts[1]) === json(["UPDATE sessions SET title = ? WHERE id = ?", ["x", "a"]]), json(c.stmts));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

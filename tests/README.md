@@ -1,14 +1,19 @@
 # tests/
 
-Eleven files live here. Offline, framework-free, run by `npm test`:
+Fifteen files live here. Seven are offline, framework-free, and run by `npm test`:
 `guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
 the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
 `src/memory.ts` and drives the real recall + task functions against a live `node:sqlite`
-database), and `fake-sql.test.mjs` (a contract test for the shared fixture). The harness is
+database), `paths.test.mjs` (a test that the sandbox home is one constant and that no source
+file still promises `/workspace`), `registry-store.test.mjs` (a test of `src/registry-store.ts`,
+the pure session index, against `fake-sql.mjs` and then against a real `node:sqlite`
+database), `router.test.mjs` (a test that every router call reaches the `ROUTER` binding at
+exactly one endpoint and hands the caller's AbortSignal to fetch), and `fake-sql.test.mjs` (a
+contract test for the shared fixture). The harness is
 `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
 pure-store tests, contract-tested by `fake-sql.test.mjs`). Live-only, never run by
 `npm test` because they do not end in `.test.mjs`: `live-matrix.mjs`, `live-deep.mjs`,
-`live-tools2.mjs`, `live-probe.sh`.
+`live-tools2.mjs`, `live-probe.sh`, `router-probe.mjs`.
 
 `npm test` is `node tests/run-all.mjs` (`../package.json`). There is still no
 vitest/jest/playwright dependency and no CI at all (no `.github/`, no workflow files anywhere
@@ -88,17 +93,20 @@ i.e. dead code. That was wrong; the code wins.)
   `deploy/**` is never typechecked (except `deploy/router-worker`, which has its own). It also
   never typechecks `tests/**`, so the `.mjs` files here are only ever exercised by running them.
 - Nothing tests the vault endpoints, the `/api/decide`, `/api/plan`, or `/api/approve` routes,
-  the cron handler, or the DO memory, task, plan, and pending-action schemas. The guardrail
-  classifier itself is covered offline by `guardrails.test.mjs`; the approve/hold flow around
-  it is not.
-- `npm test` runs four offline files (`fake-sql`, `guardrails`, `markdown`, `memory`). No offline
-  test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
-  not in the glob.
+  the cron handler, or the DO memory, task, plan, and pending-action schemas (the `sessions`
+  schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
+  covered offline by `guardrails.test.mjs`; the approve/hold flow around it is not.
+- `npm test` runs seven offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
+  `registry-store`, `router`). No offline test touches a network: `live-matrix.mjs` needs a
+  deployed worker plus a real key, and it is not in the glob.
 - `fake-sql.mjs` is the fixture the pure-store tests of later tasks build on, and
   `fake-sql.test.mjs` is its contract test: it asserts the `stmts` order, the `results` log,
   the `rows.slice()` copy semantics, first-needle-wins, that only `SELECT` statements are
-  answered, and that `exec()` reports `meta.changes`. No `src/` module imports it (it is a test
-  fixture by design).
+  answered, and that a reply is exactly `{ results }`. It reports no affected-row count because
+  the platform's `SqlStorageCursor` has none (only `rowsRead`/`rowsWritten`) and the `db()`
+  adapter in `src/agent.ts` returns `{ results }`, so a fake that shipped the `meta.changes`
+  field this one used to have would let a store test pass against an interface production
+  cannot supply. No `src/` module imports it (it is a test fixture by design).
 
 ## Offline tests, file by file
 
@@ -133,13 +141,36 @@ prints the list it searched and exits 1.
 
 `node tests/fake-sql.test.mjs`
 
-A contract test for `fake-sql.mjs`, the fixture the store tasks (`registry-store`, `session
-store`) will seed through. 29 checks: `query(needle, rows, changes)` returns the fake for
-chaining and `exec()` replies `{ results, meta: { changes } }`; `stmts` records
+A contract test for `fake-sql.mjs`, the fixture the pure-store tests seed through
+(`registry-store.test.mjs` is its first consumer). 28 checks: `query(needle, rows)` returns the
+fake for chaining and `exec()` replies `{ results }` and nothing else; `stmts` records
 `[query, bindings]` in call order with bindings never interpolated; `results` logs one reply
 per `exec`; the reply array is a `slice()` copy of the seed (the row objects inside it are
 still shared, and the test says so); the first registered needle wins. It also pins the
 `SELECT` gate: `rowsFor` answers only statements matching `/^\s*select\b/i`, so
 `DELETE FROM sessions WHERE id = ?` returns `{ results: [] }` even though its text contains the
-seeded `"FROM sessions"` needle, exactly like the real `ctx.storage.sql`, and a declared
-`changes` count comes back on the write that matched its own needle (default `0`).
+seeded `"FROM sessions"` needle, exactly like the real `ctx.storage.sql`.
+
+The fixture used to take a third `query()` argument and answer every `exec()` with a
+`meta.changes` count. Both are gone: `SqlStorageCursor` (declared in
+`@cloudflare/workers-types`) exposes `next/toArray/one/raw/columnNames/rowsRead/rowsWritten` and
+nothing per statement, and the `db()` adapter in `../src/agent.ts` returns `{ results }`, so a
+fake that answered `.meta` let a store test pass against an interface production cannot supply
+(R37). The checks that used to assert on `changes` now assert the opposite: a reply has exactly
+one key.
+
+### `registry-store.test.mjs`
+
+`node tests/registry-store.test.mjs`
+
+Two layers over `../src/registry-store.ts`, the session index Task 6 wraps in a Durable Object
+and Task 7 reads through it. The `fake-sql.mjs` layer pins the statement text and the bindings of
+all eight exports (schema, upsert, list, get, rename, touch, delete, and the placeholder title),
+and sweeps every recorded statement for two promises: one `?` per binding, which is exactly what
+`db()` in `../src/agent.ts` enforces before the SDK sees the query, and no bound string inside
+its own statement text. The `node:sqlite` layer runs the same statements against a real database,
+so the DDL executes twice without error, `INSERT ... ON CONFLICT(id) DO UPDATE SET` replaces a
+known row instead of failing or duplicating it, pinned-then-recent ordering comes back, `unread`
+accumulates rather than being assigned, `getSession` answers `null` for a missing id, and a title
+of `x'; DROP TABLE sessions; --` round-trips verbatim with the `sessions` table still present.
+Silent on success (exit 0), prints every failure and exits 1 otherwise.
