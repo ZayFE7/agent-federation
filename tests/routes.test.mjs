@@ -533,13 +533,54 @@ check("src/agent.ts schedules jobs where the alarm that fires them can see them 
   const hop = AGENT_SOURCE.match(/private\s+async\s+enqueueGlobal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(hop, "src/agent.ts declares no enqueueGlobal");
   assert.ok(/if\s*\(this\.isMainInstance\(\)\)/.test(hop), "main writes locally, exactly as rememberGlobal does");
-  assert.ok(/taskEnqueue\(/.test(hop), "a session DO must reach main's tasks table by RPC");
   assert.ok(/Promise<boolean>/.test(hop), "the hop must report whether the row landed, or the tool lies again");
+  // Fix-round 2 (reviewer section C, the hole the first version of this pin left):
+  // `this.taskEnqueue(...)` satisfied the loose `taskEnqueue(` test here and
+  // recreated finding B1 exactly, because it runs on the CALLING DO's store while
+  // the reply still claims the job is scheduled. The callee is the fact, so the
+  // pin names the callee.
+  assert.ok(
+    /this\.mainStub\(\)\.taskEnqueue\(/.test(hop),
+    "the hop must call taskEnqueue on MAIN's stub; this.taskEnqueue() on a session DO writes the ghost row again"
+  );
 
   const rpc = AGENT_SOURCE.match(/\n {2}async\s+taskEnqueue\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(rpc, "src/agent.ts declares no public taskEnqueue RPC");
   assert.ok(/enqueueTask\(\s*this\.db\(\)/.test(rpc), "taskEnqueue must write the receiving DO's own store");
   assert.ok(/await this\.armTick\(\)/.test(rpc), "an insert must re-arm, or a job due in seconds waits the full 60s poll");
+});
+
+// Fix-round 2 (reviewer finding D1): every arm of a ONE-SHOT schedule inserts its own
+// cf_agents_jobs row, and only the row that fires is deleted. Before the tick re-armed
+// once per firing (net zero) an extra arm from onStart or from a schedule_task was
+// permanent, so main ended up running onScheduledTask once per leftover row, every
+// period, forever: the ghost row traded for unbounded wake amplification. This pins the
+// replace-one-row idiom, its ORDER (cancel before arm), and the two copy facts the same
+// round fixed (D2 the unconfirmed hop must not claim the job will not run, D3 the job
+// now runs on main's transcript and sandbox lease).
+check("src/agent.ts keeps exactly one alarm row for its own tick (R46, fix-round 2)", () => {
+  const tick = AGENT_SOURCE.match(/private\s+async\s+armTick\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(tick, "src/agent.ts declares no private async armTick() to read");
+  assert.ok(/await this\.listSchedules\(\)/.test(tick), "armTick must read the schedules it is about to replace");
+  assert.ok(/\.callback ===\s*"onScheduledTask"/.test(tick), "it must cancel only its own callback, not the SDK's heartbeat rows");
+  assert.ok(/await this\.cancelSchedule\(/.test(tick), "a cancel must actually run, or the row stays armed");
+  assert.ok(
+    tick.indexOf("this.cancelSchedule(") < tick.indexOf("this.schedule("),
+    "arm order must be cancel-then-arm; arming first leaves the row it just cancelled's replacement behind"
+  );
+  assert.ok(/idempotent:\s*true/.test(tick), "the arm must declare its dedup choice (the SDK warns on startup arms without it)");
+  assert.equal((tick.match(/this\.schedule\(/g) ?? []).length, 1, "one arm per tick, or the amplification returns");
+  assert.equal(
+    (AGENT_SOURCE.match(/this\.schedule\(/g) ?? []).length,
+    1,
+    "armTick is the only place this class arms the platform; a second site re-creates the duplicate-row leak"
+  );
+
+  const arm = AGENT_SOURCE.match(/"schedule_task"\)\s*\{[\s\S]*?\n {10}\} else if/s)?.[0] ?? "";
+  assert.ok(arm, "src/agent.ts has no schedule_task arm to read");
+  assert.ok(/unconfirmed/.test(arm), "a lost hop reply must report uncertainty, not a job that will never run");
+  assert.equal(/nothing will run it/.test(arm), false, "the row may have landed; that copy is a second lie in the other direction");
+  assert.match(arm, /main session's conversation/, "the job runs on main's transcript and sandbox lease, so the reply must say which chat it will appear in");
 });
 
 // R45: "simplify" here means every memory the user already accumulated goes silently

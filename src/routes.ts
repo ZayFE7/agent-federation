@@ -163,8 +163,9 @@ async function renameSession(request: Request, env: Env, id: string): Promise<Re
   const body = (await readJson(request)) as { title?: unknown } | null;
   const title = typeof body?.title === "string" ? body.title.trim() : "";
   if (!title) return fail(400, "title required");
-  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
-  await registryStubFor(env).rename(id, title);
+  const registry = registryStubFor(env);
+  if (!(await registry.exists(id))) return fail(404, "not found");
+  await registry.rename(id, title);
   return json({ ok: true });
 }
 

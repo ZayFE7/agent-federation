@@ -583,7 +583,22 @@ export class FederationAgent extends Agent<Env> {
           wakeAt = now + Math.min(60_000, Math.max(5_000, soonest - now));
         }
       }
-      await this.schedule(new Date(wakeAt), "onScheduledTask");
+      // ONE poll row, never one per arming. A one-shot schedule deduplicates only
+      // when `idempotent: true` matches an existing row's exact timing, and
+      // `wakeAt` moves on every call, so a bare schedule() left a permanent
+      // cf_agents_jobs row behind for every arming event: onStart, each
+      // schedule_task, each tick that re-arms. The fired row is deleted, the extra
+      // rows are not, so main ends up waking and running this handler once per
+      // leftover row, every period, forever. This is the SDK's own dedup idiom for
+      // a self-rescheduling alarm: list by callback, cancel them all, arm once.
+      // Cancelling the row that is currently running is safe: the queue deletes on
+      // outcome only `WHERE running = 1`, so a cleared row simply defers.
+      for (const armed of (await this.listSchedules()).filter(
+        (s) => s.callback === "onScheduledTask"
+      )) {
+        await this.cancelSchedule(armed.id);
+      }
+      await this.schedule(new Date(wakeAt), "onScheduledTask", undefined, { idempotent: true });
     } catch (err) {
       remember(this.db(), "error", `schedule failed: ${String(err)}`, 2);
     }
@@ -1040,12 +1055,18 @@ export class FederationAgent extends Agent<Env> {
               out = "schedule_task needs a due time this worker can represent. Retry with 'minutes_from_now' as a finite number of minutes, or 'daily_at' as HH:MM (24h UTC).";
             } else if (!(await this.enqueueGlobal(title, dueAt, instructions, recurrence))) {
               runOk = false;
-              out = "scheduling failed: the main session did not accept the job, so nothing will run it. Tell the user; do not retry the same call.";
+              // Not a promise about the future either: the row can land on main and
+              // only the reply be lost, so the honest statement is about what this
+              // call did not get.
+              out = "scheduling is unconfirmed: the main session did not answer this hop, so the job may or may not be queued. Ask the user to check the Tasks list, and only re-schedule if it is absent there. Do not report it as scheduled.";
             } else {
               const when = new Date(dueAt).toISOString();
+              // The job runs on main's DO, so it writes main's transcript and main's
+              // sandbox lease, not this session's (R46). Say so rather than letting
+              // the user look for the run in the chat they scheduled it from.
               out = recurrence
-                ? `Scheduled "${title}" daily at ${args.daily_at} UTC. Next run ${when}. It will run autonomously with tool access.`
-                : `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
+                ? `Scheduled "${title}" daily at ${args.daily_at} UTC. Next run ${when}. It runs autonomously with tool access, in the main session's conversation rather than this one.`
+                : `Scheduled "${title}" at ${when}. It runs autonomously with tool access, in the main session's conversation rather than this one.`;
               await this.rememberGlobal(
                 "task",
                 `Scheduled: ${title} at ${when}${recurrence ? ` (${recurrence})` : ""}`,

@@ -109,8 +109,9 @@ i.e. dead code. That was wrong; the code wins.)
   the cron handler, or the DO memory, task, plan, and pending-action schemas (the `sessions`
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the approve/hold flow around it is not.
-- `npm test` runs eleven offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
-  `registry`, `registry-input`, `registry-store`, `router`, `routes`, `sql-handle`). No offline
+- `npm test` runs twelve offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
+  `registry`, `registry-input`, `registry-store`, `router`, `routes`, `session-scope`,
+  `sql-handle`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
 - `routes.test.mjs` covers the six worker-side session routes: `GET /api/sessions?limit=N`,
