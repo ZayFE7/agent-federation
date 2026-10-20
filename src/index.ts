@@ -30,14 +30,6 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    // The /api/sessions* family lives in src/routes.ts, which is the only part of
-    // this worker an offline Node test can import (R42). The prefix is the whole
-    // handover: /api/message, /api/tasks, /api/approve, /api/decide, the WebSocket
-    // upgrade and /internal/vault/* keep their addressing right here.
-    if (url.pathname === "/api/sessions" || url.pathname.startsWith("/api/sessions/")) {
-      return handleFetch(request, env, ctx);
-    }
-
     // WebSocket upgrades (path /) go straight to the agent DO; the Agents SDK
     // performs the hibernation handshake and dispatches frames to onMessage.
     // Gate the upgrade with the shared secret: handleChat can exec shell/Python
@@ -55,6 +47,16 @@ export default {
       }
       const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
       return stub.fetch(request);
+    }
+
+    // The /api/sessions* family lives in src/routes.ts, which is the only part of
+    // this worker an offline Node test can import (R42). The prefix is the whole
+    // handover: /api/message, /api/tasks, /api/approve, /api/decide, the WebSocket
+    // upgrade above and /internal/vault/* keep their addressing right here. The
+    // delegation sits below the upgrade gate so an Upgrade: websocket request can
+    // never be swallowed by the session family.
+    if (url.pathname === "/api/sessions" || url.pathname.startsWith("/api/sessions/")) {
+      return handleFetch(request, env, ctx);
     }
 
     if (url.pathname === "/health") {

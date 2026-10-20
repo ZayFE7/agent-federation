@@ -59,8 +59,8 @@ export interface ChatRequest {
  * this interface.
  *
  * `messages` is Task 7's addition (R59): the transcript of one session, read from
- * that session's own DO. It returns MessageRow — the store's row shape, `created_at`
- * included — not UIMessage and not a {role, content} summary of one.
+ * that session's own DO. It returns MessageRow, the store's row shape with
+ * `created_at` included, not UIMessage and not a {role, content} summary of one.
  */
 export interface AgentStub {
   chat(content: string, tier?: ChatTier): Promise<AgentReply>;

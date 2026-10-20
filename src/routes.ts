@@ -21,7 +21,7 @@
 //   POST   /api/sessions/:id/message      the agent's AgentReply, unmodified
 //
 // Every one of them 401s when `authed()` fails and 400s on a malformed body. A shape
-// the family does not serve — including a wrong method on a shape it does — is 404.
+// the family does not serve, including a wrong method on a shape it does, is 404.
 //
 // Session ids are NOT validated here: Task 8 creates src/session-scope.ts and wires
 // the 400 for a bad id, in this file, before any idFromName call (R65). Validating a
@@ -32,17 +32,14 @@
 // an extensionless relative specifier never reaches `auth.ts`. Type imports are erased
 // before resolution, so they stay extensionless like the rest of the repo.
 //
-// TypeScript's `allowImportingTsExtensions` is off in this tsconfig, so each `.ts`
-// specifier is TS5097; the directive suppresses exactly that and is self-removing —
-// if the flag is ever enabled, tsc fails here and says so. Wrangler's esbuild
-// resolves both spellings. Everything above is why these three, and only these three,
-// are annotated; a fourth value import would need the same line.
-//
-// @ts-expect-error - TS5097: Node needs the extension, this tsconfig forbids it.
-import { DEFAULT_LIMIT, MAX_LIMIT, idFromSegment, limitFrom, readJson } from "./registry-input.ts";
-// @ts-expect-error - TS5097: Node needs the extension, this tsconfig forbids it.
+// `allowImportingTsExtensions` is on in this tsconfig, legal because `noEmit` is
+// already true, so a `.ts` specifier is permitted rather than suppressed: tsc type
+// checks these three lines normally. Wrangler's esbuild resolves both spellings.
+// These three are the whole value-import set because R39 lets this module reach only
+// `src/*.ts` files that are themselves dependency-free under plain Node, so a fourth
+// value import needs the extension too and has to clear that rule first.
+import { idFromSegment, limitFrom, readJson } from "./registry-input.ts";
 import { PLACEHOLDER_TITLE } from "./registry-store.ts";
-// @ts-expect-error - TS5097: Node needs the extension, this tsconfig forbids it.
 import { authed } from "./auth.ts";
 import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
@@ -63,23 +60,11 @@ function fail(status: number, error: string): Response {
 }
 
 /**
- * A session id is 26 hex characters — the length a Cloudflare DO name is addressed
- * with — taken from a UUIDv4 with the dashes removed.
+ * A session id is 26 hex characters, the length a Cloudflare DO name is addressed
+ * with, taken from a UUIDv4 with the dashes removed.
  */
 function newSessionId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 26);
-}
-
-/**
- * The transcript route's own limit clamp. It uses the registry's numbers rather than
- * restating them, so a sidebar page and a transcript page cannot disagree about what
- * "the last N" means; DEFAULT_LIMIT/MAX_LIMIT come from ./registry-input, which is
- * dependency-free and therefore legal to value-import here.
- */
-function messageLimitFrom(search: URLSearchParams): number {
-  const raw = Number(search.get("limit"));
-  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_LIMIT;
-  return Math.min(Math.floor(raw), MAX_LIMIT);
 }
 
 /**
@@ -141,9 +126,15 @@ async function renameSession(request: Request, env: Env, id: string): Promise<Re
  * main (R41). The rows are `recentMessages`' own output, unmodified and in its own
  * order: they are MessageRows (id, role, content, tier, created_at), not UIMessages,
  * and nothing here drops created_at on the way to the console.
+ *
+ * The limit is the list route's own `limitFrom`, not a second clamp: this uses the
+ * registry's numbers rather than restating them, so a sidebar page and a transcript
+ * page cannot disagree about what "the last N" means, and DEFAULT_LIMIT/MAX_LIMIT
+ * come from ./registry-input, which is dependency-free and therefore legal to
+ * value-import here.
  */
 async function readTranscript(env: Env, id: string, search: URLSearchParams): Promise<Response> {
-  const messages: MessageRow[] = await agentStubFor(env, id).messages(messageLimitFrom(search));
+  const messages: MessageRow[] = await agentStubFor(env, id).messages(limitFrom(search));
   return json({ ok: true, messages });
 }
 

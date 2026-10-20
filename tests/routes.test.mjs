@@ -331,10 +331,17 @@ check("src/index.ts delegates the /api/sessions* family and nothing else", () =>
 // with it. src/agent.ts cannot be imported by Node, so tsc plus this text check is
 // the only check it gets; the brief states the body verbatim.
 check("src/agent.ts gains exactly the messages RPC the brief states", () => {
+  // Anchored on the one meaningful substring, not on the whole multi-line block: a
+  // formatter reflow of src/agent.ts must not fail a behaviour test for a cosmetic
+  // reason. The signature half stays checked, with \s* between its tokens.
   assert.ok(
-    /async\s+messages\s*\(\s*limit\?:\s*number\s*\)\s*:\s*Promise<MessageRow\[\]>\s*\{\s*return recentMessages\(\s*this\.db\(\),\s*limit \?\? 50\s*\);?\s*\}/.test(
+    /async\s+messages\s*\(\s*limit\?:\s*number\s*\)\s*:\s*Promise<MessageRow\[\]>\s*\{/.test(
       AGENT_SOURCE
     ),
+    "src/agent.ts must declare async messages(limit?: number): Promise<MessageRow[]>"
+  );
+  assert.ok(
+    AGENT_SOURCE.includes("recentMessages(this.db(), limit ?? 50)"),
     "messages(limit?) must be recentMessages(this.db(), limit ?? 50) and nothing else"
   );
   assert.ok(
@@ -718,7 +725,7 @@ await checkAsync("a wrong bearer token is 401 on the list route", async () => {
 
 // The six routes the Interfaces block enumerates are the whole family: a shape, or
 // a method on a shape, that is not one of them is a 404. `GET /api/sessions/:id` is
-// deliberately NOT one of them — the plan lists no single-session read on the worker
+// deliberately NOT one of them: the plan lists no single-session read on the worker
 // (the registry DO has one under /registry/, and Task 22 adds /:id/stream/:streamId).
 await checkAsync("a path with an unknown shape 404s", async () => {
   for (const [path, method] of [

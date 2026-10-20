@@ -1,6 +1,6 @@
 # tests/
 
-Eighteen files live here. Ten are offline, framework-free, and run by `npm test`:
+Nineteen files live here. Eleven are offline, framework-free, and run by `npm test`:
 `guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
 the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
 `src/memory.ts` and drives the real recall + task functions against a live `node:sqlite`
@@ -13,7 +13,9 @@ segment and body parsing, which `npm test` could never reach through `src/regist
 itself), `registry-store.test.mjs` (a test of `src/registry-store.ts`, the pure session index
 and its `registry_meta` markers, against `fake-sql.mjs` and then against a real `node:sqlite`
 database), `router.test.mjs` (a test that every router call reaches the `ROUTER` binding at
-exactly one endpoint and hands the caller's AbortSignal to fetch), `sql-handle.test.mjs` (a
+exactly one endpoint and hands the caller's AbortSignal to fetch), `routes.test.mjs` (a test
+that drives the real `src/routes.ts` against a fake `env`, the first offline test to reach
+the worker's HTTP surface), `sql-handle.test.mjs` (a
 test of `src/sql-handle.ts`, the one exec adapter both Durable Objects build their `db()`
 from, against a real `node:sqlite` database), and `fake-sql.test.mjs` (a contract test for the
 shared fixture). The harness is
@@ -103,10 +105,15 @@ i.e. dead code. That was wrong; the code wins.)
   the cron handler, or the DO memory, task, plan, and pending-action schemas (the `sessions`
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the approve/hold flow around it is not.
-- `npm test` runs ten offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
-  `registry`, `registry-input`, `registry-store`, `router`, `sql-handle`). No offline test
-  touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
+- `npm test` runs eleven offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
+  `registry`, `registry-input`, `registry-store`, `router`, `routes`, `sql-handle`). No offline
+  test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
+- `routes.test.mjs` covers the six worker-side session routes: `GET /api/sessions?limit=N`,
+  `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`,
+  `GET /api/sessions/:id/messages` and `POST /api/sessions/:id/message`. Every agent-side answer
+  in it is a stub, so it proves nothing about the Durable Object behind those calls, and it
+  never opens `project/agent-federation`, so it cannot see deploy-tree drift.
 - `fake-sql.mjs` is the fixture the pure-store tests of later tasks build on, and
   `fake-sql.test.mjs` is its contract test: it asserts the `stmts` order, the `results` log,
   the `rows.slice()` copy semantics, first-needle-wins, that only `SELECT` statements are
@@ -183,3 +190,26 @@ UPDATE SET` replaces a known row instead of failing or duplicating it, pinned-th
 comes back, `unread` accumulates rather than being assigned, `getSession` answers `null` for a
 missing id, and a title of `x'; DROP TABLE sessions; --` round-trips verbatim with the `sessions`
 table still present. Silent on success (exit 0), prints every failure and exits 1 otherwise.
+
+### `routes.test.mjs`
+
+`node tests/routes.test.mjs`
+
+The first offline test that reaches the worker's HTTP surface. It imports the real
+`../src/routes.ts` and calls `handleFetch()` on constructed `Request` objects against a fake
+`env`: a fake registry DO stub that records `list`/`put`/`rename`/`remove`/`touch` in call
+order, and a fake `FEDERATION_AGENT` namespace whose stub answers `chat` and `messages` from a
+fixture table and records the exact arity each call used. No browser, no dev server and no
+Durable Object. 34 checks cover the six routes: the `{ ok, sessions, truncated }` list and its
+`limit` clamp, the created row, the rename title rule, the delete, the transcript read from the
+addressed session, and the reply passthrough with `touch(id)` and no opts, plus the 401, 400 and
+404 paths. Two rules that nothing else can test are pinned in the same file: R39, a source scan
+proving `routes.ts` value-imports only dependency-free `src/*.ts` modules and addresses both DOs
+through `env` instead of importing a class, and R42, proving `src/index.ts` keeps its own
+handlers for `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade
+and the six `/internal/vault/*` routes while delegating only the `/api/sessions` prefix.
+
+What it cannot prove: every agent-side answer here is a stub, so nothing about the Durable
+Object's own behaviour is established, and the file never opens `project/agent-federation`, so
+it cannot see deploy-tree drift. Silent on success (exit 0), prints every failure and exits 1
+otherwise.
