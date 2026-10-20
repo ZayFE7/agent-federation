@@ -25,7 +25,7 @@ export interface HarnessConfigDeps {
   maxSteps: number;
   classifyError: (e: unknown) => ThinkErrorClass;
   /** Consumed by harness.observe() in src/harness.ts, never a hook. */
-  onEvent: (ev: ThinkSessionEvent) => void;
+  onEvent: (session: string, ev: ThinkSessionEvent) => void;
   onTurnEnd: (ctx: ThinkTurnEndContext) => Promise<void>;
   summarize: (text: string) => Promise<string>;
   /** Task 16: memory injection and the honest system prompt. */

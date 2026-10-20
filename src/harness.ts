@@ -12,6 +12,6 @@ import { harnessConfig, type HarnessConfigDeps } from "./harness-config.ts";
 
 export function buildHarness(deps: HarnessConfigDeps): ThinkHarness<ToolSet> {
   const harness = new ThinkHarness<ToolSet>(harnessConfig(deps));
-  harness.observe((_session, ev) => deps.onEvent(ev));
+  harness.observe((session, ev) => deps.onEvent(session, ev));
   return harness;
 }

@@ -2,10 +2,12 @@ import { Agent, type Connection } from "agents";
 import { classifyContextOverflow } from "agents/harness/think";
 import type {
   ThinkHarness,
+  ThinkSessionEvent,
   ThinkTurnConfig,
   ThinkTurnContext,
   ThinkTurnEndContext,
 } from "agents/harness/think";
+import { Streams } from "agents/streams";
 import type { ToolSet, UIMessage } from "ai";
 import type {
   AgentReply,
@@ -52,6 +54,8 @@ import { fetchRouter } from "./router";
 import { parseDirective } from "./directives";
 import { buildHarness } from "./harness";
 import { MAX_STEPS_CHAT } from "./harness-config";
+import { framesFromEvent } from "./frames";
+import { StreamHub, streamIdFor } from "./stream-hub";
 import { messageText, replyFrom } from "./reply";
 import {
   buildTools,
@@ -133,11 +137,20 @@ function toolOutputOf(messages: readonly UIMessage[], toolCallId: string): strin
 
 export class FederationAgent extends Agent<Env> {
   private readonly harness: ThinkHarness<ToolSet>;
+  private readonly hub: StreamHub;
   private readonly turnUser = new Map<string, StashedTurn[]>();
   private schemaReady = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // ThinkHarness keeps its own private Streams bound directly in onStart(), so
+    // there is no duplicate capability to collide with. Both instances read and
+    // write the same two tables (cf_agents_streams, cf_agents_stream_blocks),
+    // which is what makes one DO's chunks readable by both. Id namespaces are
+    // disjoint: the harness writes think:<uuid>, the hub writes s:<session>:<op>.
+    const streams = new Streams({ maxChunkBytes: 64 * 1024 });
+    this.lifecycle.use(streams);
+    this.hub = new StreamHub(streams, this.db());
     // Exactly one harness for every lane (R70). maxSteps is a construction-time
     // number in agents 0.28.1, and a second harness would mean a second Sessions
     // writer over the same transcript table.
@@ -146,13 +159,36 @@ export class FederationAgent extends Agent<Env> {
       tools: (session) => buildTools(this.toolDeps(session)),
       maxSteps: MAX_STEPS_CHAT,
       classifyError: classifyContextOverflow,
-      // Phase 3 wires this to a durable stream; until then nothing consumes events.
-      onEvent: () => {},
+      onEvent: (session, ev) => this.mirrorEvent(session, ev),
       onTurnEnd: (turn) => this.onHarnessTurnEnd(turn),
       summarize: (text) => this.summarize(text),
       beforeTurn: (turn) => this.beforeTurn(turn),
     });
     this.lifecycle.use(this.harness);
+  }
+
+  /**
+   * Mirror one harness event into its operation's durable stream. The observer
+   * is synchronous and `open()` is not, so the hub buffers frames until the
+   * writer exists; that is what keeps the first text delta from being lost.
+   *
+   * Settlement follows the terminal `operation` event, not `run-end`: run-end
+   * fires before the result is settled and carries no text, and a model-call
+   * error may still recover, so failing on `onError` would end a stream that
+   * is about to continue.
+   */
+  private mirrorEvent(session: string, ev: ThinkSessionEvent): void {
+    const frames = framesFromEvent(ev);
+    if (frames.length > 0 && (ev.type === "chunk" || ev.type === "run-start")) {
+      this.hub.feed(streamIdFor(session, ev.operationId), session, frames);
+    }
+    if (ev.type !== "operation") return;
+    const streamId = streamIdFor(session, ev.status.operationId);
+    if (ev.status.status === "done") {
+      this.hub.finish(streamId, session, ev.status.text ?? "");
+    } else if (ev.status.status === "unanswered") {
+      this.hub.fail(streamId, ev.status.reason ?? "operation ended without an answer");
+    }
   }
 
   /**
@@ -434,8 +470,13 @@ export class FederationAgent extends Agent<Env> {
     // The harness owns the model's context. The user row above and the assistant
     // row `onHarnessTurnEnd` writes are the console's display projection only.
     this.stashTurn(session, { content, tier: chatTier });
+    // The operation id is ours so the stream exists before the first chunk: an
+    // observer that only reacts to run-start would race the async open().
+    const operationId = crypto.randomUUID();
+    await this.hub.open(streamIdFor(session, operationId), session);
     const result = await this.harness.session(session).prompt(content, {
       source: "server",
+      operationId,
     });
     return replyFrom(result);
   }
