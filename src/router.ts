@@ -61,15 +61,16 @@ export function routerUrl(env: Env, path: string): string {
 
 /**
  * A POST to `routerUrl(env, path)` carrying the Bearer router key and a JSON body
- * with the `stream` flag stamped in. `signal` is optional and comes from the
- * caller, so each call site keeps its own visible timeout.
+ * with the `stream` flag stamped in. Deliberately takes no AbortSignal: workers read
+ * `signal` from fetch's RequestInit, not from the Request constructor, so a signal
+ * attached here would be dropped and every call-site timeout would go inert.
+ * `fetchRouter` is the only place a caller can hand one over.
  */
 export function routerRequest(
   env: Env,
   path: string,
   body: unknown,
-  stream: boolean,
-  signal?: AbortSignal
+  stream: boolean
 ): Request {
   const payload = { ...(body as Record<string, unknown>), stream };
   return new Request(routerUrl(env, path), {
@@ -79,13 +80,14 @@ export function routerRequest(
       authorization: `Bearer ${env.ROUTER_KEY}`,
     },
     body: JSON.stringify(payload),
-    ...(signal ? { signal } : {}),
   });
 }
 
 /**
  * One router call: through the ROUTER service binding when the worker has it,
- * otherwise over the network. Never sets a tier header.
+ * otherwise over the network. Never sets a tier header. `signal` is optional and
+ * comes from the caller, so each call site keeps its own visible timeout, and it
+ * travels in the init on whichever path is taken.
  */
 export async function fetchRouter(
   env: Env,
@@ -94,6 +96,7 @@ export async function fetchRouter(
   stream: boolean,
   signal?: AbortSignal
 ): Promise<Response> {
-  const request = routerRequest(env, path, body, stream, signal);
-  return env.ROUTER ? env.ROUTER.fetch(request) : fetch(request);
+  const request = routerRequest(env, path, body, stream);
+  const init = signal ? { signal } : {};
+  return env.ROUTER ? env.ROUTER.fetch(request, init) : fetch(request, init);
 }

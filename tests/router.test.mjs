@@ -111,6 +111,83 @@ await checkAsync("fetchRouter goes through env.ROUTER when the binding exists", 
   );
 });
 
+// ---- the caller's AbortSignal must reach fetch's RequestInit, not the Request ----
+// Workers document `signal` on fetch's init and on Fetcher.fetch's init; the Request
+// constructor's documented init does not include it, so a signal carried on the
+// Request is a silent drop and every call-site timeout becomes inert. Same class as
+// the {timeout} vs timeoutMs drop. Pinned on both paths, plus the shape that proves
+// the signal is not riding on the Request instead.
+await checkAsync("fetchRouter hands the signal to global fetch's init", async () => {
+  const ctrl = new AbortController();
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    seen.push({ input, init });
+    return new Response("ok");
+  };
+  try {
+    await fetchRouter(env, PATH, { model: "m" }, false, ctrl.signal);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(seen.length, 1, "expected exactly one fetch call");
+  assert.equal(seen[0].init?.signal, ctrl.signal, "signal absent from fetch init");
+  assert.notEqual(
+    seen[0].input.signal,
+    ctrl.signal,
+    "signal must not be carried on the Request, where workerd does not read it"
+  );
+});
+
+await checkAsync("fetchRouter hands the signal to the ROUTER binding's init", async () => {
+  const ctrl = new AbortController();
+  const seen = [];
+  const envWithBinding = {
+    ...env,
+    ROUTER: {
+      fetch: async (req, init) => {
+        seen.push({ req, init });
+        return new Response("ok");
+      },
+    },
+  };
+  await fetchRouter(envWithBinding, PATH, { model: "m" }, false, ctrl.signal);
+  assert.equal(seen.length, 1, "expected exactly one binding call");
+  assert.equal(seen[0].init?.signal, ctrl.signal, "signal absent from binding init");
+  assert.notEqual(seen[0].req.signal, ctrl.signal, "signal must not be on the Request");
+});
+
+await checkAsync("fetchRouter rejects against the real fetch on an aborted signal", async () => {
+  // No stub: this is the platform's own abort path, and it must reject before any
+  // network I/O, which is why an unroutable host is fine here.
+  const ctrl = new AbortController();
+  ctrl.abort();
+  await assert.rejects(
+    () => fetchRouter(env, PATH, { model: "m" }, false, ctrl.signal),
+    (err) => err?.name === "AbortError",
+    "an already-aborted signal must reject with AbortError"
+  );
+});
+
+await checkAsync("fetchRouter still works with no signal", async () => {
+  const realFetch = globalThis.fetch;
+  let initSeen = "unset";
+  globalThis.fetch = async (input, init) => {
+    initSeen = init;
+    return new Response("ok");
+  };
+  try {
+    const res = await fetchRouter(env, PATH, { model: "m" }, false);
+    assert.equal(await res.text(), "ok");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(
+    initSeen === undefined || initSeen?.signal === undefined,
+    "no signal must be handed to fetch when the caller passed none"
+  );
+});
+
 if (failures.length > 0) {
   for (const failure of failures) console.error("  FAIL " + failure);
   console.error(`router: ${failures.length} failed`);
