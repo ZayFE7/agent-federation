@@ -66,6 +66,7 @@ import {
   type SearchResult,
   type SnapshotResult,
   type ToolDeps,
+  type ToolProgress,
 } from "./tools";
 
 /**
@@ -139,6 +140,8 @@ export class FederationAgent extends Agent<Env> {
   private readonly harness: ThinkHarness<ToolSet>;
   private readonly hub: StreamHub;
   private readonly turnUser = new Map<string, StashedTurn[]>();
+  /** The running operation per session, so tool progress lands on its stream. */
+  private readonly currentOp = new Map<string, string>();
   private schemaReady = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -178,17 +181,37 @@ export class FederationAgent extends Agent<Env> {
    * is about to continue.
    */
   private mirrorEvent(session: string, ev: ThinkSessionEvent): void {
+    if (ev.type === "run-start") this.currentOp.set(session, ev.operationId);
     const frames = framesFromEvent(ev);
     if (frames.length > 0 && (ev.type === "chunk" || ev.type === "run-start")) {
       this.hub.feed(streamIdFor(session, ev.operationId), session, frames);
     }
     if (ev.type !== "operation") return;
+    if (this.currentOp.get(session) === ev.status.operationId) {
+      this.currentOp.delete(session);
+    }
     const streamId = streamIdFor(session, ev.status.operationId);
     if (ev.status.status === "done") {
       this.hub.finish(streamId, session, ev.status.text ?? "");
     } else if (ev.status.status === "unanswered") {
       this.hub.fail(streamId, ev.status.reason ?? "operation ended without an answer");
     }
+  }
+
+  /** A tool's live progress, addressed to its call id on the operation's stream. */
+  private emitToolProgress(session: string, toolCallId: string, p: ToolProgress): void {
+    const operationId = this.currentOp.get(session);
+    if (!operationId) return;
+    this.hub.feed(streamIdFor(session, operationId), session, [
+      {
+        t: "tool-progress",
+        id: toolCallId,
+        phase: p.phase,
+        message: p.message,
+        fraction: p.fraction,
+        ...(p.tail === undefined ? {} : { tail: p.tail }),
+      },
+    ]);
   }
 
   /**
@@ -939,6 +962,7 @@ export class FederationAgent extends Agent<Env> {
       search: (query) => this.searchParallel(query),
       schedule: (input) => this.scheduleJob(input),
       snapshot: () => this.snapshotWorkspace(session),
+      progress: (toolCallId, p) => this.emitToolProgress(session, toolCallId, p),
     };
   }
 

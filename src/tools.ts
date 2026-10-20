@@ -50,16 +50,54 @@ export interface DelegateInput {
 }
 
 /**
+ * What a running tool reports while it works. `fraction` is null until the tool
+ * can honestly measure progress; a tool's final report is always 1, because the
+ * UI only settles a widget that reaches 1 (or receives the tool result).
+ */
+export interface ToolProgress {
+  phase: string;
+  message: string;
+  fraction: number | null;
+  tail?: string;
+}
+
+export type ToolProgressSink = (p: ToolProgress) => void;
+
+/**
  * What the tools may call. The agent supplies the real implementations; tests
- * supply fakes. `exec`'s `onTail` is the seam a later streaming task uses to
- * forward sandbox output as it arrives.
+ * supply fakes. `progress` is the transport to the stream: each tool binds the
+ * current `toolCallId` and forwards a ToolProgress, so the UI updates the card
+ * that belongs to that exact call.
  */
 export interface ToolDeps {
-  exec(cmd: string, onTail?: (line: string) => void): Promise<ExecResult>;
-  search(query: string): Promise<SearchResult[]>;
-  schedule(input: ScheduleInput): Promise<string>;
-  snapshot(): Promise<SnapshotResult>;
-  delegate?(input: DelegateInput): Promise<string>;
+  exec(cmd: string, onProgress?: ToolProgressSink): Promise<ExecResult>;
+  search(query: string, onProgress?: ToolProgressSink): Promise<SearchResult[]>;
+  schedule(input: ScheduleInput, onProgress?: ToolProgressSink): Promise<string>;
+  snapshot(onProgress?: ToolProgressSink): Promise<SnapshotResult>;
+  delegate?(input: DelegateInput, onProgress?: ToolProgressSink): Promise<string>;
+  progress?(toolCallId: string, p: ToolProgress): void;
+}
+
+/**
+ * Bind the dep's progress transport to one tool call. Tools stay ignorant of
+ * stream ids and frames; they only know the phase vocabulary.
+ */
+function progressSink(
+  deps: ToolDeps,
+  options: { toolCallId?: string } | undefined
+): ToolProgressSink | undefined {
+  const toolCallId = options?.toolCallId;
+  if (!deps.progress || typeof toolCallId !== "string" || toolCallId.length === 0) {
+    return undefined;
+  }
+  return (p) => deps.progress?.(toolCallId, p);
+}
+
+/** The last few lines of a command result, for the live widget's tail. */
+function execTail(r: ExecResult): string {
+  const text = r.error ?? [r.stdout, r.stderr].filter(Boolean).join("\n");
+  const lines = text.trim().split("\n").filter(Boolean);
+  return clip(lines.slice(-6).join("\n"), 400);
 }
 
 /** Slice to n chars and say so when truncated, so the model/user knows output was cut. */
@@ -123,7 +161,16 @@ function execTool(deps: ToolDeps) {
           `A single shell command line, e.g. 'python3 solve.py' or 'ls -la ${SANDBOX_HOME}'. Runs in ${SANDBOX_HOME}; times out after 60s, so background long-running work.`
         ),
     }),
-    execute: async ({ cmd }) => formatExecResult(await deps.exec(cmd)),
+    execute: async ({ cmd }, options) => {
+      const onProgress = progressSink(deps, options);
+      onProgress?.({ phase: "running", message: cmd, fraction: null });
+      const result = await deps.exec(cmd, onProgress);
+      // E2B's run endpoint returns at completion, so this is the first and only
+      // output signal: the widget stays indeterminate until here, never fakes a
+      // percentage.
+      onProgress?.({ phase: "running", message: cmd, fraction: 1, tail: execTail(result) });
+      return formatExecResult(result);
+    },
   });
 }
 
@@ -143,8 +190,16 @@ function webSearchTool(deps: ToolDeps) {
           .optional()
           .describe("How many results to return, 1 to 10. Defaults to 5."),
       }),
-      execute: async ({ query, max_results }) => {
-        const results = await deps.search(query);
+      execute: async ({ query, max_results }, options) => {
+        const onProgress = progressSink(deps, options);
+        onProgress?.({ phase: "searching", message: query, fraction: null });
+        const results = await deps.search(query, onProgress);
+        onProgress?.({
+          phase: "searching",
+          message: query,
+          fraction: 1,
+          tail: `${results.length} result(s)`,
+        });
         return formatSearchResults(query, results, max_results ?? 5);
       },
     }),
@@ -174,13 +229,26 @@ function scheduleTool(deps: ToolDeps) {
           "HH:MM in 24h UTC for a daily recurring job; overrides minutes_from_now. Example: '08:00'."
         ),
     }),
-    execute: async ({ title, instructions, minutes_from_now, daily_at }) =>
-      deps.schedule({
-        title,
-        instructions,
-        minutesFromNow: minutes_from_now,
-        dailyAt: daily_at,
-      }),
+    execute: async ({ title, instructions, minutes_from_now, daily_at }, options) => {
+      const onProgress = progressSink(deps, options);
+      onProgress?.({ phase: "scheduling", message: title, fraction: null });
+      const output = await deps.schedule(
+        {
+          title,
+          instructions,
+          minutesFromNow: minutes_from_now,
+          dailyAt: daily_at,
+        },
+        onProgress
+      );
+      onProgress?.({
+        phase: "scheduling",
+        message: title,
+        fraction: 1,
+        tail: clip(output, 200),
+      });
+      return output;
+    },
   });
 }
 
@@ -189,8 +257,12 @@ function saveWorkspaceTool(deps: ToolDeps) {
     description:
       `Snapshot the sandbox ${SANDBOX_HOME} directory into persistent storage so files survive a sandbox restart. Nothing is snapshotted automatically: call this yourself after creating important files.`,
     inputSchema: z.object({}),
-    execute: async () => {
-      const r = await deps.snapshot();
+    execute: async (_input, options) => {
+      const onProgress = progressSink(deps, options);
+      const message = `snapshot ${SANDBOX_HOME}`;
+      onProgress?.({ phase: "snapshotting", message, fraction: null });
+      const r = await deps.snapshot(onProgress);
+      onProgress?.({ phase: "snapshotting", message, fraction: 1, tail: clip(r.output, 200) });
       return r.output;
     },
   });
