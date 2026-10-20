@@ -131,6 +131,13 @@ details.dem{margin-top:12px}details.dem summary{font-size:13px;font-weight:700;c
 .tcard .tch{display:flex;align-items:center;gap:8px;padding:9px 14px;font-weight:700;font-size:13px;border-bottom:1px solid var(--ln);background:color-mix(in srgb,var(--t) 12%,transparent)}
 .tcard .cmd{padding:8px 14px 0;font-family:ui-monospace,monospace;font-size:12px;color:var(--t)}
 .tcard pre{margin:6px 0 0;padding:8px 14px 12px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;color:var(--mu)}
+.tcard .tch{cursor:pointer}.tcard .tch .tst{margin-left:auto;font-size:11.5px;font-weight:700;color:var(--mu)}
+.tcard.settled .tbody{display:none}.tcard.settled.open .tbody{display:block}
+.tcard .term{padding:6px 14px 2px;color:var(--mu);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-height:110px;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.tcard .term:empty{display:none}
+.tcard .pr{margin:4px 14px 10px}.tcard .pr i{width:32%;animation:pw 1.5s ease-in-out infinite}.tcard.settled .pr{display:none}
+.wr{display:flex;align-items:center;gap:10px;align-self:flex-start;padding:3px 4px;font-size:12.5px;font-weight:600;color:var(--mu)}
+.wr button{border:1px solid var(--ln);background:var(--s1);box-shadow:var(--sh1);border-radius:99px;padding:5px 13px;font-size:12px;font-weight:700;color:var(--ink)}
 /* rig */
 .shd{transform-box:fill-box;transform-origin:center;fill:rgba(0,0,0,.3);animation:var(--sk,none) var(--bd,4s) var(--sine) infinite}
 .sq{transform-box:fill-box;transform-origin:50% 100%;animation:var(--bk,breathe) var(--bd,4s) var(--sine) infinite}
@@ -359,7 +366,7 @@ MXE.querySelectorAll(".pp").forEach(p=>p.classList.toggle("on",p.classList.conta
 const insp=()=>{const s=S[cur];return`<h3>Live activity</h3>${card(cur)||`<div class="row" style="--t:${s.c}"><div class="ico">${ic(s.ic)}</div><div class="grow"><b>${s.n}</b><small>${s.say}</small></div></div>`}<h3>While you were away</h3>${LG.length?`<div class="tl">${LG.map(a=>`<div style="--t:${T(a[0])}">${a[2]}<small>${a[1]}</small></div>`).join("")}</div>`:`<p style="color:var(--mu);font-size:13px">Nothing yet. Blip will log what happens while you are away.</p>`}`};
 const scrollEnd=()=>{const e=$("scr");setTimeout(()=>e.scrollTo({top:e.scrollHeight,behavior:"smooth"}),80)};
 const toolCard=t=>`<div class="tcard ${t.ok?"ok":"bad"}"><div class="tch">${t.ok?"&#10003;":"&#10007;"} ${String(t.name||"tool").replace(/</g,"&lt;")}</div>${t.cmd?`<div class="cmd">$ ${String(t.cmd).replace(/</g,"&lt;")}</div>`:""}${t.output?`<pre>${String(t.output).replace(/</g,"&lt;")}</pre>`:""}</div>`;
-const SC={chat:()=>{if(!LOG.length)return`<div class="thr"><div class="dv">Today</div><p style="color:var(--mu);text-align:center;padding:48px 0;font-size:14.5px">Say hi to Blip, or ask it to do something.</p></div>`;return`<div class="thr"><div class="dv">Today</div>${LOG.map(([r,t],i)=>r==="t"?toolCard(t):`<div class="m ${r}${i>=NF?" nw":""}">${md(t)}</div>`).join("")}${busy?`<div class="m a" id="amsg"><span class="tpk"><i></i><i></i><i></i></span></div>`:""}<div class="inl" id="cardw"></div></div>`},
+const SC={chat:()=>{const rows=LOG.length?LOG.map(([r,t],i)=>r==="t"?toolCard(t):`<div class="m ${r}${i>=NF?" nw":""}">${md(t)}</div>`).join(""):`<p style="color:var(--mu);text-align:center;padding:48px 0;font-size:14.5px">Say hi to Blip, or ask it to do something.</p>`;return`<div class="thr" id="thr"><div class="dv">Today</div>${rows}<div id="live"></div><div class="inl" id="cardw"></div></div>`},
 tasks:()=>{const live=TASKS.filter(t=>t.status!=="done"),done=TASKS.filter(t=>t.status==="done").slice(-4).reverse();
 const rows=live.map(t=>`<div class="row" style="--t:${T(awayState(t.title))}"><div class="ico">${ic(S[awayState(t.title)].ic)}</div><div class="grow"><b>${t.title.replace(/</g,"&lt;")}</b><small>${t.status==="running"?"Running now":"Scheduled · "+(t.due_at?new Date(t.due_at).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"soon")}</small>${t.status==="running"?`<div class="pr"><i style="width:60%"></i></div>`:""}</div></div>`).join("");
 const away=done.map(t=>`<div style="--t:${T(awayState(t.title))}">${t.title.replace(/</g,"&lt;")}<small>${t.due_at?new Date(t.due_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):""}</small></div>`).join("");
@@ -375,31 +382,90 @@ const renderList=()=>{const tl=$("tl2");if(tl)tl.innerHTML=lst($("sq")?$("sq").v
 const sideHTML=()=>`<div class="sh"><b class="logo">Blip</b></div><div id="tl2">${lst()}</div><details class="dem"><summary>Preview every state</summary><div class="chips">${Object.keys(S).map(k=>`<button class="chip" data-k="${k}" style="--c:${T(k)}" aria-pressed="${k==cur&&tab=="chat"}" onclick="st('${k}')"><i></i>${S[k].n}</button>`).join("")}</div></details><div class="sf"><button class="ib" aria-label="Switch light or dark" onclick="theme()">${ic("sun")}</button><label class="sp">${ic("search")}<input id="sq" placeholder="Search" aria-label="Search chats" oninput="$('tl2').innerHTML=lst(this.value)"></label><button class="ib" aria-label="New chat" onclick="newChat()">${ic("plus")}</button></div>`;
 function upd(){const s=S[cur];D.style.setProperty("--t",s.c);t0=Date.now();vi=0;$("pi").innerHTML=ic(s.ic);$("ring").style.setProperty("--pp",s.i?(s.i-.5)*25+"%":"0%");pose(cur);
 document.querySelectorAll(".chip").forEach(c=>c.setAttribute("aria-pressed",tab=="chat"&&c.dataset.k==cur));$("insp").innerHTML=insp();
-if(tab=="chat"){const am=$("amsg"),cw=$("cardw");if(am)am.innerHTML=busy?'<span class="tpk"><i></i><i></i><i></i></span>':"";if(cw)cw.innerHTML=card(cur);scrollEnd()}tick()}
+if(tab=="chat"){const cw=$("cardw");if(cw)cw.innerHTML=card(cur);if(LIVE)keepEnd();else scrollEnd()}tick()}
 const renderThread=()=>{$("scr").innerHTML=SC.chat()};
+// Streaming: frames arrive on a durable SSE and are applied in place. History is
+// the only thing that re-renders the whole thread; a live turn appends nodes and
+// never touches what is already on screen.
+let LIVE=null;
+const LIVE_KEY="blip.live";
+const nearEnd=()=>{const e=$("scr");return e.scrollHeight-e.scrollTop-e.clientHeight<180};
+const keepEnd=()=>{if(!nearEnd())return;const e=$("scr");e.scrollTop=e.scrollHeight};
+const clearLive=()=>{try{localStorage.removeItem(LIVE_KEY)}catch(e){}};
+function slots(){let thr=$("thr");if(!thr){$("scr").innerHTML='<div class="thr" id="thr"><div class="dv">Today</div><div id="live"></div><div class="inl" id="cardw"></div></div>';thr=$("thr")}let lv=$("live");if(!lv){lv=document.createElement("div");lv.id="live";thr.insertBefore(lv,$("cardw")||null)}let cw=$("cardw");if(!cw){cw=document.createElement("div");cw.className="inl";cw.id="cardw";thr.appendChild(cw)}return{thr,lv,cw}}
+function mk(tag,cls,html){const n=document.createElement(tag);if(cls)n.className=cls;if(html!=null)n.innerHTML=html;return n}
+function teardown(){const L=LIVE;if(!L)return;clearTimeout(L.timer);clearTimeout(L.esTimer);if(L.es){L.es.onerror=null;L.es.onmessage=null;L.es.close()}if(L.working&&L.working.parentNode)L.working.remove();LIVE=null}
+function saveLive(){const L=LIVE;if(!L||!L.streamId)return;try{localStorage.setItem(LIVE_KEY,JSON.stringify({sessionId:L.sessionId,streamId:L.streamId,operationId:L.operationId,at:Date.now()}))}catch(e){}}
+function beginLive(sid){teardown();const s=slots();const work=mk("div","wr",'<span class="tpk"><i></i><i></i><i></i></span><span>Working</span><button type="button" onclick="stopTurn()">Stop</button>');s.lv.appendChild(work);LIVE={sessionId:sid,operationId:null,streamId:null,text:"",node:null,working:work,host:s.lv,cw:s.cw,tools:new Map(),timer:0,es:null,esTimer:0,parked:false};busy=true;cur="think";upd()}
+function ensureText(){const L=LIVE;if(!L)return null;if(!L.node){L.node=mk("div","m a streaming nw","");L.host.insertBefore(L.node,L.working||L.cw)}return L.node}
+function appendText(d){const L=LIVE;if(!L||!d)return;L.text+=String(d);const n=ensureText();clearTimeout(L.timer);L.timer=setTimeout(()=>{if(LIVE!==L||!n.isConnected)return;n.innerHTML=md(L.text)},120);keepEnd()}
+function toolLine(t,text){if(!text)return;const d=document.createElement("div");d.textContent=String(text);t.term.appendChild(d);while(t.term.childNodes.length>60)t.term.firstChild.remove();t.term.scrollTop=t.term.scrollHeight}
+function mountTool(f){const L=LIVE;if(!L||!f.id)return;if(L.tools.has(f.id))return updateTool(f);const card=document.createElement("div");card.className="tcard";card.innerHTML='<div class="tch"><span>'+esc(f.label||f.name||"Tool")+'</span><span class="tst">running</span></div><div class="tbody"><div class="cmd"></div><div class="term"></div><div class="pr"><i></i></div><pre></pre></div>';
+const cmd=card.querySelector(".cmd");if(f.input)cmd.textContent=String(f.input);
+card.querySelector(".tch").addEventListener("click",()=>card.classList.toggle("open"));
+L.node=null;L.host.insertBefore(card,L.working||L.cw);
+L.tools.set(f.id,{card,term:card.querySelector(".term"),pre:card.querySelector("pre"),st:card.querySelector(".tst"),cmd,pr:card.querySelector(".pr")});
+if(f.state&&S[f.state]){cur=f.state;upd()}keepEnd()}
+function updateTool(f){const L=LIVE;if(!L)return;const t=L.tools.get(f.id);if(!t)return mountTool(f);
+if(f.phase==="input"){if(f.tail)t.cmd.textContent=String(f.tail).slice(-240);return}
+if(f.message)toolLine(t,f.message);if(f.tail)toolLine(t,f.tail);
+if(typeof f.fraction==="number"&&isFinite(f.fraction))t.pr.firstChild.style.width=Math.max(4,Math.min(100,f.fraction*100))+"%";keepEnd()}
+function settleTool(f){const L=LIVE;if(!L)return;if(!L.tools.has(f.id))mountTool(f);const t=L.tools.get(f.id);if(!t)return;
+t.card.classList.add("settled",f.ok?"ok":"bad");t.st.textContent=f.ok?"done":"failed";
+if(f.output!=null)t.pre.textContent=String(f.output);
+if(!f.ok)t.card.classList.add("open");keepEnd()}
+function finishLive(reply){const L=LIVE;if(!L)return;clearTimeout(L.timer);const text=reply||L.text;
+if(text){if(L.node){L.node.innerHTML=md(text);L.node.classList.remove("streaming")}else{L.node=mk("div","m a",md(text));L.host.insertBefore(L.node,L.working||L.cw)}LOG.push(["a",text])}
+teardown();clearLive();PENDING=null;busy=false;cur="success";upd();loadTasks();refreshSessionsSoon()}
+function failLive(msg){const L=LIVE;if(!L)return;clearTimeout(L.timer);
+if(L.parked){teardown();clearLive();busy=false;cur="approve";upd();return}
+const text="[error] "+(msg||"The stream ended with an error.");L.text=text;const n=ensureText();if(n)n.innerHTML=md(text);
+teardown();clearLive();busy=false;cur="error";upd();loadTasks();refreshSessionsSoon()}
+function applyFrame(f){const L=LIVE;if(!L||!f)return;
+if(f.t==="text")return appendText(f.d);
+if(f.t==="reasoning"){if(cur!=="think"){cur="think";upd()}return}
+if(f.t==="tool-start")return mountTool(f);
+if(f.t==="tool-progress")return updateTool(f);
+if(f.t==="tool-result")return settleTool(f);
+if(f.t==="approval"){PENDING={toolCallId:f.toolCallId,cmd:f.cmd};L.parked=true;cur="approve";upd();return}
+if(f.t==="state"){if(f.state&&S[f.state]){cur=f.state;upd()}return}
+if(f.t==="step")return;
+if(f.t==="done")return finishLive(f.reply);
+if(f.t==="error")return failLive(f.message)}
+function connectStream(streamId){const L=LIVE;if(!L||!streamId)return;L.streamId=streamId;
+const url="/api/sessions/"+encodeURIComponent(L.sessionId)+"/stream/"+encodeURIComponent(streamId)+"?token="+encodeURIComponent(key());
+let es;try{es=new EventSource(url)}catch(e){failLive("stream could not open");return}
+L.es=es;saveLive();
+es.onmessage=e=>{if(LIVE!==L)return;clearTimeout(L.esTimer);let f;try{f=JSON.parse(e.data)}catch(err){return}applyFrame(f)};
+es.onerror=()=>{if(LIVE!==L||L.es!==es)return;if(document.visibilityState==="hidden")return;if(es.readyState!==EventSource.CLOSED)return;clearTimeout(L.esTimer);L.esTimer=setTimeout(()=>{if(LIVE!==L||L.es!==es)return;failLive("stream disconnected")},1500)}}
+async function stopTurn(){const L=LIVE;if(!L)return;const sid=L.sessionId,op=L.operationId;teardown();clearLive();busy=false;cur="idle";if(tab=="chat"){const s=slots();s.lv.appendChild(mk("div","dv","Stopped"))}upd();if(!sid)return;try{await api("/api/sessions/"+encodeURIComponent(sid)+"/abort",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(op?{operationId:op}:{})})}catch(e){}}
+function resumeLive(id){let s=null;try{s=JSON.parse(localStorage.getItem(LIVE_KEY)||"null")}catch(e){s=null}
+if(!s||s.sessionId!==id||!s.streamId||Date.now()-Number(s.at||0)>600000){clearLive();return false}
+beginLive(id);LIVE.operationId=s.operationId||null;connectStream(s.streamId);return true}
+window.addEventListener("pagehide",()=>{const L=LIVE;if(L&&L.es){L.es.onerror=null;L.es.onmessage=null;L.es.close()}});
 function render(){if(tab=="chat")renderThread();else $("scr").innerHTML=`<div class="pgw">${SC[tab]()}</div>`;
 const nav=TABS.map(t=>`<button role="tab" aria-selected="${t[0]==tab}" onclick="go('${t[0]}')">${ic(t[1])}<span>${t[2]}</span></button>`).join("");$("dock").innerHTML=nav;$("rail").innerHTML=nav;
 $("cmp").style.display=tab=="chat"?"flex":"none";$("side").innerHTML=sideHTML();upd();NF=99}
 const go=t=>{tab=t;side(0);render();if(t=="tasks")loadTasks()},side=o=>$("app").classList.toggle("dr",!!o);
 function pick(id){openSession(id)}
-async function openSession(id){state.sessionId=id;localStorage.setItem("blip.session",id);tab="chat";try{const r=await api("/api/sessions/"+id+"/messages");const j=await r.json();if(state.sessionId!==id)return;if(j.ok&&Array.isArray(j.messages)){
+async function openSession(id){teardown();PENDING=null;state.sessionId=id;localStorage.setItem("blip.session",id);tab="chat";try{const r=await api("/api/sessions/"+id+"/messages");const j=await r.json();if(state.sessionId!==id)return;if(j.ok&&Array.isArray(j.messages)){
 // Phase 1: /api/sessions/:id/messages returns MessageRow text rows only. Tool cards
 // are not persisted there, so reopening a chat shows text and drops the cards. Do
 // not fake them from in-flight state; durable Streams (Task 18 onward) restore them.
-LOG=j.messages.map(m=>[m.role==="user"?"u":"a",String(m.content||"")])}else LOG=[["a","[error] "+(j.error||"Could not load this chat.")]]}catch(e){if(state.sessionId!==id)return;LOG=[["a","[network] "+e]]}busy=false;cur="idle";NF=99;render();side(0);scrollEnd()}
+LOG=j.messages.map(m=>[m.role==="user"?"u":"a",String(m.content||"")])}else LOG=[["a","[error] "+(j.error||"Could not load this chat.")]]}catch(e){if(state.sessionId!==id)return;LOG=[["a","[network] "+e]]}busy=false;cur="idle";NF=99;render();side(0);scrollEnd();resumeLive(id)}
 async function loadSessions(){if(!hasKey())return;try{const r=await api("/api/sessions");const j=await r.json();if(!j.ok)return;state.sessions=Array.isArray(j.sessions)?j.sessions:[];renderList()}catch(e){}}
 async function newSession(){if(!hasKey()){setKey();return null}const r=await api("/api/sessions",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});const j=await r.json();if(!j.ok||!j.session||!j.session.id)return null;await loadSessions();await openSession(j.session.id);return j.session}
 function newChat(){newSession().catch(()=>{})}
 let tsq1=0,tsq2=0;
 function refreshSessionsSoon(){clearTimeout(tsq1);clearTimeout(tsq2);loadSessions();tsq1=setTimeout(loadSessions,2500);tsq2=setTimeout(loadSessions,7000)}
 async function renameSession(id,title){const s=state.sessions.find(x=>x.id===id);if(!s)return;if(title===undefined){const v=prompt("Rename session",s.title||"");if(v===null)return;title=v}const t=String(title).trim();if(!t)return;try{const r=await api("/api/sessions/"+id,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({title:t})});const j=await r.json().catch(()=>({}));if(!j.ok)return;s.title=t;renderList()}catch(e){}}
-async function deleteSession(id){if(!confirm("Delete this chat? Its workspace files are kept."))return;try{const r=await api("/api/sessions/"+id,{method:"DELETE"});const j=await r.json().catch(()=>({}));if(!j.ok)return;state.sessions=state.sessions.filter(s=>s.id!==id);if(state.sessionId!==id){renderList();return}const next=state.sessions.find(s=>s.id==="main")||state.sessions[0];if(next){await openSession(next.id);return}state.sessionId=null;localStorage.removeItem("blip.session");LOG=[];busy=false;cur="idle";tab="chat";render()}catch(e){}}
+async function deleteSession(id){if(!confirm("Delete this chat? Its workspace files are kept."))return;try{const r=await api("/api/sessions/"+id,{method:"DELETE"});const j=await r.json().catch(()=>({}));if(!j.ok)return;state.sessions=state.sessions.filter(s=>s.id!==id);if(state.sessionId!==id){renderList();return}teardown();clearLive();const next=state.sessions.find(s=>s.id==="main")||state.sessions[0];if(next){await openSession(next.id);return}state.sessionId=null;localStorage.removeItem("blip.session");LOG=[];busy=false;cur="idle";tab="chat";render()}catch(e){}}
 function setKey(){const k=prompt("Agent API key (stored in this browser only):");if(!k||!k.trim())return;localStorage.setItem("blip_key",k.trim());bootLoad()}
 async function bootLoad(){if(!hasKey())return;await loadSessions();loadTasks();const ids=state.sessions.map(s=>s.id),stored=localStorage.getItem("blip.session");const id=(stored&&ids.includes(stored))?stored:(ids.includes("main")?"main":ids[0]);if(id)await openSession(id);else{state.sessionId=null;localStorage.removeItem("blip.session");render()}}
 function st(k){cur=k;side(0);if(tab!="chat"){tab="chat";render()}else upd()}
 function peek(){const w=$("who"),o=!w.classList.contains("big");w.classList.toggle("big",o);$("pk").classList.toggle("on",o);clearTimeout(pkt);if(o)pkt=setTimeout(peek,5200)}
-async function send(){const v=$("inp").value.trim();if(!v)return;if(!hasKey()){const k=prompt("Agent API key (stored in this browser only):");if(!k||!k.trim())return;localStorage.setItem("blip_key",k.trim())}$("inp").value="";$("cmp").classList.remove("has");if(!state.sessionId){let s;try{s=await newSession()}catch(e){LOG.push(["a","[network] "+e]);cur="error";busy=false;renderThread();upd();return}if(!s){LOG.push(["a","[error] Could not start a new chat."]);cur="error";busy=false;renderThread();upd();return}}LOG.push(["u",v]);NF=LOG.length-1;if(tab!="chat")tab="chat";cur="think";busy=true;t0=Date.now();render();fedChat(v)}
-async function fedChat(v){clearTimeout(tsq1);clearTimeout(tsq2);try{const r=await api("/api/sessions/"+state.sessionId+"/message",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({content:v,tier:"primary"})});const j=await r.json();if(j.error&&!j.reply){LOG.push(["a","[error] "+j.error]);cur="error";busy=false;renderThread();upd();return}const reply=j.reply||"";LOG.push(["a",reply]);NF=LOG.length-1;let ran=0;if(Array.isArray(j.tools)){for(const t of j.tools){LOG.push(["t",t]);if(t.name==="schedule_task")ran++}}if(ran){const rc=$("runCount");if(rc&&rc.firstChild)rc.firstChild.nodeValue=String((parseInt(rc.firstChild.nodeValue)||0)+ran)}PENDING=j.pending||null;cur=(j.state&&S[j.state])?j.state:(j.error?"error":"success");t0=Date.now();busy=false;renderThread();upd();loadTasks();refreshSessionsSoon()}catch(e){LOG.push(["a","[network] "+e]);cur="error";busy=false;renderThread();upd()}}
+async function send(){const v=$("inp").value.trim();if(!v)return;if(!hasKey()){const k=prompt("Agent API key (stored in this browser only):");if(!k||!k.trim())return;localStorage.setItem("blip_key",k.trim())}$("inp").value="";$("cmp").classList.remove("has");if(!state.sessionId){let s;try{s=await newSession()}catch(e){slots().lv.appendChild(mk("div","m a",md("[network] "+e)));cur="error";busy=false;upd();return}if(!s){slots().lv.appendChild(mk("div","m a",md("[error] Could not start a new chat.")));cur="error";busy=false;upd();return}}
+const sid=state.sessionId;LOG.push(["u",v]);if(tab!="chat"){tab="chat";render()}const s=slots();s.lv.appendChild(mk("div","m u nw",md(v)));beginLive(sid);try{const r=await api("/api/sessions/"+encodeURIComponent(sid)+"/message",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({content:v,tier:"primary"})});const j=await r.json().catch(()=>({}));if(state.sessionId!==sid||!LIVE){teardown();clearLive();return}if(!r.ok||!j.ok){failLive(j.error||("send failed ("+r.status+")"));return}LIVE.operationId=j.operationId;saveLive();connectStream(j.streamId)}catch(e){failLive("network: "+e)}}
 async function loadTasks(){if(!hasKey())return;try{const r=await api("/api/tasks");const j=await r.json();if(!j.ok)return;TASKS=j.tasks||[];const live=TASKS.filter(t=>t.status!=="done");const rc=$("runCount");if(rc&&rc.firstChild)rc.firstChild.nodeValue=String(live.length);LG.length=0;TASKS.filter(t=>t.status==="done").slice(-4).reverse().forEach(t=>LG.push([awayState(t.title),t.due_at?new Date(t.due_at).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}):"",String(t.title).replace(/</g,"&lt;")]));if(tab=="tasks")render();else if(tab=="chat"&&$("insp"))$("insp").innerHTML=insp()}catch(e){}}
 async function decide(approve){if(!PENDING)return;const toolCallId=PENDING.toolCallId,cmd=PENDING.cmd;PENDING=null;try{const r=await api("/api/approve",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId:state.sessionId,toolCallId,approved:approve})});const j=await r.json();LOG.push(["a",(approve?"[approved] ":"[denied] ")+cmd]);if(j.output)LOG.push(["t",{name:"exec",cmd,output:j.output,ok:j.ok}]);if(j.reply)LOG.push(["a",j.reply]);NF=LOG.length-1;cur=(j.state&&S[j.state])?j.state:"idle";busy=false;renderThread();upd();refreshSessionsSoon()}catch(e){LOG.push(["a","[network] "+e]);cur="error";busy=false;renderThread();upd()}}
 let lv="";function tick(){const s=S[cur],e=Math.floor((Date.now()-t0)/1000),v=s.v[vi%s.v.length]+(s.i?"…":"");if(v!=lv){lv=v;$("verb").innerHTML=`<span class="vb">${v}</span>`}$("clk").textContent=s.i?Math.floor(e/60)+":"+String(e%60).padStart(2,"0"):""}
