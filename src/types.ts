@@ -2,6 +2,7 @@
 // This module stays type-import-only so a dependency-free consumer (src/routes.ts)
 // can read it, and so an offline test can assert on it as text.
 
+import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
 
 /** Router lane. Agent uses primary|cheap; jev is reserved for the router's third lane. */
@@ -56,9 +57,14 @@ export interface ChatRequest {
  * dependency-free by rule, so the shapes it addresses DOs with have to live
  * here. Task 8 widens `chat` to take the session id; nothing else may restate
  * this interface.
+ *
+ * `messages` is Task 7's addition (R59): the transcript of one session, read from
+ * that session's own DO. It returns MessageRow — the store's row shape, `created_at`
+ * included — not UIMessage and not a {role, content} summary of one.
  */
 export interface AgentStub {
   chat(content: string, tier?: ChatTier): Promise<AgentReply>;
+  messages(limit?: number): Promise<MessageRow[]>;
   jobList(): Promise<unknown[]>;
   planState(): Promise<{ plan: unknown[]; pending: unknown }>;
   approveAction(

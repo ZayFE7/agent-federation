@@ -29,6 +29,7 @@ import {
   setPendingStatus,
   setPlan,
   type MemoryRow,
+  type MessageRow,
   type PendingRow,
   type PlanRow,
   type SqlHandle,
@@ -208,6 +209,16 @@ export class FederationAgent extends Agent<Env> {
     } catch (err) {
       return { reply: "agent error: " + String(err) };
     }
+  }
+
+  /**
+   * RPC: this session's own transcript (plan Task 7, R59). Transcripts shard per DO,
+   * so a session reads its own history and `main` reads the whole pre-shard one. The
+   * rows are `recentMessages`' own, newest-last, untouched: the route that serves
+   * them must not reshape a MessageRow.
+   */
+  async messages(limit?: number): Promise<MessageRow[]> {
+    return recentMessages(this.db(), limit ?? 50);
   }
 
   /** Vault RPC: store one base64 chunk. */

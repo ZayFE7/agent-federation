@@ -1,6 +1,8 @@
 import { FederationAgent } from "./agent";
 import { RegistryAgent } from "./registry";
 import { fetchRouter } from "./router";
+import { authed, safeEq } from "./auth";
+import { handleFetch } from "./routes";
 import type { AgentStub, ChatRequest, ChatTier, Env } from "./types";
 
 // Wrangler discovers Durable Object classes from the entry module's exports, so
@@ -11,27 +13,12 @@ function mainAgentId(env: Env): DurableObjectId {
   return env.FEDERATION_AGENT.idFromName("main");
 }
 
-/** Length-check then constant-time string compare (no early exit on mismatch). */
-function safeEq(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
 /**
- * True only when a non-empty AGENT_API_KEY is configured AND the request's bearer
- * token matches it. Fails CLOSED: an unset/empty key rejects every request, and a
- * bare "Bearer undefined" no longer authenticates.
+ * `safeEq` and `authed` moved to src/auth.ts in Task 7 so one copy exists and an
+ * offline test can reach them: src/routes.ts may import nothing but types plus
+ * ./auth, which is exactly why src/index.ts keeps its own handlers here and
+ * delegates only the /api/sessions* family below (R42).
  */
-function authed(request: Request, env: Env): boolean {
-  const key = (env.AGENT_API_KEY ?? "").trim();
-  if (!key) return false;
-  const got = (request.headers.get("Authorization") ?? "")
-    .replace(/^Bearer\s+/i, "")
-    .trim();
-  return safeEq(got, key);
-}
 
 function agentStub(env: Env): AgentStub {
   const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
@@ -40,8 +27,16 @@ function agentStub(env: Env): AgentStub {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    // The /api/sessions* family lives in src/routes.ts, which is the only part of
+    // this worker an offline Node test can import (R42). The prefix is the whole
+    // handover: /api/message, /api/tasks, /api/approve, /api/decide, the WebSocket
+    // upgrade and /internal/vault/* keep their addressing right here.
+    if (url.pathname === "/api/sessions" || url.pathname.startsWith("/api/sessions/")) {
+      return handleFetch(request, env, ctx);
+    }
 
     // WebSocket upgrades (path /) go straight to the agent DO; the Agents SDK
     // performs the hibernation handshake and dispatches frames to onMessage.
