@@ -17,6 +17,10 @@
       {
         "name": "FEDERATION_AGENT",
         "class_name": "FederationAgent"
+      },
+      {
+        "name": "REGISTRY",
+        "class_name": "RegistryAgent"
       }
     ]
   },
@@ -24,6 +28,12 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["FederationAgent"]
+    },
+    // RegistryAgent lands in its own NEW tag: an applied migration is never
+    // edited, which is the mistake wrangler warns about (plan Task 6 Step 1).
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RegistryAgent"]
     }
   ],
   // Keep-alive cron: pings RENDER_URL/health every 10 minutes so the free

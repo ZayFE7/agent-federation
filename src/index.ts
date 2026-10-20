@@ -1,24 +1,11 @@
 import { FederationAgent } from "./agent";
+import { RegistryAgent } from "./registry";
 import { fetchRouter } from "./router";
-import type { AgentReply, ChatRequest, ChatTier, Env } from "./types";
+import type { AgentStub, ChatRequest, ChatTier, Env } from "./types";
 
-export { FederationAgent };
-
-/** Minimal RPC surface of FederationAgent used over the DO stub. */
-interface AgentStub {
-  chat(content: string, tier?: ChatTier): Promise<AgentReply>;
-  jobList(): Promise<unknown[]>;
-  planState(): Promise<{ plan: unknown[]; pending: unknown }>;
-  approveAction(
-    id: number,
-    approve: boolean
-  ): Promise<{ ok: boolean; reply: string; state: string; output?: string }>;
-  vaultPut(key: string, idx: number, total: number, dataB64: string): Promise<void>;
-  vaultPull(key: string): Promise<Uint8Array | null>;
-  vaultChunk(key: string, idx: number): Promise<string | null>;
-  vaultHealth(key: string): Promise<Record<string, unknown> | null>;
-  vaultDelete(key: string): Promise<void>;
-}
+// Wrangler discovers Durable Object classes from the entry module's exports, so
+// every class a binding names has to be exported here (plan Task 6 Step 1).
+export { FederationAgent, RegistryAgent };
 
 function mainAgentId(env: Env): DurableObjectId {
   return env.FEDERATION_AGENT.idFromName("main");
