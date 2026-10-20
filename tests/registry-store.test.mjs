@@ -4,10 +4,11 @@
 // Node 22.6+/24 strips the .ts types on import, so this needs nothing else.
 //
 // Two layers on purpose. tests/fake-sql.mjs pins WHICH statement each function emits
-// and HOW it binds its values; the production adapter (`db()` in src/agent.ts) splits
-// each query on "?" and refuses a mismatch, so every recorded statement is checked for
-// exactly one placeholder per binding as well. A real node:sqlite database then runs
-// the same statements, which a fixture that only matches text cannot prove.
+// and HOW it binds its values; the production adapter (src/sql-handle.ts, which both
+// DOs call from `db()`) splits each query on "?" and refuses a mismatch, so every
+// recorded statement is checked for exactly one placeholder per binding as well. A real
+// node:sqlite database then runs the same statements, which a fixture that only matches
+// text cannot prove.
 //
 // Silent on success (exit 0). Prints every failure and exits 1 otherwise.
 
@@ -20,9 +21,11 @@ import {
   upsertSession,
   listSessions,
   getSession,
+  readRegistryMeta,
   renameSession,
   touchSession,
   deleteSession,
+  writeRegistryMeta,
 } from "../src/registry-store.ts";
 
 const COLUMNS = "id, title, created_at, updated_at, workspace_ref, unread, pinned";
@@ -78,7 +81,7 @@ check("PLACEHOLDER_TITLE is the exact string Task 6 seeds and Task 9 compares ag
 check("ensureRegistrySchema creates sessions with every SessionRow column declared", () => {
   const sql = newFake();
   assert.equal(ensureRegistrySchema(sql), undefined);
-  assert.equal(sql.stmts.length, 2, "one CREATE TABLE plus one CREATE INDEX");
+  assert.equal(sql.stmts.length, 3, "two CREATE TABLE plus one CREATE INDEX");
   const ddl = flat(sql.stmts[0][0]);
   assert.match(ddl, /^CREATE TABLE IF NOT EXISTS sessions\b/, ddl);
   for (const fragment of [
@@ -95,19 +98,62 @@ check("ensureRegistrySchema creates sessions with every SessionRow column declar
   assert.deepEqual(sql.stmts[0][1], [], "schema DDL binds nothing");
 });
 
-check("ensureRegistrySchema indexes updated_at, the column listSessions sorts by", () => {
+check("ensureRegistrySchema creates registry_meta as a key/value table", () => {
   const sql = newFake();
   ensureRegistrySchema(sql);
-  const index = flat(sql.stmts[1][0]);
-  assert.match(index, /^CREATE INDEX IF NOT EXISTS \S+ ON sessions \(updated_at\)$/, index);
-  assert.deepEqual(sql.stmts[1][1], []);
+  const ddl = flat(sql.stmts[1][0]);
+  assert.match(ddl, /^CREATE TABLE IF NOT EXISTS registry_meta\b/, ddl);
+  assert.ok(ddl.includes("key TEXT PRIMARY KEY"), `meta ddl missing a primary key: ${ddl}`);
+  assert.ok(ddl.includes("value TEXT"), `meta ddl missing a value column: ${ddl}`);
+  assert.deepEqual(sql.stmts[1][1], [], "schema DDL binds nothing");
+});
+
+check("ensureRegistrySchema indexes the composite order listSessions sorts by (R54)", () => {
+  const sql = newFake();
+  ensureRegistrySchema(sql);
+  const index = flat(sql.stmts[2][0]);
+  assert.equal(
+    index,
+    "CREATE INDEX IF NOT EXISTS sessions_pinned_updated ON sessions (pinned DESC, updated_at DESC)"
+  );
+  assert.deepEqual(sql.stmts[2][1], []);
+});
+
+check("ensureRegistrySchema no longer ships the single-column index nothing uses", () => {
+  const sql = newFake();
+  ensureRegistrySchema(sql);
+  for (const [query] of sql.stmts) {
+    assert.equal(flat(query).includes("sessions_updated_at"), false, `dropped index survives: ${query}`);
+  }
 });
 
 check("ensureRegistrySchema is idempotent as text, so a repeated onStart cannot fail", () => {
   const sql = newFake();
   ensureRegistrySchema(sql);
   ensureRegistrySchema(sql);
-  assert.deepEqual(sql.stmts.slice(0, 2).map(([q]) => q), sql.stmts.slice(2).map(([q]) => q));
+  assert.deepEqual(sql.stmts.slice(0, 3), sql.stmts.slice(3));
+});
+
+check("readRegistryMeta selects one value by key and answers null when the fake has no row", () => {
+  const sql = newFake();
+  assert.equal(readRegistryMeta(sql, "main_seeded"), null);
+  const [query, bindings] = onlyStmt(sql);
+  assert.equal(query, "SELECT value FROM registry_meta WHERE key = ?");
+  assert.deepEqual(bindings, ["main_seeded"]);
+});
+
+check("readRegistryMeta returns the value stored under the key", () => {
+  const sql = newFake();
+  sql.query("FROM registry_meta", [{ key: "main_seeded", value: "1700000000000" }]);
+  assert.equal(readRegistryMeta(sql, "main_seeded"), "1700000000000");
+});
+
+check("writeRegistryMeta inserts or replaces and reports no affected-row count", () => {
+  const sql = newFake();
+  assert.equal(writeRegistryMeta(sql, "main_seeded", "1700000000000"), undefined);
+  const [query, bindings] = onlyStmt(sql);
+  assert.equal(query, "INSERT OR REPLACE INTO registry_meta (key, value) VALUES (?, ?)");
+  assert.deepEqual(bindings, ["main_seeded", "1700000000000"]);
 });
 
 check("upsertSession inserts all seven columns and updates on a known id", () => {
@@ -364,6 +410,44 @@ check("deleteSession removes exactly the one row", () => {
   deleteSession(real, "inj");
   assert.equal(getSession(real, "inj"), null);
   assert.deepEqual(listSessions(real, 10).map((row) => row.id), ["c", "b", "abc123"]);
+});
+
+check("readRegistryMeta answers null for a key the database never wrote", () => {
+  assert.equal(readRegistryMeta(real, "main_seeded"), null);
+});
+
+check("writeRegistryMeta then readRegistryMeta round-trips the value", () => {
+  writeRegistryMeta(real, "round_trip", "1700000000000");
+  assert.equal(readRegistryMeta(real, "round_trip"), "1700000000000");
+  assert.equal(readRegistryMeta(real, "another_key"), null, "a write leaked into another key");
+});
+
+check("a second writeRegistryMeta for the same key replaces rather than duplicates", () => {
+  writeRegistryMeta(real, "round_trip", "1700000009999");
+  assert.equal(readRegistryMeta(real, "round_trip"), "1700000009999");
+  assert.equal(
+    db.prepare("SELECT value FROM registry_meta WHERE key = 'round_trip'").all().length,
+    1,
+    "the second write inserted a second row under one primary key"
+  );
+});
+
+check("re-running ensureRegistrySchema keeps the registry_meta rows already there", () => {
+  writeRegistryMeta(real, "main_seeded", "1700000000000");
+  ensureRegistrySchema(real);
+  ensureRegistrySchema(real);
+  assert.equal(readRegistryMeta(real, "main_seeded"), "1700000000000");
+  assert.equal(readRegistryMeta(real, "round_trip"), "1700000009999");
+  assert.equal(
+    db.prepare("SELECT count AS n FROM (SELECT COUNT(*) AS count FROM registry_meta)").all()[0].n,
+    2,
+    "the schema re-run duplicated or dropped a meta row"
+  );
+});
+
+check("the sessions rows survive the same re-run", () => {
+  ensureRegistrySchema(real);
+  assert.equal(getSession(real, "abc123").title, "Second write");
 });
 
 db.close();

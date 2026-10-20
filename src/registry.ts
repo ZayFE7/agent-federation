@@ -4,22 +4,34 @@
 //
 // This file is Worker-side: it value-imports `agents`, which pulls in
 // `cloudflare:workers`, so no offline Node test can import it (the plan's D6
-// limit, restated in progress.md R47). Its offline surface is
-// tests/types.test.mjs, which reads the two statements named below out of this
-// file and executes them against a real sqlite database.
+// limit, restated in progress.md R47). What it delegates to IS executed offline:
+// the input parsing lives in src/registry-input.ts (tests/registry-input.test.mjs)
+// and the SQL adapter in src/sql-handle.ts (tests/sql-handle.test.mjs).
+// tests/registry.test.mjs reads this file as text and runs the seed statement
+// named below against a real sqlite database.
 
 import { Agent } from "agents";
 import type { Env } from "./types";
 import type { SqlHandle } from "./memory";
+import { toSqlHandle, type SqlTag } from "./sql-handle";
+import {
+  MAX_LIMIT,
+  idFromSegment,
+  limitFrom,
+  readJson,
+  rowFrom,
+} from "./registry-input";
 import {
   PLACEHOLDER_TITLE,
   deleteSession,
   ensureRegistrySchema,
   getSession,
   listSessions,
+  readRegistryMeta,
   renameSession,
   touchSession,
   upsertSession,
+  writeRegistryMeta,
   type SessionRow,
 } from "./registry-store";
 
@@ -32,28 +44,21 @@ import {
  * empty and every conversation that already exists disappears from the list
  * (R43). The store's schema leaves workspace_ref NULL and defaults unread and
  * pinned to 0, which is exactly what a legacy session has today.
+ *
+ * DO NOTHING protects an EXISTING row, not an absent one, so on its own this
+ * would re-insert `main` after the user deletes it and the sidebar would show a
+ * "New session" whose DO still holds the real transcript (R64 I1). That is why
+ * onStart() reads a persisted registry_meta marker first: the seed runs once per
+ * database, and the marker outlives the DO instance that wrote it.
  */
 const MAIN_SEED_STATEMENT =
   "INSERT INTO sessions (id, title, created_at, updated_at, pinned, unread) VALUES (?, ?, ?, ?, 0, 0) ON CONFLICT(id) DO NOTHING";
 
-/**
- * Task 5 shipped `sessions_updated_at ON sessions (updated_at)`, which cannot
- * serve the sidebar's only query, `ORDER BY pinned DESC, updated_at DESC`
- * (R59, the deferred finding: that index leaves sqlite sorting into a temp
- * b-tree). The matching composite index belongs in the schema, but Task 5's
- * landed test pins ensureRegistrySchema at exactly two exec calls, so the
- * smallest honest way to add it is here, in the same idempotent DDL style, and
- * it is stated in the task report for the reviewer to judge.
- */
-const PINNED_ORDER_INDEX_STATEMENT =
-  "CREATE INDEX IF NOT EXISTS sessions_pinned_updated ON sessions (pinned DESC, updated_at DESC)";
+/** The registry_meta key holding the timestamp of the one boot seed (R64 I1). */
+const SEEDED_KEY = "main_seeded";
 
 /** The legacy session id, which is also the legacy DO name (R38: ids are bare). */
 const LEGACY_SESSION_ID = "main";
-
-/** Default and ceiling for the HTTP list, matching the route contract in Task 7. */
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
 
 /** Length-check then constant-time string compare (no early exit on mismatch). */
 function safeEq(a: string, b: string): boolean {
@@ -80,53 +85,6 @@ function authed(request: Request, env: Env): boolean {
   return safeEq(got, key);
 }
 
-/** Every id this DO reads comes from a URL segment; the value is always bound. */
-function idFromSegment(segment: string): string {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return "";
-  }
-}
-
-function limitFrom(search: URLSearchParams): number {
-  const raw = Number(search.get("limit"));
-  if (!Number.isFinite(raw) || raw < 1) return DEFAULT_LIMIT;
-  return Math.min(Math.floor(raw), MAX_LIMIT);
-}
-
-/**
- * A request body read as JSON, or null when it is not JSON. Nothing here trusts
- * the shape: a row missing a required column is rejected, not coerced.
- *
- * Session ids are treated as opaque strings. The one copy of the id rule is
- * `isSessionId()` in src/session-scope.ts (R38), which Task 8 creates; this DO
- * must not restate that regex.
- */
-function rowFrom(body: unknown): SessionRow | null {
-  if (typeof body !== "object" || body === null) return null;
-  const row = body as Record<string, unknown>;
-  if (typeof row.id !== "string" || row.id.length === 0) return null;
-  if (typeof row.title !== "string" || row.title.length === 0) return null;
-  const created_at = wholeNumber(row.created_at);
-  const updated_at = wholeNumber(row.updated_at);
-  if (created_at === null || updated_at === null) return null;
-  return {
-    id: row.id,
-    title: row.title,
-    created_at,
-    updated_at,
-    workspace_ref: typeof row.workspace_ref === "string" ? row.workspace_ref : null,
-    unread: wholeNumber(row.unread) ?? 0,
-    pinned: wholeNumber(row.pinned) ?? 0,
-  };
-}
-
-/** A JSON number, or null for anything else. Untrusted columns get rejected, not guessed at. */
-function wholeNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 const JSON_HEADERS = { "content-type": "application/json" };
 
 function fail(status: number, error: string): Response {
@@ -138,36 +96,19 @@ export class RegistryAgent extends Agent<Env> {
 
   /**
    * Adapt the Agents SDK's tagged-template this.sql(strings, ...values) into
-   * the exec-style SqlHandle src/registry-store.ts takes. Copied from the `db()`
-   * adapter in src/agent.ts: the SDK rebuilds the query by joining the string
-   * chunks with "?" for each value, so an exec-style query must be split on its
-   * existing placeholders first, and a mismatch throws instead of misbinding.
+   * the exec-style SqlHandle src/registry-store.ts takes. The adapter itself is
+   * src/sql-handle.ts, shared with the `db()` in src/agent.ts; this method owns
+   * only the schema guard.
    *
    * A reply carries `results` and nothing else, because the platform's cursor
    * exposes no per-statement affected-row count (R37, R58).
    */
   private db(): SqlHandle {
-    const sqlTag = this.sql.bind(this) as unknown as (
-      strings: TemplateStringsArray,
-      ...values: unknown[]
-    ) => unknown[];
-    const handle: SqlHandle = {
-      exec<T = Record<string, unknown>>(
-        query: string,
-        ...bindings: Array<string | number | null>
-      ) {
-        const parts = query.split("?");
-        if (parts.length !== bindings.length + 1) {
-          throw new Error(
-            `SQL placeholder mismatch: ${parts.length - 1} placeholders, ${bindings.length} bindings`
-          );
-        }
-        const strings = Object.assign(parts, { raw: [...parts] }) as unknown as TemplateStringsArray;
-        const rows = sqlTag(strings, ...bindings) as T[];
-        return { results: rows };
-      },
-    };
+    const handle = toSqlHandle(this.sql.bind(this) as unknown as SqlTag);
     if (!this.schemaReady) {
+      // The store owns every piece of DDL: the sessions table, registry_meta and
+      // the composite index the sidebar's only query needs (R54). Nothing here
+      // creates schema, so this guard and onStart() cannot disagree about it.
       ensureRegistrySchema(handle);
       this.schemaReady = true;
     }
@@ -175,23 +116,30 @@ export class RegistryAgent extends Agent<Env> {
   }
 
   /**
-   * Runs on every cold start. Seeds `main` so the existing conversation is
-   * still listed, then never touches that row again: the DO NOTHING seed is a
-   * no-op once the row exists, whatever the user renamed it to.
+   * Runs on every cold start, and seeds exactly once per database: the marker
+   * read is what makes the second cold start after a delete of `main` a no-op
+   * instead of a resurrection (R64 I1). Not this.setState: state saved here
+   * would describe one instance, and a cold start is precisely what destroys it.
+   *
+   * Schema comes from `this.db()` and nothing else, so it is never created twice.
    */
   async onStart(): Promise<void> {
     const sql = this.db();
-    ensureRegistrySchema(sql);
-    sql.exec(PINNED_ORDER_INDEX_STATEMENT);
+    if (readRegistryMeta(sql, SEEDED_KEY) !== null) return;
     const now = Date.now();
     sql.exec(MAIN_SEED_STATEMENT, LEGACY_SESSION_ID, PLACEHOLDER_TITLE, now, now);
+    writeRegistryMeta(sql, SEEDED_KEY, String(Date.now()));
   }
 
   // ---- RPC surface (what src/routes.ts calls over the stub) ----
 
-  /** Newest first, pinned rows ahead. The limit passes through as the caller set it. */
+  /**
+   * Newest first, pinned rows ahead. The limit is floored and capped here, so a
+   * zero, a negative or a fraction can never reach SQLite as `LIMIT -1`, which
+   * SQLite reads as unlimited.
+   */
   async list(limit: number): Promise<SessionRow[]> {
-    return listSessions(this.db(), limit);
+    return listSessions(this.db(), Math.min(Math.max(1, Math.floor(limit)), MAX_LIMIT));
   }
 
   /** Whole-row write: the caller owns every column it sends, created_at included. */
@@ -227,6 +175,9 @@ export class RegistryAgent extends Agent<Env> {
    * overriding fetch on an Agent subclass replaces the SDK's own entry point,
    * which routes through this.lifecycle.fetch and serves RPC and the WebSocket
    * surface, so a hard stop here would shadow every SDK HTTP surface on the DO.
+   *
+   * A path this DO owns but cannot serve with the method used answers 405; 404
+   * is reserved for a shape it does not recognise at all.
    */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -281,7 +232,12 @@ export class RegistryAgent extends Agent<Env> {
         return fail(405, "method not allowed");
       }
 
-      if (sub === "touch" && segments.length === 3 && request.method === "POST") {
+      if (sub === "touch" && segments.length === 3) {
+        // /registry/sessions/:id/touch is this DO's own path, whatever the
+        // method, so a wrong one is 405 rather than a fall-through to 404.
+        if (request.method !== "POST") {
+          return fail(405, "method not allowed");
+        }
         const body = (await readJson(request)) as { unreadDelta?: unknown } | null;
         if (body === null) return fail(400, "invalid JSON body");
         // An absent key and an explicit null both mean "no delta"; the store
@@ -296,14 +252,5 @@ export class RegistryAgent extends Agent<Env> {
     }
 
     return fail(404, "not found");
-  }
-}
-
-/** Parsed JSON body, or null when the body is absent or malformed. */
-async function readJson(request: Request): Promise<unknown | null> {
-  try {
-    return await request.json();
-  } catch {
-    return null;
   }
 }

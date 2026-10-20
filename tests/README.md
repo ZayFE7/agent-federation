@@ -1,15 +1,22 @@
 # tests/
 
-Fifteen files live here. Seven are offline, framework-free, and run by `npm test`:
+Eighteen files live here. Ten are offline, framework-free, and run by `npm test`:
 `guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
 the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
 `src/memory.ts` and drives the real recall + task functions against a live `node:sqlite`
 database), `paths.test.mjs` (a test that the sandbox home is one constant and that no source
-file still promises `/workspace`), `registry-store.test.mjs` (a test of `src/registry-store.ts`,
-the pure session index, against `fake-sql.mjs` and then against a real `node:sqlite`
+file still promises `/workspace`), `registry.test.mjs` (a test that executes the registry
+Durable Object's two rulings that `tsc` cannot see, the R55 boot seed and the composite index
+that serves the sidebar's only query, against a real `node:sqlite` database),
+`registry-input.test.mjs` (a test that executes `src/registry-input.ts`, the DO's query,
+segment and body parsing, which `npm test` could never reach through `src/registry.ts`
+itself), `registry-store.test.mjs` (a test of `src/registry-store.ts`, the pure session index
+and its `registry_meta` markers, against `fake-sql.mjs` and then against a real `node:sqlite`
 database), `router.test.mjs` (a test that every router call reaches the `ROUTER` binding at
-exactly one endpoint and hands the caller's AbortSignal to fetch), and `fake-sql.test.mjs` (a
-contract test for the shared fixture). The harness is
+exactly one endpoint and hands the caller's AbortSignal to fetch), `sql-handle.test.mjs` (a
+test of `src/sql-handle.ts`, the one exec adapter both Durable Objects build their `db()`
+from, against a real `node:sqlite` database), and `fake-sql.test.mjs` (a contract test for the
+shared fixture). The harness is
 `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
 pure-store tests, contract-tested by `fake-sql.test.mjs`). Live-only, never run by
 `npm test` because they do not end in `.test.mjs`: `live-matrix.mjs`, `live-deep.mjs`,
@@ -96,9 +103,10 @@ i.e. dead code. That was wrong; the code wins.)
   the cron handler, or the DO memory, task, plan, and pending-action schemas (the `sessions`
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the approve/hold flow around it is not.
-- `npm test` runs seven offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
-  `registry-store`, `router`). No offline test touches a network: `live-matrix.mjs` needs a
-  deployed worker plus a real key, and it is not in the glob.
+- `npm test` runs ten offline files (`fake-sql`, `guardrails`, `markdown`, `memory`, `paths`,
+  `registry`, `registry-input`, `registry-store`, `router`, `sql-handle`). No offline test
+  touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
+  not in the glob.
 - `fake-sql.mjs` is the fixture the pure-store tests of later tasks build on, and
   `fake-sql.test.mjs` is its contract test: it asserts the `stmts` order, the `results` log,
   the `rows.slice()` copy semantics, first-needle-wins, that only `SELECT` statements are
@@ -165,12 +173,13 @@ one key.
 
 Two layers over `../src/registry-store.ts`, the session index Task 6 wraps in a Durable Object
 and Task 7 reads through it. The `fake-sql.mjs` layer pins the statement text and the bindings of
-all eight exports (schema, upsert, list, get, rename, touch, delete, and the placeholder title),
-and sweeps every recorded statement for two promises: one `?` per binding, which is exactly what
-`db()` in `../src/agent.ts` enforces before the SDK sees the query, and no bound string inside
-its own statement text. The `node:sqlite` layer runs the same statements against a real database,
-so the DDL executes twice without error, `INSERT ... ON CONFLICT(id) DO UPDATE SET` replaces a
-known row instead of failing or duplicating it, pinned-then-recent ordering comes back, `unread`
-accumulates rather than being assigned, `getSession` answers `null` for a missing id, and a title
-of `x'; DROP TABLE sessions; --` round-trips verbatim with the `sessions` table still present.
-Silent on success (exit 0), prints every failure and exits 1 otherwise.
+all ten exports (schema, upsert, list, get, rename, touch, delete, the `registry_meta` read and
+write, and the placeholder title), and sweeps every recorded statement for two promises: one `?`
+per binding, which is exactly what the shared exec adapter `../src/sql-handle.ts` enforces before
+the SDK sees the query, and no bound string inside its own statement text. The `node:sqlite`
+layer runs the same statements against a real database, so the DDL executes twice without error
+and keeps the `registry_meta` rows a marker write left behind, `INSERT ... ON CONFLICT(id) DO
+UPDATE SET` replaces a known row instead of failing or duplicating it, pinned-then-recent ordering
+comes back, `unread` accumulates rather than being assigned, `getSession` answers `null` for a
+missing id, and a title of `x'; DROP TABLE sessions; --` round-trips verbatim with the `sessions`
+table still present. Silent on success (exit 0), prints every failure and exits 1 otherwise.

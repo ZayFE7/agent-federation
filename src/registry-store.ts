@@ -2,8 +2,8 @@
 // Mirrors src/memory.ts and stays dependency-free (types only, no runtime import)
 // so plain Node can import and test it with no build step.
 // Nothing here reports affected-row counts: the platform's cursor exposes
-// rowsRead/rowsWritten and no per-statement count, and src/agent.ts's db() adapter
-// returns { results } and nothing else (R37).
+// rowsRead/rowsWritten and no per-statement count, and the shared exec adapter
+// src/sql-handle.ts returns { results } and nothing else (R37).
 
 import type { SqlHandle } from "./memory";
 
@@ -26,7 +26,18 @@ export const PLACEHOLDER_TITLE = "New session";
 const SELECT_COLUMNS =
   "id, title, created_at, updated_at, workspace_ref, unread, pinned";
 
-/** Idempotent schema for the session index. */
+/**
+ * Idempotent schema for the session index: the sessions table, the one-row
+ * registry_meta table, and the composite index the sidebar's only query needs.
+ *
+ * The DDL lives here, in the store, so both routes into it get the same schema: a
+ * Durable Object's lazy `db()` guard runs this and its onStart() goes through
+ * `db()` as well, so nothing can end up holding the table without the index
+ * (R54, ruled again in R64). Task 5 shipped `sessions_updated_at ON sessions
+ * (updated_at)`, which cannot serve `ORDER BY pinned DESC, updated_at DESC`; it is
+ * dropped, because the sidebar's only query is the composite ordering and nothing
+ * else in the project reads updated_at alone.
+ */
 export function ensureRegistrySchema(sql: SqlHandle): void {
   sql.exec(`CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -37,7 +48,28 @@ export function ensureRegistrySchema(sql: SqlHandle): void {
     unread INTEGER NOT NULL DEFAULT 0,
     pinned INTEGER NOT NULL DEFAULT 0
   )`);
-  sql.exec(`CREATE INDEX IF NOT EXISTS sessions_updated_at ON sessions (updated_at)`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS registry_meta (key TEXT PRIMARY KEY, value TEXT)`);
+  sql.exec(
+    `CREATE INDEX IF NOT EXISTS sessions_pinned_updated ON sessions (pinned DESC, updated_at DESC)`
+  );
+}
+
+/**
+ * One persisted marker row, read as a string, or null when the key was never
+ * written. Outlives the DO instance it describes, which is the whole point: a
+ * one-shot boot decision kept in memory is exactly what a cold start destroys.
+ */
+export function readRegistryMeta(sql: SqlHandle, key: string): string | null {
+  const row = sql.exec<{ key: string; value: string | null }>(
+    "SELECT value FROM registry_meta WHERE key = ?",
+    key
+  ).results[0];
+  return row === undefined ? null : row.value;
+}
+
+/** Replace the value for a known key rather than failing or duplicating it. */
+export function writeRegistryMeta(sql: SqlHandle, key: string, value: string): void {
+  sql.exec("INSERT OR REPLACE INTO registry_meta (key, value) VALUES (?, ?)", key, value);
 }
 
 /**

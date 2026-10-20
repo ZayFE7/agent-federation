@@ -1,20 +1,28 @@
-// Contract tests for Task 6: the registry Durable Object and the two shapes it
-// exports from src/types.ts.
+// Contract tests for Task 6: the registry Durable Object's two rulings that a
+// compiler cannot see, plus the wrangler shape that only a text read can prove.
 //
-// Plain Node, no framework, no build step: run with `node tests/types.test.mjs`.
+// Plain Node, no framework, no build step: run with `node tests/registry.test.mjs`.
 //
 // Why this file reads some sources as TEXT. Node cannot import src/registry.ts:
 // it value-imports `agents`, which pulls in `cloudflare:workers` (the plan's D6
-// limit, restated in progress.md R47). src/types.ts is interfaces plus two
-// consts, so a text assertion is the only offline surface it has. That is not a
-// weaker proof for the parts that matter: the two SQL statements this task owns
-// are lifted out of src/registry.ts by name and EXECUTED against a real sqlite
-// database below, which a text match alone cannot fake.
+// limit, restated in progress.md R47). That is the only reason anything here is
+// matched as text, and the two things that matter are EXECUTED against a real
+// sqlite database, which a text match alone cannot fake.
+//
+// What is deliberately NOT here. src/types.ts is interfaces plus two consts, so
+// `tsc --noEmit` already enforces every signature in it; the signature mirrors
+// this file used to carry (the AgentStub and RegistryStub method lists, the
+// Promise<void> regexes) are gone per R64 I4, because a regex that restates a
+// parameter list adds a second place to be wrong and no rule of its own. The
+// DO's input parsing is not here either: it moved to src/registry-input.ts and is
+// executed by tests/registry-input.test.mjs, and the SQL adapter moved to
+// src/sql-handle.ts and is executed by tests/sql-handle.test.mjs.
 //
 // Scope note: the config check reads repo-clone/wrangler.jsonc only. The deploy
 // tree is a separate checkout holding real secrets and is never opened here
-// (R56), so `RegistryAgent` is proven structurally: v1 untouched, the class in
-// a NEW migration tag (R57). The owner runs the real dry-run before deploying.
+// (R56), so `RegistryAgent` is proven structurally: v1 untouched, the class in a
+// NEW migration tag (R57). The owner runs the real dry-run before deploying.
+// Nothing printed from that file is a value: binding NAMES only.
 //
 // Silent on success (exit 0). Prints every failure and exits 1 otherwise.
 
@@ -45,18 +53,6 @@ const wranglerSrc = read("wrangler.jsonc");
 const MAIN_SEED_EXPECTED =
   "INSERT INTO sessions (id, title, created_at, updated_at, pinned, unread) VALUES (?, ?, ?, ?, 0, 0) ON CONFLICT(id) DO NOTHING";
 
-const AGENT_STUB_METHODS = [
-  "chat",
-  "jobList",
-  "planState",
-  "approveAction",
-  "vaultPut",
-  "vaultPull",
-  "vaultChunk",
-  "vaultHealth",
-  "vaultDelete",
-];
-
 // The sidebar's only order, as src/registry-store.ts emits it.
 const SIDEBAR_SQL = `SELECT id, title, created_at, updated_at, workspace_ref, unread, pinned
  FROM sessions ORDER BY pinned DESC, updated_at DESC LIMIT ?`;
@@ -81,18 +77,7 @@ function constString(src, name, where) {
   return m[1];
 }
 
-/** Body of an exported interface, or a missing-export failure. */
-function interfaceBody(src, name) {
-  const m = src.match(new RegExp(`export interface ${name}\\s*\\{([\\s\\S]*?)\\n\\}`));
-  assert.ok(m, `src/types.ts does not export interface ${name}`);
-  return m[1];
-}
-
-function methodNames(body) {
-  return [...body.matchAll(/^ {2}(\w+)\(/gm)].map((m) => m[1]);
-}
-
-/** Placeholder-checked exec over a real in-memory database, as src/agent.ts's db() does. */
+/** Placeholder-checked exec over a real in-memory database, as src/sql-handle.ts does. */
 function realHandle(db) {
   return {
     exec(query, ...bindings) {
@@ -105,9 +90,15 @@ function realHandle(db) {
   };
 }
 
-// ---- src/types.ts: the shapes a dependency-free src/routes.ts may consume (R39) ----
+const indexNames = (db) =>
+  db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
+    .all()
+    .map((row) => row.name);
 
-check("src/types.ts exports AgentStub and src/index.ts no longer declares its own copy", () => {
+// ---- rules the compiler cannot see, in src/types.ts and src/index.ts ----
+
+check("src/index.ts no longer declares AgentStub and imports it from ./types", () => {
   assert.match(typesSrc, /^export interface AgentStub\b/m, "AgentStub is not exported from types.ts");
   assert.equal(
     /interface AgentStub\b/.test(indexSrc),
@@ -121,10 +112,6 @@ check("src/types.ts exports AgentStub and src/index.ts no longer declares its ow
   );
 });
 
-check("AgentStub carries the nine FederationAgent RPC methods the worker calls", () => {
-  assert.deepEqual(methodNames(interfaceBody(typesSrc, "AgentStub")), AGENT_STUB_METHODS);
-});
-
 check("src/types.ts stays import-type-only so a text-level consumer cannot pull runtime", () => {
   for (const line of typesSrc.split(/\r?\n/)) {
     if (!/^\s*import\b/.test(line)) continue;
@@ -132,81 +119,13 @@ check("src/types.ts stays import-type-only so a text-level consumer cannot pull 
   }
 });
 
-check("RegistryStub mirrors RegistryAgent's five RPC methods exactly", () => {
-  assert.deepEqual(
-    methodNames(interfaceBody(typesSrc, "RegistryStub")),
-    ["list", "put", "rename", "remove", "touch"]
-  );
-});
-
-check("RegistryStub's write methods return Promise<void>, never a boolean (R37, R58)", () => {
-  const body = interfaceBody(typesSrc, "RegistryStub");
-  assert.equal(/boolean/.test(body), false, `a boolean survives in RegistryStub: ${body}`);
-  for (const name of ["put", "rename", "remove", "touch"]) {
-    assert.match(
-      body,
-      new RegExp(`\\b${name}\\([^)]*\\): Promise<void>;`),
-      `${name} does not return Promise<void}: ${body}`
-    );
-  }
-  assert.match(body, /\blist\(limit: number\): Promise<SessionRow\[\]>;/, body);
-  assert.match(body, /\bput\(row: SessionRow\): Promise<void>;/, body);
-  assert.match(body, /\brename\(id: string, title: string\): Promise<void>;/, body);
-  assert.match(body, /\bremove\(id: string\): Promise<void>;/, body);
-  assert.match(body, /\btouch\(id: string, opts\?: \{ unreadDelta\?: number \}\): Promise<void>;/, body);
-});
-
-check("SessionRow reaches RegistryStub as a type import, not a value import", () => {
-  assert.match(typesSrc, /import type \{[^}]*\bSessionRow\b[^}]*\} from "\.\/registry-store"/);
-});
-
-check("Env gains the REGISTRY DurableObjectNamespace binding", () => {
-  assert.match(typesSrc, /\bREGISTRY: DurableObjectNamespace;/, "Env has no REGISTRY binding");
-});
-
-// ---- src/registry.ts: read as text, executed below ----
-
-check("RegistryAgent is the class the wrangler binding names and the entry module exports it", () => {
+check("wrangler discovers RegistryAgent from the entry module's exports", () => {
   assert.match(registrySrc, /export class RegistryAgent extends Agent<Env>/);
   assert.match(
     indexSrc,
     /export \{[^}]*\bRegistryAgent\b[^}]*\}/,
     "wrangler discovers DO classes from the entry module's exports; src/index.ts does not export RegistryAgent"
   );
-});
-
-check("the five RPC methods exist on the class with the ruled signatures", () => {
-  for (const pattern of [
-    /async list\(limit: number\): Promise<SessionRow\[\]>/,
-    /async put\(row: SessionRow\): Promise<void>/,
-    /async rename\(id: string, title: string\): Promise<void>/,
-    /async remove\(id: string\): Promise<void>/,
-    /async touch\(id: string, opts\?: \{ unreadDelta\?: number \}\): Promise<void>/,
-  ]) {
-    assert.match(registrySrc, pattern);
-  }
-});
-
-check("fetch falls through to super.fetch for anything the registry does not own", () => {
-  assert.match(registrySrc, /async fetch\(request: Request\): Promise<Response>/);
-  assert.match(registrySrc, /startsWith\("\/registry\/"\)/, "no /registry/ ownership guard");
-  assert.match(
-    registrySrc,
-    /return super\.fetch\(request\);/,
-    "fetch() must not hard-stop: overriding it replaces the SDK entry point"
-  );
-});
-
-check("the boot seed is R55's statement, verbatim", () => {
-  assert.equal(
-    flat(constString(registrySrc, "MAIN_SEED_STATEMENT", "src/registry.ts")),
-    flat(MAIN_SEED_EXPECTED)
-  );
-});
-
-check("upsertSession is called exactly once, by put, so the seed cannot be a whole-row replace", () => {
-  const calls = (registrySrc.match(/upsertSession\(/g) || []).length;
-  assert.equal(calls, 1, `upsertSession( appears ${calls} times; only put may call it`);
 });
 
 check("nothing in the registry reads or returns an affected-row count (R58)", () => {
@@ -217,33 +136,26 @@ check("nothing in the registry reads or returns an affected-row count (R58)", ()
   );
 });
 
-check("no SQL in the registry interpolates a value into its own statement text", () => {
-  for (const line of registrySrc.split(/\r?\n/)) {
-    if (!/INSERT INTO|UPDATE |SELECT |DELETE FROM|CREATE /.test(line)) continue;
-    assert.equal(
-      line.includes("${"),
-      false,
-      `interpolated value in a SQL line: ${line.trim()}`
-    );
-  }
-});
-
-check("onStart runs the schema, the index, then the seed, in that order", () => {
-  const m = registrySrc.match(/async onStart\(\): Promise<void> \{([\s\S]*?)\n {2}\}/);
-  assert.ok(m, "no async onStart(): Promise<void> block found");
-  const body = m[1];
-  const at = (needle) => body.indexOf(needle);
-  assert.ok(at("ensureRegistrySchema") >= 0, "onStart does not run ensureRegistrySchema");
-  assert.ok(at("PINNED_ORDER_INDEX_STATEMENT") > at("ensureRegistrySchema"), "index not created after the schema");
-  assert.ok(at("MAIN_SEED_STATEMENT") > at("PINNED_ORDER_INDEX_STATEMENT"), "seed not run after the index");
+check("the DO runs no DDL of its own, so the store is the only schema owner (R54, R64)", () => {
+  assert.equal(
+    /CREATE (TABLE|INDEX)/.test(registrySrc),
+    false,
+    "src/registry.ts still creates schema, so the store and the DO can disagree"
+  );
+  assert.equal(
+    /ensureRegistrySchema/.test(registrySrc.match(/async onStart\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? ""),
+    false,
+    "onStart() creates the schema a second time instead of going through this.db()"
+  );
 });
 
 // ---- real execution ----
 
-check("seeding main twice keeps a title a user renamed", () => {
+check("the R55 boot seed keeps a title a user renamed and inserts no second row", () => {
   const db = new DatabaseSync(":memory:");
   const sql = realHandle(db);
   const seed = constString(registrySrc, "MAIN_SEED_STATEMENT", "src/registry.ts");
+  assert.equal(flat(seed), flat(MAIN_SEED_EXPECTED), "the seed is no longer R55's direct statement");
   ensureRegistrySchema(sql);
   sql.exec(seed, "main", PLACEHOLDER_TITLE, 1000, 1000);
   assert.equal(getSession(sql, "main").title, PLACEHOLDER_TITLE);
@@ -256,12 +168,18 @@ check("seeding main twice keeps a title a user renamed", () => {
   db.close();
 });
 
-check("the composite index matches the sidebar ORDER BY and removes the temp b-tree (R59)", () => {
+check("the composite index matches the sidebar ORDER BY and removes the temp b-tree (R54)", () => {
   const db = new DatabaseSync(":memory:");
   const sql = realHandle(db);
-  const indexStmt = constString(registrySrc, "PINNED_ORDER_INDEX_STATEMENT", "src/registry.ts");
+  // No index statement is run here: ensureRegistrySchema owns it, which is the
+  // ruling, and this is what proves the lazy db() guard really does create it.
   ensureRegistrySchema(sql);
-  sql.exec(indexStmt);
+  assert.ok(indexNames(db).includes("sessions_pinned_updated"), `no composite index: ${indexNames(db)}`);
+  assert.equal(
+    indexNames(db).includes("sessions_updated_at"),
+    false,
+    "the single-column index nothing queries is still being created"
+  );
   for (let i = 0; i < 200; i++) {
     upsertSession(sql, {
       id: `id${i}`,
@@ -286,16 +204,6 @@ check("the composite index matches the sidebar ORDER BY and removes the temp b-t
       `list order broken at ${i}: ${a.id}/${a.pinned}/${a.updated_at} before ${b.id}/${b.pinned}/${b.updated_at}`
     );
   }
-  db.close();
-});
-
-check("the composite index is idempotent, so a repeated onStart cannot fail", () => {
-  const db = new DatabaseSync(":memory:");
-  const sql = realHandle(db);
-  const indexStmt = constString(registrySrc, "PINNED_ORDER_INDEX_STATEMENT", "src/registry.ts");
-  ensureRegistrySchema(sql);
-  sql.exec(indexStmt);
-  sql.exec(indexStmt);
   db.close();
 });
 
@@ -337,6 +245,6 @@ check("wrangler binds REGISTRY to RegistryAgent and adds it to a NEW migration t
 
 if (failures.length > 0) {
   for (const failure of failures) console.error("  FAIL " + failure);
-  console.error(`types: ${failures.length} failed`);
+  console.error(`registry: ${failures.length} failed`);
   process.exit(1);
 }

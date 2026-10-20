@@ -34,6 +34,7 @@ import {
   type SqlHandle,
   type TaskRow,
 } from "./memory";
+import { toSqlHandle, type SqlTag } from "./sql-handle";
 import {
   ensureVaultSchema,
   vaultDelete as vaultDeleteChunks,
@@ -180,31 +181,12 @@ export class FederationAgent extends Agent<Env> {
 
   /**
    * Adapt the Agents SDK's tagged-template this.sql(strings, ...values) into
-   * the exec-style SqlHandle used by memory helpers. The SDK rebuilds the
-   * query by joining string chunks with "?" for each value, so an exec-style
-   * query must be split on its existing placeholders first.
+   * the exec-style SqlHandle used by memory helpers. The adapter itself is
+   * src/sql-handle.ts, shared with the `db()` in src/registry.ts; this method
+   * owns only the schema guards.
    */
   private db(): SqlHandle {
-    const sqlTag = this.sql.bind(this) as unknown as (
-      strings: TemplateStringsArray,
-      ...values: unknown[]
-    ) => unknown[];
-    const handle: SqlHandle = {
-      exec<T = Record<string, unknown>>(
-        query: string,
-        ...bindings: Array<string | number | null>
-      ) {
-        const parts = query.split("?");
-        if (parts.length !== bindings.length + 1) {
-          throw new Error(
-            `SQL placeholder mismatch: ${parts.length - 1} placeholders, ${bindings.length} bindings`
-          );
-        }
-        const strings = Object.assign(parts, { raw: [...parts] }) as unknown as TemplateStringsArray;
-        const rows = sqlTag(strings, ...bindings) as T[];
-        return { results: rows };
-      },
-    };
+    const handle = toSqlHandle(this.sql.bind(this) as unknown as SqlTag);
     if (!this.schemaReady) {
       ensureSchema(handle);
       ensureVaultSchema(handle);
