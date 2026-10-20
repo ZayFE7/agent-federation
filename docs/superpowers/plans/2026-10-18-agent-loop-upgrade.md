@@ -312,11 +312,18 @@ wins**:
 - The every-phase gate runs `npm test` + `npm run typecheck`; `node tests/live-stream.mjs` joins it
   only from Phase 6, when Task 37 creates the file (R47). `ui/` joins the mirror list (R48).
 - Task 7's Files list GAINS `src/agent.ts`, for exactly one addition: an RPC
-  `messages(limit?: number): Promise<ChatMessage[]>` on `FederationAgent` that wraps the existing
+  `messages(limit?: number): Promise<MessageRow[]>` on `FederationAgent` that wraps the existing
   `recentMessages(sql, n)` read, with the matching line in the exported `AgentStub`. The bullet above
   says the transcript route "reads the existing `messages` table", and that is true, but only the DO
   can read its own local SQLite: a worker route cannot, so without the RPC the route has a store and
-  no producer (R59).
+  no producer (R59). `MessageRow`, not `ChatMessage`: measured, `recentMessages(sql, limit = 10)`
+  returns `MessageRow[]` (`src/memory.ts:144`) and `MessageRow` is
+  `{ id, role: string, content: string, tier: string | null, created_at }` (`src/memory.ts:21-27`),
+  while `ChatMessage` (`src/types.ts:14-17`) narrows `role` to a three-value union that will not
+  accept `MessageRow`'s `string`. Either of those as written forces a mapping that drops `created_at`,
+  the only field the console has to group a transcript by day. The rows go out unmodified, and
+  `src/types.ts` adds `import type { MessageRow } from "./memory"`, which erases cleanly because
+  `src/memory.ts:1-12` imports nothing and declares its own `SqlHandle`.
 - R45 (memory stays global) and R46 (only the main DO arms the tick) are IMPLEMENTED IN TASK 8, not in
   Task 7, whose Step 3 states them. Task 7's whole reason to exist as a separate dependency-free file
   is that Node can import it offline; pulling `src/agent.ts` into its commit set destroys that, and
@@ -411,15 +418,39 @@ git commit -m "P1: registry DO holds the session index"
 
 **Interfaces:**
 - Consumes: `RegistryAgent` RPC, `FederationAgent` stub RPC.
-- Produces: `src/auth.ts` with `safeEq(a: string, b: string): boolean` and `authed(request: Request, env: Env): boolean`, moved out of `src/index.ts` (Task 22 later adds `tokenOk` to this same file; Task 35 adds `vaultAuthed`). `src/routes.ts` with `handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and `agentStubFor(env: Env, sessionId: string): AgentStub`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message`. Route responses: list `{ok: true, sessions: SessionRow[], truncated: boolean}` and takes `?limit=`, default 50, hard max 200, `truncated` true when the store returned exactly the limit; create `{ok: true, session: SessionRow}`, filling `created_at`/`updated_at` from `Date.now()`, `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0`, `workspace_ref: null`; rename and delete `{ok: true}`; messages `{ok: true, messages: {role: string, content: string}[]}`, the
-shape `recentMessages` actually returns, not `UIMessage` (which carries `parts` and belongs to the
-harness transcript, R59); send returns the agent's `AgentReply`. Every one of them 401s when `authed()` fails and 400s on a malformed body. **`src/routes.ts` owns the `/api/sessions*` family only** (R42): `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six `/internal/vault/*` handlers keep their existing addressing in `src/index.ts`, and `/api/plan` is still deleted by Task 15, not here.
+- Produces: `src/auth.ts` with `safeEq(a: string, b: string): boolean` and `authed(request: Request, env: Env): boolean`, moved out of `src/index.ts` (Task 22 later adds `tokenOk` to this same file; Task 35 adds `vaultAuthed`). `src/routes.ts` with `handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and `agentStubFor(env: Env, sessionId: string): AgentStub`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message`. Route responses: list `{ok: true, sessions: SessionRow[], truncated: boolean}` and takes `?limit=`, default 50, hard max 200, `truncated` true when the store returned exactly the limit; create `{ok: true, session: SessionRow}`, filling `created_at`/`updated_at` from `Date.now()`, `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0`, `workspace_ref: null`; rename and delete `{ok: true}`; messages `{ok: true, messages: MessageRow[]}`, the rows `recentMessages` returns, unmodified (R59), not `UIMessage` (which carries `parts` and belongs to the
+harness transcript); send returns the agent's `AgentReply`. Every one of them 401s when `authed()` fails and 400s on a malformed body. **`src/routes.ts` owns the `/api/sessions*` family only** (R42): `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six `/internal/vault/*` handlers keep their existing addressing in `src/index.ts`, and `/api/plan` is still deleted by Task 15, not here.
+
+Three rules this task owns and no other task states:
+
+- **`AgentStub` gains `messages(limit?: number): Promise<MessageRow[]>`** alongside the existing `chat`,
+  and `src/agent.ts` implements it as
+  `async messages(limit?: number): Promise<MessageRow[]> { return recentMessages(this.db(), limit ?? 50); }`.
+  That is the whole RPC. `recentMessages` returns newest-first (`src/memory.ts:144`), and this task does
+  not reorder it; Task 10's console renders what it gets.
+- **`POST /api/sessions/:id/message` calls `chat(content, tier)` with exactly two arguments**, the same
+  way `src/index.ts:84` calls it today. The session id travels in the DO you address, not in the
+  argument list, until Task 8 widens the signature (R65). Do not edit `src/index.ts`'s existing
+  `/api/message` call site: writing `chat(id, content, tier)` here breaks `tsc --noEmit` on every
+  unscoped caller, and the widening is Task 8's commit.
+- **A successful send bumps `updated_at`.** The list is `ORDER BY pinned DESC, updated_at DESC` (R54),
+  so a route that only returns the reply leaves the session you are typing in where it was. After the
+  agent's reply comes back — any reply, including one carrying `code` — routes calls `registry.touch(id)`
+  with no opts, which bumps `updated_at` and nothing else. No `unreadDelta`: the person sending is
+  reading that session, so unread belongs to a later phase when something can arrive unattended
+  (Task 33). `rename` deliberately does not bump (R37, stated at `src/registry.ts:202`), so the send
+  route is the only writer here.
+- **The transcript limit uses the registry's numbers.** `GET /api/sessions/:id/messages` takes `?limit=`
+  and clamps with `DEFAULT_LIMIT` (50) and `MAX_LIMIT` (200) imported from `./registry-input`
+  (dependency-free, so legal for `src/routes.ts`), through its own four-line
+  `messageLimitFrom(search: URLSearchParams): number` — named for its own use rather than re-importing
+  `limitFrom`, because `src/registry-input.ts` owns the registry surface, not the transcript one.
 
 **Why `src/routes.ts` is its own file.** `src/index.ts:1` value-imports `./agent`, and `src/agent.ts` value-imports `agents`, which pulls in `cloudflare:workers`. Node cannot resolve that, so no offline test can import `src/index.ts` or anything under `src/agent.ts`. `src/routes.ts` must therefore import nothing but types (`import type { Env } from "./types"`) plus `./auth`, and take the DO namespaces from the `env` argument rather than importing the classes.
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/routes.test.mjs` imports `handleFetch` from `src/routes.ts` and calls it with a fake env whose `FEDERATION_AGENT.get()` and `REGISTRY.get()` return recorded stubs. Assert: `POST /api/sessions` with no auth is 401; with `Authorization: Bearer k` and `AGENT_API_KEY: "k"` it calls `registry.put` and returns 200 with a session id of 26 chars, and the row it stored carries `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0` and both timestamps filled (R: nothing else in the plan fills them, and `title TEXT NOT NULL` would fail at runtime); `GET /api/sessions` returns the registry's list, defaults to limit 50, clamps a `?limit=99999` to 200, and sets `truncated` when the stub returns exactly the limit; `GET /api/sessions/abc` and `PATCH /api/sessions/abc` with body `{title:"New"}` call `rename("abc","New")`; `DELETE` calls `remove`; `POST /api/sessions/abc/message` forwards to the `abc` DO's stub and not to `main` (R41); `idFromName` is called with the bare id, so `main` routes to `idFromName("main")` and not to a prefixed name (R38); a path with an unknown shape 404s; and with `AGENT_API_KEY: ""` every route 401s. Add the import-guard assertion from the Global Constraints: the test asserts `src/routes.ts` source contains no non-type `import` of `./agent` or `agents`.
+`tests/routes.test.mjs` imports `handleFetch` from `src/routes.ts` and calls it with a fake env whose `FEDERATION_AGENT.get()` and `REGISTRY.get()` return recorded stubs. Assert: `POST /api/sessions` with no auth is 401; with `Authorization: Bearer k` and `AGENT_API_KEY: "k"` it calls `registry.put` and returns 200 with a session id of 26 chars, and the row it stored carries `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0` and both timestamps filled (R: nothing else in the plan fills them, and `title TEXT NOT NULL` would fail at runtime); `GET /api/sessions` returns the registry's list, defaults to limit 50, clamps a `?limit=99999` to 200, and sets `truncated` when the stub returns exactly the limit; `GET /api/sessions/abc` and `PATCH /api/sessions/abc` with body `{title:"New"}` call `rename("abc","New")`; `DELETE` calls `remove`; `POST /api/sessions/abc/message` forwards to the `abc` DO's stub and not to `main` (R41); `idFromName` is called with the bare id, so `main` routes to `idFromName("main")` and not to a prefixed name (R38); a path with an unknown shape 404s; and with `AGENT_API_KEY: ""` every route 401s. Add the import-guard assertion from the Global Constraints: the test asserts `src/routes.ts` source contains no non-type `import` of `./agent` or `agents`. Four more assertions for the four rules above, all against the recorded stubs: the `chat` stub records `arguments.length === 2` on a send (R65, no session id in the list); `touch` is called once with `("abc", undefined)` after a successful send and **not at all** when the send 401s or the body is malformed; `GET /api/sessions/abc/messages?limit=99999` clamps to `MAX_LIMIT` and a missing `limit` passes `DEFAULT_LIMIT` through to the stub's `messages`; and the messages response body carries a row with `created_at` intact, proving nothing mapped `MessageRow` down to `{role, content}`.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -427,7 +458,7 @@ harness transcript, R59); send returns the agent's `AgentReply`. Every one of th
 
 - [ ] **Step 3: Implement**
 
-Extract the body of the worker's `fetch` into `export async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and make the default export call it. Session ids come from `crypto.randomUUID().replace(/-/g, "").slice(0, 26)`, the Cloudflare id length. Routing is `env.FEDERATION_AGENT.get(env.FEDERATION_AGENT.idFromName(sessionId))`: the id **is** the DO name, with no prefix (R38), so the legacy `idFromName("main")` stays reachable as session `main` and keeps every existing memory, task, and vault chunk alive. Two consequences of sharding, both ruled and both required here:
+Extract the body of the worker's `fetch` into `export async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and make the default export call it. Session ids come from `crypto.randomUUID().replace(/-/g, "").slice(0, 26)`, the Cloudflare id length. Routing is `env.FEDERATION_AGENT.get(env.FEDERATION_AGENT.idFromName(sessionId))`: the id **is** the DO name, with no prefix (R38), so the legacy `idFromName("main")` stays reachable as session `main` and keeps every existing memory, task, and vault chunk alive. Add the `messages` RPC to `src/agent.ts` exactly as the Interfaces block states it, and nothing else in that file. Two consequences of sharding are ruled for Phase 1 and both land in Task 8 (R60), because Task 7's offline-testability depends on `src/routes.ts` importing nothing that reaches `cloudflare:workers`, and Task 8 already has `src/agent.ts` open:
 
 - Memory stays global (R45). **Implemented in Task 8, not here (R60).** `remember`/`recall` continue to read and write the **main** DO's SQLite from whatever session DO is running, by stubbing `idFromName("main")`, because every memory the user has already accumulated lives in that one DO. Transcripts shard per session; memory does not. If this is later "simplified" to per-DO memory, the persona prose at `src/agent.ts:49,57,589` becomes false and existing memories go invisible, so state the rule in the code where the call happens.
 - Only the main DO arms the scheduler tick (R46). **Implemented in Task 8, not here (R60).**
@@ -438,41 +469,122 @@ Extract the body of the worker's `fetch` into `export async function handleFetch
 `node tests/routes.test.mjs` exits 0, then `npm test` exits 0.
 
 ```bash
-git add src/routes.ts src/auth.ts src/index.ts src/types.ts tests/routes.test.mjs
+git add src/routes.ts src/auth.ts src/index.ts src/types.ts src/agent.ts tests/routes.test.mjs
 git commit -m "P1: per-session DO routing and session CRUD routes; main survives as a session"
 ```
 
-### Task 8: The DO verifies its own session
+### Task 8: The DO verifies its own session, and memory stays global
 
 **Files:**
 - Create: `src/session-scope.ts`
 - Create: `tests/session-scope.test.mjs`
-- Modify: `src/agent.ts`, `src/index.ts` (the 403 mapping is this task's, and so is its commit line: R39)
+- Modify: `src/agent.ts`, `src/types.ts`, `src/routes.ts`, `src/index.ts`
+
+`src/types.ts` and `src/routes.ts` are legal for this task because both are dependency-free (R39), and
+because `src/types.ts:61` already declares `chat(content: string, tier?: ChatTier)` with a comment
+promising "Task 8 widens `chat`". Leaving either out fails `npx tsc --noEmit` at `src/index.ts:84`.
 
 **Interfaces:**
-- Consumes: `Env.FEDERATION_AGENT: DurableObjectNamespace`, `DurableObjectState.id`.
-- Produces: `SESSION_ID_RE: RegExp`, `isSessionId(id: string): boolean` (the one copy of the rule, which Task 23 imports instead of restating it, R38), and `assertSessionScope(ctx: { id: { toString(): string } }, idFromName: (name: string) => { toString(): string }, sessionId: string): void` which throws `ScopeError` on mismatch. `class ScopeError extends Error` exported. Pure over its arguments so the test needs no platform types.
-- Also produces: the widening of `FederationAgent.chat(content, tier?)` to `chat(sessionId, content, tier?)`, matching `AgentStub` in `src/types.ts` (Task 6 exported it), and the same first-statement check in `onMessage`. `src/agent.ts`'s two hardcoded `sessionId: "agent"` sandbox calls take the real id from here (R39, R40).
+- Consumes: `Env.FEDERATION_AGENT: DurableObjectNamespace`, `DurableObjectState.id` (reachable as
+  `this.ctx.id` on an `Agent` subclass), `recentMessages`, `remember`, `recall`.
+- Produces in `src/session-scope.ts`: `SESSION_ID_RE: RegExp` (`/^[A-Za-z0-9_-]{1,40}$/`),
+  `isSessionId(id: string): boolean` (the one copy of the rule; Task 23 imports it instead of
+  restating it, R38), `class ScopeError extends Error`, and
+  `sessionScopeOk(ctx: { id: { toString(): string } }, idFromName: (name: string) => { toString(): string }, sessionId: string): boolean`.
+  `assertSessionScope(...)` is the throwing form of the same predicate, for callers that want a
+  throw; both are pure over their arguments so the test needs no platform types.
+- Produces on `FederationAgent`: `chat(content: string, tier?: ChatTier, sessionId?: string)`. The id
+  is LAST and optional. That is not a style choice: `chat(sessionId, content, tier?)` would put a
+  required parameter after an optional one, and every existing unscoped call site
+  (`/api/message` at `src/index.ts:84`, `onScheduledTask` at `src/agent.ts:359`) has to keep
+  compiling until Task 22 removes it. An absent `sessionId` means "unscoped", which is today's
+  behaviour and stays main-only.
+- Produces: `AgentReply` gains `code?: "invalid_session"`, and `AgentStub` in `src/types.ts` gains
+  both that field and `messages(limit?: number): Promise<MessageRow[]>` (R59 — the type, not
+  `{role, content}`; Task 7 added the method, this task only mirrors it in the stub).
+- Produces: `memoryRemember(kind: string, text: string, importance: number): Promise<void>` and
+  `memoryRecall(query: string, limit: number): Promise<MemoryRow[]>` as public RPC on
+  `FederationAgent` (see Step 3b).
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/session-scope.test.mjs` asserts: the call returns normally when `sessionId === "abc"` matches what `idFromName` produces; it throws `ScopeError` when the names differ; it throws for `sessionId === ""`; it throws for a `sessionId` containing `/`, `..`, a space, or a `:`, so a client cannot steer the DO id itself and no prefixed id can sneak through; and `isSessionId("main")` is true while `isSessionId("s:main")` is false (R38).
+`tests/session-scope.test.mjs` asserts: `sessionScopeOk` returns true when `sessionId === "abc"`
+matches what `idFromName` produces; false when the names differ; false for `sessionId === ""`; false
+for a `sessionId` containing `/`, `..`, a space, or a `:`, so a client cannot steer the DO id itself
+and no prefixed id can sneak through; `assertSessionScope` throws `ScopeError` in exactly the cases
+where `sessionScopeOk` returns false and returns normally otherwise; `isSessionId("main")` is true and
+`isSessionId("s:main")` is false (R38). Only `src/session-scope.ts` may be imported (R47: it must be
+dependency-free).
 
 - [ ] **Step 2: Run it to make sure it fails**
 
 `node tests/session-scope.test.mjs`. Expected: module not found.
 
-- [ ] **Step 3: Implement, then call it**
+- [ ] **Step 3a: Implement the guard, and make it observable**
 
-Validate `sessionId` against `SESSION_ID_RE` (`/^[A-Za-z0-9_-]{1,40}$/`) first, before any `idFromName` call. Then in `FederationAgent`, every entry point that takes a session id calls `assertSessionScope` as its first statement: today that is `chat` and `onMessage`, and after this task the widening makes it true for both. `messages`, `submitTurn` and `streamFetch` do not exist yet; when Tasks 14 and 22 add them, they carry the same first statement, and that requirement belongs in their briefs, not in an assertion here about code that has not been written. `src/index.ts` maps `ScopeError` to a 403 response. Note what this does **not** close: the WebSocket upgrade path in `src/index.ts` still pins main and is unscoped until Task 22, so Review Focus line 1 is only fully closed there.
+Validate `sessionId` against `SESSION_ID_RE` in `src/routes.ts` BEFORE any `idFromName` call, and
+answer 400 for a bad id; that is where an attacker-controlled string is actually stopped, and it
+covers `messages` as well as `chat`.
 
-- [ ] **Step 4: Run the test to make sure it passes**
+Then, in `FederationAgent`, `chat`'s FIRST statement — ahead of the existing `try` — is
+`if (sessionId !== undefined && !sessionScopeOk(this.ctx, this.env.FEDERATION_AGENT, sessionId))
+return { reply: "", code: "invalid_session" }`.
 
-`node tests/session-scope.test.mjs` and `npm test`, exit 0. **This closes Review Focus line 1.**
+**It must be a return, not a throw, for two measured reasons.** `src/agent.ts:222-228` wraps its whole
+body in `try { return await this.handleChat(...) } catch { return { reply: "agent error: " + String(err) } }`,
+so a throw made inside that `try` becomes an HTTP **200** carrying an error string. And a value that
+crosses a DO RPC boundary arrives in another realm, so `instanceof ScopeError` in the worker can never
+be true; only strings and plain objects survive, which is why the contract is a `code` field.
+`src/routes.ts` maps a reply carrying `code: "invalid_session"` to HTTP 403
+`{ok: false, error: "invalid session"}`.
+
+Do not put the check in `onMessage`: its signature is `onMessage(connection, message: string |
+ArrayBuffer)` (`src/agent.ts:317-320`) and `ChatRequest` (`src/types.ts:47-50`) carries no session id.
+The WebSocket path still pins main and is unscoped until Task 22, which owns the real fix. `messages`
+exists (Task 7 added it, R59) and needs no DO-side check because the routes check above runs first;
+`submitTurn` and `streamFetch` do not exist yet, and when Tasks 14 and 22 add them they carry the same
+first statement, in their briefs, not as an assertion here about code not yet written.
+
+- [ ] **Step 3b: R45, memory stays global**
+
+Only a DO can read its own SQLite, so a session DO cannot reach main's memory directly. Add the two
+public RPC methods named above to `FederationAgent`; on main they run `remember` / `recall` against
+`this.db()`, exactly as the current call sites do. Then route the three memory call sites inside the
+chat path — `src/agent.ts:515-527` (two `recall`s) and `:598` (`remember`) — through a private
+`rememberGlobal(...)` / `recallGlobal(...)`: when this DO is main, use the local `sql`; otherwise stub
+`env.FEDERATION_AGENT.get(env.FEDERATION_AGENT.idFromName("main"))` and RPC. State R45 in a comment at
+the call site, because "simplify" here means every existing memory silently goes invisible and the
+persona prose at `src/agent.ts:49,57,589` becomes false.
+
+The three `remember` calls inside `onScheduledTask` (`:352`, `:360`, `:364`) stay LOCAL: after Step 3c
+that code only ever runs on main, so the local handle is the global store.
+
+- [ ] **Step 3c: R46, only main arms the tick**
+
+`onStart()` keeps `this.db()` for every DO (a session DO needs its own `messages` table for its own
+transcript) and returns before `armTick()` when `this.ctx.id.toString()` does not equal
+`this.env.FEDERATION_AGENT.idFromName("main").toString()`. One alarm per DO is the platform's budget,
+`armTick` re-arms unconditionally today, and `/api/tasks` only reads main, so a per-session alarm is
+pure burn. Task 33 owns the real scheduling fix.
+
+- [ ] **Step 3d: the two hardcoded sandbox ids**
+
+`src/agent.ts:488` inside `private execSandbox(cmd)` (`:477`) and `:839` inside
+`private handleChat(content, tier?)` (`:514`) both send `sessionId: "agent"`. Give both signatures a
+sessionId and thread the real one from `chat`. `handleChat`'s third caller, `onScheduledTask:359`,
+passes `"main"` explicitly. Task 28 names the same sites and only verifies them.
+
+- [ ] **Step 4: Run the tests to make sure they pass**
+
+`node tests/session-scope.test.mjs`, `node tests/routes.test.mjs` and `npm test`, exit 0. Add to
+`tests/routes.test.mjs`: a `POST /api/sessions/abc/message` whose stub reply carries
+`code: "invalid_session"` answers 403, and `POST /api/sessions/../etc/message` answers 400 without
+calling `idFromName` at all. **This closes Review Focus line 1** for the HTTP path; the WebSocket path
+closes in Task 22.
 
 ```bash
-git add src/session-scope.ts tests/session-scope.test.mjs src/agent.ts src/index.ts
-git commit -m "P1: the agent DO refuses work for a session id outside its own scope"
+git add src/session-scope.ts tests/session-scope.test.mjs src/agent.ts src/types.ts src/routes.ts src/index.ts tests/routes.test.mjs
+git commit -m "P1: the agent DO refuses work outside its own session; memory and the tick stay on main"
 ```
 
 ### Task 9: Model-written session titles
@@ -480,16 +592,17 @@ git commit -m "P1: the agent DO refuses work for a session id outside its own sc
 **Files:**
 - Create: `src/titles.ts`
 - Create: `tests/titles.test.mjs`
-- Modify: `src/agent.ts` (first-reply hook)
+- Modify: `src/agent.ts` (first-reply hook), `src/registry.ts` (one RPC, see Step 4)
 - Consumes but does not modify: `PLACEHOLDER_TITLE` from `src/registry-store.ts`
 
 **Interfaces:**
-- Consumes: `fetchRouter` from Task 3, `env.MODEL_CHEAP`, `RegistryAgent.rename`, `RegistryAgent.list`.
+- Consumes: `fetchRouter` from Task 3, `env.MODEL_CHEAP`, `RegistryAgent.rename`, `RegistryAgent.get` (added here).
 - Produces: `TITLE_SYSTEM: string`, `titleMessages(first: string): Array<{ role: "system" | "user"; content: string }>`, `parseTitle(raw: string, fallback: string): string`.
+- Produces on `RegistryAgent`: `async get(id: string): Promise<SessionRow | null>`.
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/titles.test.mjs` asserts on `parseTitle`: `"  Hello World  "` yields `"Hello World"`; a quoted `"\"Build a Tracker\""` yields `Build a Tracker` with no quotes; a 60-char input is cut at a word boundary at 40 chars or fewer and never mid-word into a broken UTF-16 surrogate; an empty reply returns the fallback; the fallback itself is truncated to 40 chars plus an ASCII `...`; and a reply of `{"title":"X"}` yields `X` (the cheap model returns JSON often enough to warrant it). `titleMessages` includes the user's first 300 chars and never includes more than that.
+`tests/titles.test.mjs` asserts on `parseTitle`: `"  Hello World  "` yields `"Hello World"`; a quoted `"\"Build a Tracker\""` yields `Build a Tracker` with no quotes; a 60-char input is cut at a word boundary at 40 chars or fewer; **the truncation case must feed an astral character** (a codepoint above U+FFFF, which is two UTF-16 units), because with `TITLE_SYSTEM` banning emoji a 60-char ASCII input cannot split a surrogate pair and the clause would assert nothing; one 60-char word with no boundary at all gets a **hard cut at 40**, since there is no word boundary to fall back to; an empty reply returns the fallback; the fallback itself is truncated to 40 chars plus an ASCII `...`; and a reply of `{"title":"X"}` yields `X` (the cheap model returns JSON often enough to warrant it). `titleMessages` includes the user's first 300 chars and never includes more than that.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -501,12 +614,49 @@ Dependency-free. `TITLE_SYSTEM` asks for two to five words, sentence case, no qu
 
 - [ ] **Step 4: Wire it non-blockingly**
 
-After the first assistant reply in a session whose registry title is still `PLACEHOLDER_TITLE`, start a fiber (`this.runFiber("title", ...)`) that calls `fetchRouter` with `env.MODEL_CHEAP`, then `registry.rename`. The reply must already have been sent. On any error, rename with `parseTitle("", firstMessage)`, the deterministic fallback built from the user's own words rather than a model attempt; the two branches differ in the value they produce, not in shape. Two rules this task owns (P14): before renaming, re-read the row and **skip the rename if the title is no longer `PLACEHOLDER_TITLE`**, because a user may have typed one in the seconds the cheap model was busy, and the fiber must never touch `updated_at`, because that is the sidebar's sort key and a background writer reordering the list behind the user looks like a bug in the list. `agents@0.28.1` exposes `runFiber<T>(name, fn)` and backs it with the `cf_agents_runs` table, but `node_modules/` is gitignored, so quote that dependency in the brief rather than expecting a fresh clone to verify it. This step has no offline test: `src/agent.ts` cannot be imported by Node, so the proof is the live check in Step 5.
+After the first assistant reply in a session whose registry title is still `PLACEHOLDER_TITLE`, start a fiber (`this.runFiber("title", ...)`) that calls `fetchRouter` with `env.MODEL_CHEAP`, then `registry.rename`. The reply must already have been sent. On any error, rename with `parseTitle("", firstMessage)`, the deterministic fallback built from the user's own words rather than a model attempt; the two branches differ in the value they produce, not in shape.
+
+Four things this step pins, each because the plan's prose alone left it inventable wrong:
+
+- **`firstMessage` is the triggering turn's content**, the string `chat` was called with — not a read
+  from the store. There is no by-session first-row reader and `recentMessages` is DESC
+  (`src/memory.ts:144`), so a store-based "first message" would need a new query for no benefit.
+  Consequence worth stating in the commit message: `main` arrives with the seeded placeholder, so it
+  gets its model title on its **next** turn, not on the turn that seeded it.
+- **The completion is a string the harness does not hand you.** `fetchRouter(env, path, body, stream,
+  signal?)` returns a `Response` (`src/router.ts:92-98`), so the fiber does
+  `const data = await res.json() as { choices?: { message?: { content?: string } }[] }` and passes
+  `data.choices?.[0]?.message?.content ?? ""` to `parseTitle` — the same read `src/agent.ts:734-738`
+  performs on a `RouterChatResponse`. Say it because the JSON-to-string seam has to live somewhere Node
+  can reach: `parseTitle`'s argument, not a line inside `src/agent.ts`.
+- **Addressing is exact**: `this.env.REGISTRY.get(this.env.REGISTRY.idFromName("registry"))`, the one
+  instance Task 6 creates. `idFromName("registry")` is a magic string chosen there and nowhere else.
+  No new `wrangler.jsonc` grant, and none must be added: a DO's `env` already carries top-level
+  bindings on paths that run in production today (`this.env.SANDBOX.fetch` at `src/agent.ts:460-464`,
+  `this.env.PARALLEL_API_KEY` at `:421`, `this.env.MODEL_CHEAP` at `:405`).
+- **A missing namespace must never throw in the chat path.** Title work degrades exactly as `recall`
+  already degrades to `[]` inside the `try`/`catch` at `src/agent.ts:515-527`: the fiber catches, and
+  the deterministic fallback path is what runs. The turn the user is waiting on never sees it.
+
+Two rules this task owns (P14): before renaming, re-read the row with the `get(id)` RPC added above and
+**skip the rename if the title is no longer `PLACEHOLDER_TITLE`**, because a user may have typed one in
+the seconds the cheap model was busy; and **fail closed** — no row at all means no rename. Do not
+substitute `list(MAX_LIMIT)` for the re-read: a row outside the 200-window would silently switch title
+generation off for exactly the old sessions still carrying `New session`. The fiber must also never
+touch `updated_at`, because that is the sidebar's sort key and a background writer reordering the list
+behind the user looks like a bug in the list.
+
+Scope, stated once: the fiber fires from the `chat` RPC path only. The WebSocket path carries no session
+id until Task 22 (R65 F6), so a conversation held entirely on the socket gets no model title until then
+— honest and temporary, not a bug to fix here. `agents@0.28.1` exposes `runFiber<T>(name, fn)` and backs
+it with the `cf_agents_runs` table, but `node_modules/` is gitignored, so quote that dependency in the
+brief rather than expecting a fresh clone to verify it. This step has no offline test: `src/agent.ts`
+cannot be imported by Node, so the proof is the live check in Task 10's Step 4.
 
 - [ ] **Step 5: Run tests, typecheck, commit**
 
 ```bash
-git add src/titles.ts tests/titles.test.mjs src/agent.ts
+git add src/titles.ts tests/titles.test.mjs src/agent.ts src/registry.ts
 git commit -m "P1: sessions get model-written titles off the hot path"
 ```
 
@@ -517,15 +667,37 @@ git commit -m "P1: sessions get model-written titles off the hot path"
 
 **Interfaces:**
 - Consumes: Task 7's routes.
-- Produces: `state.sessionId` in the console, persisted in `localStorage` under `blip.session`; `loadSessions()`, `newSession()`, `renameSession(id, title)`, `deleteSession(id)`, `openSession(id)`.
+- Produces: `state.sessionId` in the console, persisted in `localStorage` under `blip.session`; `api(path, init)`, `loadSessions()`, `newSession()`, `renameSession(id, title)`, `deleteSession(id)`, `openSession(id)`.
 
 - [ ] **Step 1: Replace the cosmetic session array**
 
-`const TH=[["Main chat","idle",""]]` becomes a list rendered from `GET /api/sessions`. Each row keeps the existing `.th2` thread-row markup, which is the component that already gives a row its title, its `small` subtext line and its `aria-current` selected state. Do not reuse `.card` or `.pill` here: `.card` is the rounded panel behind the approval card and `.pill` is the chat speaker bubble scoped under `.who`, and neither is a sidebar row (verified against `ui/index.html:64,80,42`). `pick(i)` calls `openSession(id)` which fetches `/api/sessions/:id/messages` and rebuilds `LOG` from the transcript instead of wiping it. The row's subtext is the relative `updated_at` only: the per-thread mascot state the old array carried has no `SessionRow` field and no backend that could fill one in Phase 1, so the colored dot and the "Waiting for you" text come out rather than being faked, and they return in Phase 3 with the live frames that make them true. There is no `localStorage` cache of chat text to delete (verified: the only six uses are the key reads at `ui/index.html:384-388`), so this step simply must not add one: the server transcript is the only copy, and a second cached copy is how a stale reply comes back after a rename or a delete.
+`const TH=[["Main chat","idle",""]]` becomes a list rendered from `GET /api/sessions`. Each row keeps the existing `.th2` thread-row markup, which is the component that already gives a row its title, its `small` subtext line and its `aria-current` selected state. Do not reuse `.card` or `.pill` here: `.card` is the rounded panel behind the approval card and `.pill` (`ui/index.html:42-47`) is the mascot verb capsule — its children are `b` and `em` and `.who.big` hides it — and neither is a sidebar row; the chat bubbles are `.m` from `:53`. `pick(i)` calls `openSession(id)` which fetches `/api/sessions/:id/messages` and rebuilds `LOG` from the transcript instead of wiping it. The row's subtext is the relative `updated_at` only: the per-thread mascot state the old array carried has no `SessionRow` field and no backend that could fill one in Phase 1, so the colored dot and the "Waiting for you" text come out rather than being faked, and they return in Phase 3 with the live frames that make them true. There is no `localStorage` cache of chat text to delete (verified: the only six uses are the key reads at `ui/index.html:384-388`), so this step simply must not add one: the server transcript is the only copy, and a second cached copy is how a stale reply comes back after a rename or a delete.
+
+Four things this step changes that the old cosmetic array never had to:
+
+- **Repoint the send.** `fedChat` at `ui/index.html:385` posts `/api/message`, which is main's DO
+  regardless of which row is selected. It becomes `POST /api/sessions/<state.sessionId>/message`.
+  Without this, Step 4's headline check — "two sessions side by side keep separate transcripts" —
+  cannot be observed for any reason an implementer could see, because both sessions write to main.
+- **Drop the hardcoded production host.** `const AGENT="https://agent-federation.agent-federation.workers.dev"`
+  at `:325` means every call from a local `wrangler dev` page leaves the build under test and hits
+  production, so a local check proves nothing about local code. The worker serves the console itself
+  (`env.ASSETS.fetch(request)` at `src/index.ts:276-277`), so use `location.origin` and delete the
+  constant: identical behaviour in production, and dev finally tests dev.
+- **One fetch helper, not six bearer expressions.** Add `api(path, init)` which attaches
+  `authorization: "Bearer " + (localStorage.getItem("blip_key") || "").trim()`, and migrate the five
+  existing inlined copies at `:384-388` to it. A sixth copy of that expression is the same defect R64
+  I2 fixed in `src/`.
+- **A rebuilt transcript loses the tool cards.** `/api/sessions/:id/messages` returns `MessageRow`
+  (`src/memory.ts:21-27`: `id, role, content, tier, created_at`), and tool cards are not rows in that
+  table, so reopening a session shows text and drops the cards the live turn displayed. Accept this for
+  Phase 1, say so in a comment where `LOG` is rebuilt, and do not fake them from `state.runningTools`,
+  which holds only the in-flight turn. Phase 3's durable `Streams` (Task 18 onward) is what makes cards
+  survive a reload.
 
 - [ ] **Step 2: Add the key gate**
 
-`loadTasks()` and `loadPlan()` are called only when `localStorage.getItem("blip_key")` is non-empty. The key is `blip_key`, underscore: all five existing call sites read that name, and a gate on `blip.key` would never fire, silently killing the Tasks tab and the approval card (R44). The two 401s on load go away. Note that `/api/plan` is deleted in Task 15, so gate the call that still exists and leave a `TODO(P2)` line naming the task; do not leave a silent dead call.
+`loadTasks()`, `loadPlan()` **and `loadSessions()`** are called only when `localStorage.getItem("blip_key")` is non-empty. The sessions list is in the gate because Step 4 demands "no 401 flood" and an ungated `loadSessions()` on a fresh page is exactly one 401 on load; with the key missing, the sidebar renders the empty state that invites the key, the same treatment Step 4 asks for elsewhere. The key is `blip_key`, underscore: all five existing call sites read that name, and a gate on `blip.key` would never fire, silently killing the Tasks tab and the approval card (R44). The two 401s on load go away. Note that `/api/plan` is deleted in Task 15, so gate the call that still exists and leave a `TODO(P2)` line naming the task; do not leave a silent dead call.
 
 - [ ] **Step 3: New session, rename, delete**
 
@@ -533,7 +705,7 @@ New stays in the sidebar footer, the existing `.sf` row with its `.ib` icon butt
 
 - [ ] **Step 4: Verify in a browser**
 
-Sync `ui/index.html` to the deploy tree first (R48: `ui/` is now inside the mirror rule, and `wrangler dev` serves the deploy tree's copy, so verifying without the sync would test a stale console and prove nothing). Then run `npx wrangler dev` from the deploy tree, open the page with Playwright or the browser tools, and check: two sessions created side by side keep separate transcripts, using `POST /api/sessions/:id/message`; the title becomes model-written within a few seconds; a reload restores both the list and the selected transcript; and `main` appears in the list on first load with its history intact (Task 6's seed). With no key set, the console must show the key prompt and no 401 flood. Report what you saw, not what you expect.
+Sync `ui/index.html` to the deploy tree first (R48: `ui/` is now inside the mirror rule, and `wrangler dev` serves the deploy tree's copy, so verifying without the sync would test a stale console and prove nothing). Then run `npx wrangler dev` from the deploy tree, open the page with Playwright or the browser tools, and check: two sessions created side by side keep separate transcripts — send into each with the console's own input, which now hits `POST /api/sessions/:id/message`, and confirm in the Network panel that no request went to `/api/message` and none went to `agent-federation.workers.dev` (Step 1's host deletion is what makes this a local test at all); the title becomes model-written within a few seconds; a reload restores both the list and the selected transcript; and `main` appears in the list on first load with its history intact (Task 6's seed). With no key set, the console must show the key prompt and no 401 flood. Report what you saw, not what you expect.
 
 ```bash
 git add ui/index.html
@@ -1146,7 +1318,8 @@ git commit -m "P4: workspace snapshots and restores move from base64-in-KV to R2
 ### Task 28: One sandbox per session, with a cap and an idle GC
 
 **Files:**
-- Modify: `src/agent.ts` (the `sessionId: "agent"` call sites), `deploy/sandbox-worker/src/index.ts`
+- Modify: `src/agent.ts` (the `sessionId: "agent"` call sites — **Task 8 Step 3d owns that edit; this
+  task only verifies it landed**, R65 F7), `deploy/sandbox-worker/src/index.ts`
 - Create: `deploy/sandbox-worker/pool.ts`, `tests/sandbox-scope.test.mjs`
 
 **Interfaces:**
@@ -1154,7 +1327,7 @@ git commit -m "P4: workspace snapshots and restores move from base64-in-KV to R2
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/sandbox-scope.test.mjs` asserts the fake `SANDBOX` binding's recorded bodies all carry the caller's session id, that `sessionId: "agent"` appears nowhere in `src/agent.ts`, and that the eviction choice function over a list of `{sessionId, lastUsed}` picks the oldest and never evicts the id being requested.
+`tests/sandbox-scope.test.mjs` asserts the fake `SANDBOX` binding's recorded bodies all carry the caller's session id, that `sessionId: "agent"` appears nowhere in `src/agent.ts` (Task 8 removed both sites, so for this task that assertion is a regression check, not an edit), and that the eviction choice function over a list of `{sessionId, lastUsed}` picks the oldest and never evicts the id being requested.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
