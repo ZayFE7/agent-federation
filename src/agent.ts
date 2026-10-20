@@ -37,6 +37,8 @@ import {
 } from "./memory";
 import { toSqlHandle, type SqlTag } from "./sql-handle";
 import { MAIN_DO_NAME, sessionScopeOk } from "./session-scope";
+import { PLACEHOLDER_TITLE } from "./registry-store";
+import { parseTitle, titleMessages } from "./titles";
 import {
   ensureVaultSchema,
   vaultDelete as vaultDeleteChunks,
@@ -46,6 +48,16 @@ import {
 } from "./vault";
 import { isRisky } from "./guardrails";
 import { fetchRouter } from "./router";
+
+/**
+ * The two registry RPCs the title fiber calls (Task 9). A local shape rather
+ * than RegistryStub because that interface is what src/routes.ts addresses;
+ * this cast only has to describe the DO methods used here.
+ */
+interface TitleRegistry {
+  get(id: string): Promise<{ title: string } | null>;
+  rename(id: string, title: string): Promise<void>;
+}
 
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
@@ -366,10 +378,84 @@ export class FederationAgent extends Agent<Env> {
     ) {
       return { reply: "", code: "invalid_session" };
     }
+    let reply: AgentReply;
     try {
-      return await this.handleChat(content, tier, sessionId);
+      reply = await this.handleChat(content, tier, sessionId);
     } catch (err) {
       return { reply: "agent error: " + String(err) };
+    }
+    // Task 9: title work starts only after the reply exists and is never
+    // awaited. The fiber's own placeholder check decides whether this turn
+    // needs a title; an already-named session costs one registry read.
+    this.startTitle(content, sessionId);
+    return reply;
+  }
+
+  /**
+   * Task 9: name a session from its first turn, off the reply path.
+   *
+   * `firstMessage` is the triggering turn's content, the string chat() was
+   * called with, not a store read: recentMessages is oldest-first but covers
+   * only the last six rows, so it is not a by-session first-row reader. Only
+   * chat() calls this, after handleChat has produced its reply; the WebSocket
+   * path has no session id until Task 22. main carries the seeded placeholder,
+   * so it gets its title on its next turn rather than at seed time.
+   *
+   * The fiber re-reads the registry before renaming, skips a title the user
+   * already typed, and fails closed on a missing row. renameSession touches
+   * only the title, never updated_at, so the sidebar's sort order does not move
+   * behind the user. Every failure is caught here: title work must never reach
+   * the reply path or become an unhandled rejection.
+   */
+  private startTitle(firstMessage: string, sessionId?: string): void {
+    const id = sessionId ?? MAIN_DO_NAME;
+    try {
+      void this.runFiber("title", async () => {
+        try {
+          const registry = this.env.REGISTRY.get(
+            this.env.REGISTRY.idFromName("registry")
+          ) as unknown as TitleRegistry;
+
+          const before = await registry.get(id);
+          if (!before || before.title !== PLACEHOLDER_TITLE) return;
+
+          let title: string;
+          try {
+            const res = await fetchRouter(
+              this.env,
+              "/v1/chat/completions",
+              {
+                model: this.env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP,
+                messages: titleMessages(firstMessage),
+                max_tokens: 60,
+              },
+              false,
+              AbortSignal.timeout(20_000)
+            );
+            if (!res.ok) throw new Error(`router ${res.status}`);
+            const data = (await res.json()) as {
+              choices?: { message?: { content?: string } }[];
+            };
+            title = parseTitle(data.choices?.[0]?.message?.content ?? "", firstMessage);
+          } catch {
+            // The deterministic branch: the user's own words, no model attempt.
+            title = parseTitle("", firstMessage);
+          }
+          if (!title) return;
+
+          // P14: the user may have renamed while the cheap model was busy. Read
+          // the row again and skip unless it is still the placeholder; a vanished
+          // row is fail-closed, never a blind rename.
+          const after = await registry.get(id);
+          if (!after || after.title !== PLACEHOLDER_TITLE) return;
+          await registry.rename(id, title);
+        } catch {
+          // A missing REGISTRY binding, an RPC failure or an unreadable response
+          // degrades to no title work, exactly as recall degrades to [].
+        }
+      });
+    } catch {
+      // The SDK could not start a fiber; leave the placeholder untouched.
     }
   }
 

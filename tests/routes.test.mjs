@@ -451,11 +451,19 @@ check("src/agent.ts's chat guard is the first statement, ahead of the try, and r
 // they join the other src/agent.ts text checks.
 check("src/agent.ts dereferences its own namespace and names main in exactly one place each", () => {
   const code = stripComments(AGENT_SOURCE);
+  // Task 9's title fiber also calls REGISTRY.idFromName("registry"), which is a
+  // different namespace, so the count is scoped to this agent's own namespace.
   assert.equal(
-    (code.match(/idFromName\(/g) ?? []).length,
+    (code.match(/this\.env\.FEDERATION_AGENT\.idFromName\(/g) ?? []).length,
     1,
-    "idFromName must live only in idFor(); a second copy is how the guard and the stub drift apart"
+    "FEDERATION_AGENT.idFromName must live only in idFor(); a second copy is how the guard and the stub drift apart"
   );
+  assert.equal(
+    (code.match(/this\.env\.REGISTRY\.idFromName\(/g) ?? []).length,
+    1,
+    "the title fiber must address the one registry instance exactly once"
+  );
+  assert.equal(/idFromName\("main"\)/.test(code), false, "the main DO name is imported, never spelled");
   const idFor = AGENT_SOURCE.match(/private\s+idFor\(name:\s*string\)\s*\{[\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(/this\.env\.FEDERATION_AGENT\.idFromName\(name\)/.test(idFor), "idFor must be the one dereference");
   assert.ok(

@@ -162,6 +162,20 @@ export class RegistryAgent extends Agent<Env> {
     return getSession(this.db(), id) !== null;
   }
 
+  /**
+   * One-row read by id (Task 9): the title fiber's pre-rename check. It must
+   * see the CURRENT title so a user rename that landed while the cheap model
+   * was busy wins, and an absent row fails closed (no row, no rename). Not
+   * `list(MAX_LIMIT)`: a row outside the 200 window would silently switch
+   * title generation off for exactly the old sessions still saying
+   * `New session`.
+   *
+   * `getSession` is the store's own one-row read, so no SQL is restated here.
+   */
+  async get(id: string): Promise<SessionRow | null> {
+    return getSession(this.db(), id);
+  }
+
   /** Whole-row write: the caller owns every column it sends, created_at included. */
   async put(row: SessionRow): Promise<void> {
     upsertSession(this.db(), row);
