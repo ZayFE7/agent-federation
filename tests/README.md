@@ -1,12 +1,21 @@
 # tests/
 
-Twenty-one entries live here, this README included. Thirteen are offline, framework-free, and run by
+Twenty-five entries live here, this README included. Twenty are offline, framework-free, and run by
 `npm test`:
-`guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
+`approval.test.mjs` (a test that only `exec` is gated by shell risk and a malformed input fails
+closed), `context.test.mjs` (a test that every capability claim renders from one table and that
+memory sits after the tool guidance), `guardrails.test.mjs` (a unit test for
+`../src/guardrails.ts`), `harness.test.mjs` (a test of `../src/harness-config.ts`, the one harness
+options object: the 12-step construction-time budget, the session-bound tool factory, the approval
+hook, the explicit recovery numbers and the absence of an invented `onEvent` hook),
+`markdown.test.mjs` (a test of
 the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
 `src/memory.ts` and drives the real recall + task functions against a live `node:sqlite`
 database), `paths.test.mjs` (a test that the sandbox home is one constant and that no source
-file still promises `/workspace`), `registry.test.mjs` (a test that executes the registry
+file still promises `/workspace`), `prefix.test.mjs` (a test of `../src/directives.ts`, including
+the P2-14 empty-argument hole), `provider.test.mjs` (a test that the AI SDK provider reaches the
+router binding at the absolute URL it was configured with), `registry.test.mjs` (a test that
+executes the registry
 Durable Object's rulings that `tsc` cannot see, the R55 boot seed, the composite index that
 serves the sidebar's only query, and since Task 8 the R74 `exists` read the worker's session
 gates stand on, against a real `node:sqlite` database),
@@ -14,7 +23,9 @@ gates stand on, against a real `node:sqlite` database),
 segment and body parsing, which `npm test` could never reach through `src/registry.ts`
 itself), `registry-store.test.mjs` (a test of `src/registry-store.ts`, the pure session index
 and its `registry_meta` markers, against `fake-sql.mjs` and then against a real `node:sqlite`
-database), `router.test.mjs` (a test that every router call reaches the `ROUTER` binding at
+database), `reply.test.mjs` (a test of `../src/reply.ts`, the harness result projected onto the
+console's `AgentReply`), `router.test.mjs` (a test that every router call reaches the `ROUTER`
+binding at
 exactly one endpoint and hands the caller's AbortSignal to fetch), `routes.test.mjs` (a test
 that drives the real `src/routes.ts` against a fake `env`, the first offline test to reach
 the worker's HTTP surface), `session-scope.test.mjs` (a test of `src/session-scope.ts`, the
@@ -24,12 +35,13 @@ test of `src/sql-handle.ts`, the one exec adapter both Durable Objects build the
 from, against a real `node:sqlite` database), `titles.test.mjs` (a test of `src/titles.ts`, the
 title parser that cuts at 40 codepoints rather than UTF-16 units, strips wrapping quotes,
 accepts the JSON object form the cheap model often returns, and falls back deterministically),
-and `fake-sql.test.mjs` (a contract test for the
+`tools.test.mjs` (a test of the AI SDK tool set: the four frozen names, recovery policy and
+descriptions), and `fake-sql.test.mjs` (a contract test for the
 shared fixture). The harness is
 `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
 pure-store tests, contract-tested by `fake-sql.test.mjs`). Live-only, never run by
-`npm test` because they do not end in `.test.mjs`: `live-matrix.mjs`, `live-deep.mjs`,
-`live-tools2.mjs`, `live-probe.sh`, `router-probe.mjs`.
+`npm test` because they do not end in `.test.mjs`: `live-matrix.mjs`, `live-probe.sh`,
+`router-probe.mjs`.
 
 `npm test` is `node tests/run-all.mjs` (`../package.json`). There is still no
 vitest/jest/playwright dependency and no CI at all (no `.github/`, no workflow files anywhere
@@ -59,7 +71,8 @@ FAIL, 2 on fatal setup errors (`:26,38,49,54`). The four assertions (`:57-99`):
 2. **deterministic tool run**, `{content:"run: echo blip-can-run"}`: `tools[0].cmd` includes
    `echo blip-can-run` **and** `tools[0].output` includes `blip-can-run` (`:71-78`).
 3. **capabilities**, `{content:"what can you do"}`: `reply` lowercased contains `sandbox`
-   (`:83-88`). This one hits the deterministic capability branch at `../src/agent.ts:576-590`.
+   (`:83-88`). This one hits the deterministic capability branch in `runTurn`
+   (`../src/agent.ts`), which now renders from `capabilitiesText`.
 4. **freeform generation**, `{content:"write a 2-line poem about butterflies"}`: `reply`
    non-empty and does not contain `[error]` (`:92-98`).
 
@@ -85,15 +98,19 @@ So: `set BLIP_URL=<origin of the worker you deployed>` plus a real `AGENT_API_KE
 `.dev.vars` (and the same value as a worker secret), then `node tests/live-matrix.mjs`. The
 key itself is never printed; the header line reports only its length.
 
-`live-deep.mjs` (`:9`, `:12`) and `live-tools2.mjs` (`:6-8`) still carry the old hardcoded host
-and the old hex-only key regex; they are outside this file's fix and outside `npm test`.
+`live-deep.mjs` and `live-tools2.mjs` are gone (Task 15): both drove `/api/plan` and the old
+`{id, approve}` approval body, which no longer exist.
 
 ## Probe 2 is deterministic now, but still needs the sandbox
 
-`DIRECT_RUN_RE` (`../src/agent.ts:82`) is wired: `handleChat` runs it at `../src/agent.ts:548`
-and, on a `run:`/`exec:`/`execute:` prefix, short-circuits straight to `execSandbox(cmd)`
-(`../src/agent.ts:551`) without calling the model. So probe 2 no longer depends on the model
-choosing the `exec` tool. It does still depend on the `SANDBOX` service binding answering, and
+`parseDirective` (`../src/directives.ts`) is wired: `runTurn` in `../src/agent.ts` runs it
+before the harness and, on a `run:`/`exec:`/`execute:` prefix, short-circuits straight to
+`runSandbox(cmd, session)` without calling the model. So probe 2 no longer depends on the
+model choosing the `exec` tool. Those two arms are BLIP-owned early returns before
+`harness.session().prompt()`, which means **a directive turn is not in the model's
+transcript**: the model never sees a `run:` it answered. That is an accepted Phase 2
+limitation, not an oversight; the console still shows the card because each branch writes its
+own `logMessage` rows. It does still depend on the `SANDBOX` service binding answering, and
 `deploy/sandbox-worker` has no `node_modules` in either local tree, so its `e2b` dependency
 (declared at `../deploy/sandbox-worker/package.json:6`) is not installed and the live path is
 unexercised. The gap list lives outside this repo (beside the two local trees, not tracked),
@@ -108,13 +125,15 @@ i.e. dead code. That was wrong; the code wins.)
   `deploy/sandbox-worker` and `deploy/telegram-bridge` have no `tsconfig.json` at all, so
   `deploy/**` is never typechecked (except `deploy/router-worker`, which has its own). It also
   never typechecks `tests/**`, so the `.mjs` files here are only ever exercised by running them.
-- Nothing tests the vault endpoints, the `/api/decide`, `/api/plan`, or `/api/approve` routes,
-  the cron handler, or the DO memory, task, plan, and pending-action schemas (the `sessions`
+- Nothing tests the vault endpoints, the `/api/decide` or `/api/approve` routes,
+  the cron handler, or the DO memory and task schemas (the `sessions`
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
-  covered offline by `guardrails.test.mjs`; the approve/hold flow around it is not.
-- `npm test` runs thirteen offline files (`fake-sql`, `guardrails`, `markdown`, `memory`,
-  `paths`, `registry`, `registry-input`, `registry-store`, `router`, `routes`, `session-scope`,
-  `sql-handle`, `titles`). No offline
+  covered offline by `guardrails.test.mjs`; the harness approval round trip needs a Durable
+  Object and is only exercised live.
+- `npm test` runs twenty offline files (`approval`, `context`, `fake-sql`, `guardrails`,
+  `harness`, `markdown`, `memory`, `paths`, `prefix`, `provider`, `registry`, `registry-input`,
+  `registry-store`, `reply`, `router`, `routes`, `session-scope`, `sql-handle`, `titles`,
+  `tools`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
 - `routes.test.mjs` covers the six worker-side session routes: `GET /api/sessions?limit=N`,

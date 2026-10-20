@@ -2,7 +2,7 @@ import { FederationAgent } from "./agent";
 import { RegistryAgent } from "./registry";
 import { fetchRouter } from "./router";
 import { authed, safeEq } from "./auth";
-import { MAIN_DO_NAME } from "./session-scope";
+import { MAIN_DO_NAME, isSessionId } from "./session-scope";
 import { handleFetch } from "./routes";
 import type { AgentStub, ChatRequest, ChatTier, Env } from "./types";
 
@@ -94,28 +94,41 @@ export default {
       return Response.json({ ok: true, tasks: list });
     }
 
-    if (url.pathname === "/api/plan" && request.method === "GET") {
-      if (!authed(request, env)) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
-      const { plan, pending } = await agentStub(env).planState();
-      return Response.json({ ok: true, plan, pending });
-    }
-
     if (url.pathname === "/api/approve" && request.method === "POST") {
       if (!authed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
-      let body: { id?: number; approve?: boolean };
+      let body: {
+        sessionId?: string;
+        toolCallId?: string;
+        approved?: boolean;
+        reason?: string;
+      };
       try {
         body = (await request.json()) as typeof body;
       } catch {
         return Response.json({ error: "invalid JSON body" }, { status: 400 });
       }
-      if (!Number.isInteger(body.id)) {
-        return Response.json({ error: "integer id required" }, { status: 400 });
+      const sessionId = body.sessionId ?? MAIN_DO_NAME;
+      if (!isSessionId(sessionId)) {
+        return Response.json({ error: "valid sessionId required" }, { status: 400 });
       }
-      const result = await agentStub(env).approveAction(Number(body.id), body.approve === true);
+      if (typeof body.toolCallId !== "string" || body.toolCallId.length === 0) {
+        return Response.json({ error: "toolCallId required" }, { status: 400 });
+      }
+      const reason =
+        typeof body.reason === "string" && body.reason ? body.reason.slice(0, 400) : undefined;
+      // The parked call lives on the session DO that ran the turn, so address that
+      // instance rather than main (R46 is about jobs; transcripts shard, R41).
+      const stub = env.FEDERATION_AGENT.get(
+        env.FEDERATION_AGENT.idFromName(sessionId)
+      ) as unknown as AgentStub;
+      const result = await stub.approveToolCall(
+        sessionId,
+        body.toolCallId,
+        body.approved === true,
+        reason
+      );
       return Response.json(result);
     }
 

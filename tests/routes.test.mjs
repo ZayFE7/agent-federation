@@ -473,7 +473,7 @@ check("src/agent.ts dereferences its own namespace and names main in exactly one
   assert.ok(/this\.env\.FEDERATION_AGENT\.get\(\s*this\.idFor\(MAIN_DO_NAME\)\s*\)/.test(code), "mainStub must reuse idFor()");
   assert.equal(/const MAIN_DO_NAME\s*=/.test(code), false, "src/agent.ts must import MAIN_DO_NAME from src/session-scope.ts");
   assert.ok(/import \{[^}]*MAIN_DO_NAME[^}]*\} from "\.\/session-scope"/.test(AGENT_SOURCE), "the import must name MAIN_DO_NAME");
-  assert.ok(/import \{ MAIN_DO_NAME \} from "\.\/session-scope"/.test(INDEX_SOURCE), "src/index.ts must take the shared name");
+  assert.ok(/import \{[^}]*MAIN_DO_NAME[^}]*\} from "\.\/session-scope"/.test(INDEX_SOURCE), "src/index.ts must take the shared name");
   assert.equal(/idFromName\("main"\)/.test(INDEX_SOURCE), false, "src/index.ts must not spell the literal");
 });
 
@@ -496,17 +496,17 @@ check("src/agent.ts threads a real session id to the sandbox instead of the lite
     'a hardcoded sessionId: "agent" still names one shared sandbox session (Step 3d)'
   );
   assert.ok(
-    /private\s+async\s+execSandbox\(\s*cmd:\s*string,\s*sessionId:\s*string\s*\)/.test(
+    /private\s+async\s+runSandbox\(\s*cmd:\s*string,\s*sessionId:\s*string\s*\)/.test(
       AGENT_SOURCE.replace(/\s+/g, " ")
     ),
-    "execSandbox must take the sessionId rather than invent one"
+    "runSandbox must take the sessionId rather than invent one"
   );
-  // The three callers named in Step 3d: the two in the chat path take the threaded id,
-  // and the scheduled path passes main explicitly because after Step 3c it only runs
-  // there.
-  assert.ok(/this\.execSandbox\(\s*cmd,\s*sandboxSession\s*\)/.test(AGENT_SOURCE), "the exec tool must pass the threaded id");
-  assert.ok(/this\.execSandbox\(\s*row\.cmd,\s*MAIN_DO_NAME\s*\)/.test(AGENT_SOURCE), "approveAction runs on main, so it names main");
-  assert.ok(/this\.handleChat\(\s*instructions,\s*"cheap",\s*MAIN_DO_NAME\s*\)/.test(AGENT_SOURCE), "onScheduledTask must pass main explicitly");
+  // The callers: the directive path and the exec tool take the threaded id, and the
+  // scheduled path passes main explicitly because after Step 3c it only runs there.
+  assert.ok(/this\.runSandbox\(\s*cmd,\s*session\s*\)/.test(AGENT_SOURCE), "the directive path must pass the threaded id");
+  assert.ok(/this\.runSandbox\(\s*cmd,\s*session\s*\)/.test(AGENT_SOURCE), "the exec tool must pass the threaded id");
+  assert.ok(/exec:\s*\(cmd\)\s*=>\s*this\.runSandbox\(cmd,\s*session\)/.test(AGENT_SOURCE), "toolDeps must bind the session to the exec tool");
+  assert.ok(/this\.chat\(\s*instructions,\s*"cheap",\s*MAIN_DO_NAME\s*\)/.test(AGENT_SOURCE), "onScheduledTask must pass main explicitly");
 });
 
 check("src/agent.ts arms the tick on main only (R46, Step 3c)", () => {
@@ -527,8 +527,8 @@ check("src/agent.ts arms the tick on main only (R46, Step 3c)", () => {
 // alarm, the arm's local INSERT stored a row nothing could list or fire, while the copy
 // promised an autonomous run. This pins the row to main and pins both honest refusals.
 check("src/agent.ts schedules jobs where the alarm that fires them can see them (R46, fix-round 1)", () => {
-  const arm = AGENT_SOURCE.match(/"schedule_task"\)\s*\{[\s\S]*?\n {10}\} else if/s)?.[0] ?? "";
-  assert.ok(arm, "src/agent.ts has no schedule_task arm to read");
+  const arm = AGENT_SOURCE.match(/private\s+async\s+scheduleJob\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(arm, "src/agent.ts has no scheduleJob to read");
   assert.equal(
     /enqueueTask\(\s*sql/.test(arm),
     false,
@@ -536,7 +536,8 @@ check("src/agent.ts schedules jobs where the alarm that fires them can see them 
   );
   assert.ok(/await this\.enqueueGlobal\(/.test(arm), "the arm must hand the row to main through enqueueGlobal");
   assert.ok(/Number\.isFinite\(dueAt\)/.test(arm), "a due time the platform cannot represent must be refused BEFORE anything is stored");
-  assert.equal((arm.match(/runOk = false/g) ?? []).length, 2, "both refusals (unrepresentable due time, failed hop) must report runOk false");
+  assert.equal((arm.match(/throw new Error\(/g) ?? []).length, 2, "both refusals (unrepresentable due time, failed hop) must throw so the harness records output-error");
+  assert.equal((arm.match(/return\s+"/g) ?? []).length, 0, "no refusal may be returned as a string: it would settle output-available and render as a green card");
 
   const hop = AGENT_SOURCE.match(/private\s+async\s+enqueueGlobal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(hop, "src/agent.ts declares no enqueueGlobal");
@@ -606,8 +607,8 @@ check("src/agent.ts keeps exactly one alarm row for its own tick (R46, fix-round
     "armTick is the only place this class arms the platform; a second site re-creates the duplicate-row leak"
   );
 
-  const arm = AGENT_SOURCE.match(/"schedule_task"\)\s*\{[\s\S]*?\n {10}\} else if/s)?.[0] ?? "";
-  assert.ok(arm, "src/agent.ts has no schedule_task arm to read");
+  const arm = AGENT_SOURCE.match(/private\s+async\s+scheduleJob\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(arm, "src/agent.ts has no scheduleJob to read");
   assert.ok(/unconfirmed/.test(arm), "a lost hop reply must report uncertainty, not a job that will never run");
   assert.equal(/nothing will run it/.test(arm), false, "the row may have landed; that copy is a second lie in the other direction");
   assert.match(arm, /main session's conversation/, "the job runs on main's transcript and sandbox lease, so the reply must say which chat it will appear in");
@@ -616,18 +617,25 @@ check("src/agent.ts keeps exactly one alarm row for its own tick (R46, fix-round
 // R45: "simplify" here means every memory the user already accumulated goes silently
 // invisible, because only main holds the store. The branch is the bug this pins out.
 check("src/agent.ts keeps memory global from any DO (R45, Step 3b)", () => {
-  const handleChat = AGENT_SOURCE.match(/private\s+async\s+handleChat\([\s\S]*?\n {2}\}/)?.[0] ?? "";
-  assert.ok(handleChat, "src/agent.ts declares no private handleChat(...) to read");
+  const runTurn = AGENT_SOURCE.match(/private\s+async\s+runTurn\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(runTurn, "src/agent.ts declares no private runTurn(...) to read");
   assert.ok(
-    /this\.rememberGlobal\(/.test(handleChat),
-    "the chat path must write memory through rememberGlobal"
+    /this\.rememberGlobal\(/.test(runTurn),
+    "the turn path must write memory through rememberGlobal"
   );
-  assert.ok(/this\.recallGlobal\(/.test(handleChat), "the chat path must read memory through recallGlobal");
-  assert.equal(
-    /\b(?:remember|recall)\(this\.db\(/.test(handleChat),
-    false,
-    "the chat path writes or reads main's store through the LOCAL handle, which silently shards memory per session"
-  );
+  const beforeTurn = AGENT_SOURCE.match(/private\s+async\s+beforeTurn\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(beforeTurn, "src/agent.ts declares no private beforeTurn(...) to read");
+  assert.ok(/this\.recallGlobal\(/.test(beforeTurn), "the model context must read memory through recallGlobal");
+  const turnEnd = AGENT_SOURCE.match(/private\s+async\s+onHarnessTurnEnd\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(turnEnd, "src/agent.ts declares no private onHarnessTurnEnd(...) to read");
+  assert.ok(/this\.rememberGlobal\(/.test(turnEnd), "the exchange memory must be written through rememberGlobal");
+  for (const [name, body] of [["runTurn", runTurn], ["beforeTurn", beforeTurn], ["onHarnessTurnEnd", turnEnd]]) {
+    assert.equal(
+      /\b(?:remember|recall)\(this\.db\(/.test(body),
+      false,
+      `${name} writes or reads main's store through the LOCAL handle, which silently shards memory per session`
+    );
+  }
   const global = AGENT_SOURCE.match(/private\s+async\s+rememberGlobal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(/if\s*\(this\.isMainInstance\(\)\)/.test(global), "rememberGlobal must branch on which DO runs");
   assert.ok(/memoryRemember\(/.test(global), "a session DO must reach main by RPC, never by its own SQLite");

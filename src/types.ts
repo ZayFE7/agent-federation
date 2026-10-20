@@ -38,10 +38,12 @@ export interface AgentReply {
   verb?: string;
   /** Tool cards the UI renders; empty when the model only talked. */
   tools?: ToolRun[];
-  /** Set when a high-risk command was held for human approval instead of run. */
-  pending?: { id: number; cmd: string };
-  /** Current ordered plan checklist, when the agent decomposed the task. */
-  plan?: Array<{ ord: number; title: string; status: string }>;
+  /**
+   * Set when a high-risk command is parked for human approval. The harness
+   * identifies the parked call by its string toolCallId; there is no row id
+   * (Task 15, R70).
+   */
+  pending?: { toolCallId: string; name: string; cmd: string };
   /**
    * Set when this DO refused the work because the session id it was handed is not
    * its own (Task 8). src/routes.ts maps it to HTTP 403 `{ok:false,error:"invalid
@@ -88,10 +90,11 @@ export interface AgentStub {
   chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply>;
   messages(limit?: number): Promise<MessageRow[]>;
   jobList(): Promise<unknown[]>;
-  planState(): Promise<{ plan: unknown[]; pending: unknown }>;
-  approveAction(
-    id: number,
-    approve: boolean
+  approveToolCall(
+    sessionId: string,
+    toolCallId: string,
+    approved: boolean,
+    reason?: string
   ): Promise<{ ok: boolean; reply: string; state: string; output?: string }>;
   vaultPut(key: string, idx: number, total: number, dataB64: string): Promise<void>;
   vaultPull(key: string): Promise<Uint8Array | null>;
