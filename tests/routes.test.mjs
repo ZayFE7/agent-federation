@@ -6,8 +6,14 @@
 // and `agents` pulls in `cloudflare:workers`, which plain Node cannot resolve. So
 // the very act of importing handleFetch here is the first half of the proof, and
 // the source-scan check below is the second half: routes.ts may value-import only
-// dependency-free modules (./auth, ./registry-input, ./registry-store) and must
-// take both DO namespaces from the env argument instead of importing the classes.
+// dependency-free modules (./auth, ./registry-input, ./registry-store, and since
+// Task 8 the guard itself in ./session-scope, R75) and must take both DO namespaces
+// from the env argument instead of importing the classes.
+//
+// Task 8 also puts the gate ORDER under test: auth 401, then the session-id shape
+// 400 (before any idFromName call), then the registry `exists` 404 (before any DO is
+// addressed), then the agent, whose refusal reply carries code "invalid_session" and
+// answers 403 with no registry touch (R76).
 //
 // Plain Node, no framework, no build step: run with `node tests/routes.test.mjs`.
 // Silent on success (exit 0). Prints every failure and exits 1 otherwise.
@@ -56,6 +62,14 @@ function fakeRegistry(rows = []) {
     touchCalls,
     regNames,
     rows,
+    // Gate 3 (R76): the routes ask the index before they address a session DO, so the
+    // fixture answers from its own rows instead of always saying yes. An
+    // always-true `exists` would leave the 404 branch unprovable, and an always-false
+    // one would take every send and every transcript read down with it.
+    async exists(id) {
+      calls.push(["exists", id]);
+      return stub.rows.some((row) => row.id === id);
+    },
     async list(limit) {
       calls.push(["list", limit]);
       // A real list is already clamped by the DO; the fixture answers the number
@@ -142,12 +156,38 @@ function fakeEnv({ key = "k", registry, agent } = {}) {
   };
 }
 
-function setup({ key = "k", rows = [], agent } = {}) {
+/**
+ * The two ids every existing case uses (`abc` for a session, `main` for the legacy
+ * DO). Task 8 puts a registry `exists` read in front of every session-DOP address,
+ * so a send or a transcript read needs a row to be served at all; a case that wants
+ * an absent id passes its own `rows`, or uses an id outside this set.
+ */
+const DEFAULT_ROWS = () =>
+  ["abc", "main"].map((id) => ({
+    id,
+    title: PLACEHOLDER_TITLE,
+    created_at: 1,
+    updated_at: 1,
+    workspace_ref: null,
+    unread: 0,
+    pinned: 0,
+  }));
+
+function setup({ key = "k", rows = DEFAULT_ROWS(), agent } = {}) {
   const registry = fakeRegistry(rows);
   const fed = agent || fakeAgentNamespace();
   const env = fakeEnv({ key, registry, agent: fed });
-  const ctx = { waitUntil() {}, passThroughOnException() {} };
-  return { registry, fed, env, ctx };
+  // A recorder, not a no-op: amendment 5 (R73) moves the accepted send's `touch`
+  // behind `ctx.waitUntil`, and the promise arriving here is the only way a test can
+  // see that the route handed the work over instead of awaiting it.
+  const promised = [];
+  const ctx = {
+    waitUntil(promise) {
+      promised.push(promise);
+    },
+    passThroughOnException() {},
+  };
+  return { registry, fed, env, ctx, promised };
 }
 
 const AUTH = { authorization: "Bearer k" };
@@ -239,6 +279,35 @@ check("src/routes.ts is importable offline: no non-type import of ./agent or age
     ),
     false,
     "a bare side-effect import of an SDK-reaching module is still a value import"
+  );
+});
+
+// The deny list above is not the whole rule: `./memory` and `./session-store` are not
+// in POISONED, and an import of a module that reaches the SDK later would break this
+// file at import time rather than in the scan. R75 makes the allow-list explicit, so
+// a fifth value import is a decision someone has to write down here. `./session-scope`
+// joined the list in Task 8 because that module imports nothing at all (R47), which
+// the check below re-states from the other side.
+check("src/routes.ts value-imports exactly the dependency-free allow-list (R75)", () => {
+  const ALLOWED = new Set(["./auth", "./registry-input", "./registry-store", "./session-scope"]);
+  const value = importsOf(ROUTES_SOURCE)
+    .filter((i) => !i.typeOnly)
+    .map((i) => i.specifier.replace(/\.(?:ts|mts|js|mjs)$/, ""));
+  assert.ok(value.includes("./session-scope"), "gate 2 must come from src/session-scope.ts, not a restated regex");
+  for (const specifier of value) {
+    assert.ok(ALLOWED.has(specifier), `value import of ${specifier} is not on the R75 allow-list`);
+  }
+  assert.deepEqual(new Set(value), ALLOWED, "the allow-list and routes.ts's imports drifted apart");
+});
+
+// The other half of R75: the guard is only legal because it is empty of imports. This
+// file does not read src/session-scope.ts (tests/session-scope.test.mjs owns it); the
+// check is here because the failure would be THIS import dying.
+check("src/session-scope.ts is dependency-free, so routes.ts may value-import it (R47)", () => {
+  assert.equal(
+    importsOf(here("session-scope.ts")).length,
+    0,
+    "src/session-scope.ts imports something, so it cannot be a value import in routes.ts"
   );
 });
 
@@ -348,6 +417,96 @@ check("src/agent.ts gains exactly the messages RPC the brief states", () => {
     /messages\(\s*limit\?:\s*number\s*\)\s*:\s*Promise<MessageRow\[\]>/.test(TYPES_SOURCE),
     "AgentStub must declare messages(limit?): Promise<MessageRow[]> (R59)"
   );
+});
+
+// Task 8's four facts about src/agent.ts that a compiler cannot see. src/agent.ts
+// cannot be imported by Node, so tsc plus these text checks is the only check it gets
+// (the messages RPC above is Task 7's precedent). Each one pins an ORDER or a
+// LOCATION, which no type can express: a guard moved inside the `try`, an alarm armed
+// per session, or a memory write that stopped being global all typecheck fine.
+check("src/agent.ts's chat guard is the first statement, ahead of the try, and returns a code", () => {
+  const chat = AGENT_SOURCE.match(/async\s+chat\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(chat, "src/agent.ts declares no async chat(...) to read");
+  const beforeTry = chat.slice(0, chat.indexOf("try {"));
+  assert.notEqual(chat.indexOf("try {"), -1, "chat no longer wraps its body in the try this guard must stay ahead of");
+  assert.ok(
+    /sessionScopeOk\(\s*this\.ctx,\s*\(name\)\s*=>\s*this\.env\.FEDERATION_AGENT\.idFromName\(name\),\s*sessionId\s*\)/.test(
+      beforeTry
+    ),
+    "chat must check sessionScopeOk(this.ctx, idFromName, sessionId) ahead of the try"
+  );
+  assert.ok(
+    /return\s+\{\s*reply:\s*"",\s*code:\s*"invalid_session"\s*\}/.test(beforeTry),
+    "the refusal must RETURN the code; a throw inside the try comes back as an HTTP 200"
+  );
+  assert.equal(/throw/.test(stripComments(beforeTry)), false, "chat's guard throws, so the 403 would be a 200");
+  // An absent id stays unscoped (the brief's Interfaces block), which is what keeps
+  // src/index.ts:84 and onScheduledTask compiling until Task 22.
+  assert.ok(/sessionId\s*!==\s*undefined\s*&&/.test(beforeTry), "an absent sessionId must not be refused");
+});
+
+check("src/agent.ts threads a real session id to the sandbox instead of the literal agent", () => {
+  assert.equal(
+    /sessionId:\s*"agent"/.test(AGENT_SOURCE),
+    false,
+    'a hardcoded sessionId: "agent" still names one shared sandbox session (Step 3d)'
+  );
+  assert.ok(
+    /private\s+async\s+execSandbox\(\s*cmd:\s*string,\s*sessionId:\s*string\s*\)/.test(
+      AGENT_SOURCE.replace(/\s+/g, " ")
+    ),
+    "execSandbox must take the sessionId rather than invent one"
+  );
+  // The three callers named in Step 3d: the two in the chat path take the threaded id,
+  // and the scheduled path passes main explicitly because after Step 3c it only runs
+  // there.
+  assert.ok(/this\.execSandbox\(\s*cmd,\s*sandboxSession\s*\)/.test(AGENT_SOURCE), "the exec tool must pass the threaded id");
+  assert.ok(/this\.execSandbox\(\s*row\.cmd,\s*MAIN_DO_NAME\s*\)/.test(AGENT_SOURCE), "approveAction runs on main, so it names main");
+  assert.ok(/this\.handleChat\(\s*instructions,\s*"cheap",\s*MAIN_DO_NAME\s*\)/.test(AGENT_SOURCE), "onScheduledTask must pass main explicitly");
+});
+
+check("src/agent.ts arms the tick on main only (R46, Step 3c)", () => {
+  const onStart = AGENT_SOURCE.match(/async\s+onStart\(\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(onStart, "src/agent.ts declares no async onStart() to read");
+  assert.ok(/this\.db\(\);/.test(onStart), "every DO still needs its own schema, transcript included (R41)");
+  assert.ok(
+    /if\s*\(!this\.isMainInstance\(\)\)\s*return;[\s\S]*await\s+this\.armTick\(\);/.test(onStart),
+    "onStart must return before armTick on a session DO: one alarm per DO is the platform budget"
+  );
+  assert.ok(
+    onStart.indexOf("this.isMainInstance()") < onStart.indexOf("this.armTick()"),
+    "armTick() is reachable on a session DO: the guard sits after the call"
+  );
+});
+
+// R45: "simplify" here means every memory the user already accumulated goes silently
+// invisible, because only main holds the store. The branch is the bug this pins out.
+check("src/agent.ts keeps memory global from any DO (R45, Step 3b)", () => {
+  const handleChat = AGENT_SOURCE.match(/private\s+async\s+handleChat\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(handleChat, "src/agent.ts declares no private handleChat(...) to read");
+  assert.ok(
+    /this\.rememberGlobal\(/.test(handleChat),
+    "the chat path must write memory through rememberGlobal"
+  );
+  assert.ok(/this\.recallGlobal\(/.test(handleChat), "the chat path must read memory through recallGlobal");
+  assert.equal(
+    /\b(?:remember|recall)\(this\.db\(/.test(handleChat),
+    false,
+    "the chat path writes or reads main's store through the LOCAL handle, which silently shards memory per session"
+  );
+  const global = AGENT_SOURCE.match(/private\s+async\s+rememberGlobal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(/if\s*\(this\.isMainInstance\(\)\)/.test(global), "rememberGlobal must branch on which DO runs");
+  assert.ok(/memoryRemember\(/.test(global), "a session DO must reach main by RPC, never by its own SQLite");
+  const recallPair = AGENT_SOURCE.match(/private\s+async\s+recallGlobal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(/memoryRecall\(/.test(recallPair), "recallGlobal must RPC main for the global store");
+  // The two public RPCs the hop lands on, and that they run the LOCAL store: a
+  // session DO asking main must not find itself asking its own empty database.
+  for (const name of ["memoryRemember", "memoryRecall"]) {
+    const rpc = AGENT_SOURCE.match(new RegExp(`\\n {2}async\\s+${name}\\([\\s\\S]*?\\n {2}\\}`))?.[0] ?? "";
+    assert.ok(rpc, `src/agent.ts declares no public ${name} RPC`);
+    assert.ok(/this\.db\(\)/.test(rpc), `${name} must run against this DO's own store, as the pre-shard sites did`);
+    assert.equal(/private/.test(rpc), false, `${name} is what a session DO calls over a stub, so it cannot be private`);
+  }
 });
 
 // ------------------------------------------------------- agentStubFor (R38) ----
@@ -572,9 +731,13 @@ await checkAsync("GET /api/sessions/abc/messages passes DEFAULT_LIMIT when ?limi
 
 await checkAsync("GET /api/sessions/abc/messages reads the session DO, never main", async () => {
   const world = setup();
-  await handleFetch(req("/api/sessions/abc/messages"), world.env, world.ctx);
+  const res = await handleFetch(req("/api/sessions/abc/messages"), world.env, world.ctx);
+  assert.equal(res.status, 200);
   assert.deepEqual(world.fed.names, ["abc"]);
   assert.equal(world.fed.addressed.includes("main"), false, "R41: no silent fallback to main");
+  // Gate 3 covers `messages` as well as `chat` (Step 3a): the transcript read is the
+  // other half of the orphan-DO exposure amendment 4 describes.
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the read is preceded by one existence read");
 });
 
 // ------------------------------------------------ POST /api/sessions/:id/message ----
@@ -594,7 +757,10 @@ await checkAsync("POST /api/sessions/abc/message forwards to the abc DO and not 
   assert.equal(world.fed.chats.length, 1);
 });
 
-await checkAsync("the send calls chat(content, tier) with exactly two arguments (R65)", async () => {
+// The id travels twice (Task 8): once as the DO this addresses, and once as `chat`'s
+// third argument, which is the only way the DO can check the claim. Drop the third
+// argument and src/agent.ts's guard becomes dead code and the 403 unreachable.
+await checkAsync("the send calls chat(content, tier, sessionId) with three arguments (R65, Task 8)", async () => {
   const world = setup();
   await handleFetch(
     req("/api/sessions/abc/message", "POST", {
@@ -604,34 +770,47 @@ await checkAsync("the send calls chat(content, tier) with exactly two arguments 
     world.ctx
   );
   const call = world.fed.chats[0];
-  assert.equal(call.arity, 2, "chat takes no session id in Task 7: the id travels in the DO");
-  assert.deepEqual(call.args, ["say pong", "cheap"]);
+  assert.equal(call.arity, 3, "chat grows exactly the session id, in last position");
+  assert.deepEqual(call.args, ["say pong", "cheap", "abc"]);
+  assert.equal(call.args[2], "abc", "the id handed to chat is the id the route addressed");
 });
 
-await checkAsync("an absent or unknown tier is passed through as undefined, still two arguments", async () => {
+await checkAsync("an absent or unknown tier is passed through as undefined, still three arguments", async () => {
   const world = setup();
   await handleFetch(
     req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
     world.env,
     world.ctx
   );
-  assert.equal(world.fed.chats[0].arity, 2);
-  assert.deepEqual(world.fed.chats[0].args, ["hello", undefined]);
+  assert.equal(world.fed.chats[0].arity, 3);
+  assert.deepEqual(world.fed.chats[0].args, ["hello", undefined, "abc"]);
   assert.equal(world.fed.chats[0].args[1], undefined, "no tier means undefined, the same rule as src/index.ts:82");
 });
 
+// R74: this sequence is the gate order made visible, exists then touch, and R73's
+// amendment 5 is the reason the touch still lands in the recorder: the fake pushes
+// before its first `await`, so the call happens even though the route now hands the
+// promise to `ctx.waitUntil` instead of awaiting it.
 await checkAsync("a successful send touches the registry once with (id, undefined)", async () => {
   const world = setup();
-  await handleFetch(
+  const res = await handleFetch(
     req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
     world.env,
     world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(
+    world.registry.calls,
+    [["exists", "abc"], ["touch", "abc", undefined]],
+    "gate 3 reads the index, then the accepted reply touches it, and nothing else"
   );
   assert.deepEqual(
     world.registry.touchCalls,
     [["abc", undefined]],
     "touch(id) with NO opts: bumps updated_at only, and unread is a later phase"
   );
+  await Promise.all(world.promised);
+  assert.equal(world.promised.length, 1, "the touch went through ctx.waitUntil, exactly once (amendment 5)");
 });
 
 await checkAsync("any reply bumps updated_at, including one carrying a code", async () => {
@@ -663,6 +842,10 @@ await checkAsync("touch never runs when the send 401s", async () => {
   assert.equal(world.fed.chats.length, 0, "an unauthenticated send must not reach the agent");
 });
 
+// Gate 3 runs BEFORE the body is parsed (R76), so the existence read happens even on
+// a request that 400s afterwards. This is the assertion that distinguishes the two
+// orders: with the body parsed first, a bad body on an uncreated id would answer 400
+// and leak nothing, and the leak would only show on a well-formed body.
 await checkAsync("touch never runs when the body is malformed", async () => {
   for (const body of ["{oops", "{}", '{"content":""}', '{"content":5}', "null"]) {
     const world = setup();
@@ -672,7 +855,9 @@ await checkAsync("touch never runs when the body is malformed", async () => {
       world.ctx
     );
     assert.equal(res.status, 400, `body ${body} must be a 400`);
+    assert.deepEqual(world.registry.calls, [["exists", "abc"]], `body ${body} must not touch`);
     assert.deepEqual(world.registry.touchCalls, [], `body ${body} must not bump updated_at`);
+    assert.deepEqual(world.promised, [], `body ${body} must schedule nothing`);
     assert.equal(world.fed.chats.length, 0, `body ${body} must not reach the agent`);
   }
 });
@@ -686,6 +871,171 @@ await checkAsync("POST /api/sessions/main/message reaches the legacy DO as sessi
   );
   assert.deepEqual(world.fed.names, ["main"], "no prefix and no special case (R38)");
   assert.deepEqual(world.registry.touchCalls, [["main", undefined]]);
+  assert.equal(
+    world.fed.chats[0].args[2],
+    "main",
+    "main is the session id the legacy DO owns, so the DO's own guard accepts it"
+  );
+});
+
+// --------------------------------------------- Task 8: gates, refusal, shapes ----
+
+// Step 3a: the DO's refusal is a `code` on the reply, and R76 turns it into a 403.
+// Amendment 2 is the half a status code cannot show: a refused request is not
+// activity, so the registry must not hear about it at all, not even via waitUntil.
+await checkAsync("a reply carrying code invalid_session is 403 and skips the touch (R71 amendment 2)", async () => {
+  const world = setup();
+  world.fed.reply = { reply: "", code: "invalid_session" };
+  const res = await handleFetch(
+    req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 403);
+  assert.deepEqual(await res.json(), { ok: false, error: "invalid session" });
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the refusal must not touch the registry");
+  assert.deepEqual(world.registry.touchCalls, []);
+  assert.deepEqual(world.promised, [], "the 403 branch schedules nothing");
+});
+
+// The 403 is a DIFFERENT code from the codes that already mean something, so a reply
+// carrying any other code is still an answer the person gets (Task 7's pin above).
+await checkAsync("only code invalid_session refuses; another code is still a 200 answer", async () => {
+  for (const code of ["pending", "still_a_reply", ""]) {
+    const world = setup();
+    world.fed.reply = { reply: "an answer", code };
+    const res = await handleFetch(
+      req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 200, `code ${JSON.stringify(code)} is not a refusal`);
+    assert.deepEqual(world.registry.touchCalls, [["abc", undefined]]);
+  }
+});
+
+// Amendment 4 (R73): `idFromName` cannot report absence, so gate 3 is the only thing
+// standing between any 26-hex name and a DO instance nobody can list again.
+await checkAsync("a well-formed id with no registry row is 404 and never addresses a DO (amendment 4)", async () => {
+  const GHOST = "0123456789abcdef0123456789abcdef";
+  for (const [path, method] of [
+    [`/api/sessions/${GHOST}/message`, "POST"],
+    [`/api/sessions/${GHOST}/messages`, "GET"],
+  ]) {
+    const world = setup();
+    const res = await handleFetch(
+      req(path, method, method === "GET" ? {} : { body: JSON.stringify({ content: "hello" }) }),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 404, `${method} ${path}: an absent row is 404`);
+    assert.deepEqual(await res.json(), { ok: false, error: "not found" });
+    assert.deepEqual(world.registry.calls, [["exists", GHOST]], "the existence read is the only registry call");
+    assert.deepEqual(world.fed.names, [], "gate 3 runs before idFromName, so no DO is instantiated");
+    assert.equal(world.fed.chats.length, 0, `${method} ${path}: an uncreated session must not run the agent`);
+    assert.equal(world.fed.messageCalls.length, 0, `${method} ${path}: an uncreated session must not read a transcript`);
+    assert.deepEqual(world.registry.touchCalls, []);
+    assert.deepEqual(world.promised, []);
+  }
+});
+
+// Step 3a's real job: the string stops here, before `idFromName` ever sees it. These
+// are the shapes that SURVIVE URL path normalization and only turn hostile when
+// `idFromSegment` decodes them, which is why the check has to run on the decoded
+// value. A whole `%2e%2e` segment is NOT one of them; see the case below.
+await checkAsync("a decoded-hostile :id is 400 before any idFromName call (R76 gate 2)", async () => {
+  const HOSTILE = [
+    ["abc%2fdef", "abc/def", "an encoded slash would name a path"],
+    ["a%20b", "a b", "an encoded space is not an id"],
+    ["abc%2e%2edef", "abc..def", "dots survive only inside a longer segment"],
+    ["..%2f..%2fetc", "../../etc", "an encoded traversal survives the URL layer"],
+    ["%252e%252e", "%2e%2e", "a double-encoded dot decodes to a literal %2e%2e"],
+    ["s%3Amain", "s:main", "the deleted prefixed form cannot sneak through (R38)"],
+    ["x".repeat(41), "a 41-char id", "the 40-char ceiling is the guard's, not a DO limit"],
+  ];
+  for (const [segment, decoded, why] of HOSTILE) {
+    for (const [suffix, method] of [["/message", "POST"], ["/messages", "GET"], ["", "PATCH"]]) {
+      const world = setup();
+      const res = await handleFetch(
+        req(`/api/sessions/${segment}${suffix}`, method, method === "GET" || method === "DELETE" ? {} : { body: "{}" }),
+        world.env,
+        world.ctx
+      );
+      assert.equal(res.status, 400, `${method} ${segment}: ${why}`);
+      assert.deepEqual(await res.json(), { ok: false, error: "invalid session id" });
+      assert.deepEqual(world.fed.names, [], `${segment} (${decoded}) must never reach idFromName`);
+      assert.deepEqual(world.registry.calls, [], `${segment} must not reach the registry either`);
+    }
+  }
+});
+
+// Amendment 1 (R71), as it actually measures. A `%2e%2e` SEGMENT is normalized by the
+// URL parser exactly like a literal `..` (both are "double-dot path segments", and
+// the encoding is decoded for that comparison), so `/api/sessions/%2e%2e/message`
+// reaches this module as `/api/message`: outside the prefix, answered 404 by the
+// fall-through, never 400 by the guard. The encoded form therefore proves nothing
+// about the guard, and both spellings are the same fact.
+await checkAsync("a path that normalises out of the prefix is a 404, not a 400 (amendment 1)", async () => {
+  for (const path of [
+    "/api/sessions/../etc/message",
+    "/api/sessions/%2e%2e/message",
+    "/api/sessions/%2E%2E/message",
+    "/api/sessions/%2e%2e/messages",
+    "/api/sessions/%2e%2e",
+  ]) {
+    const before = new URL(path, "https://blip.test").pathname;
+    assert.equal(
+      before.startsWith("/api/sessions"),
+      false,
+      `${path} normalises to ${before}, which is the whole point of this case`
+    );
+    const world = setup();
+    const res = await handleFetch(req(path, "POST", { body: JSON.stringify({ content: "hi" }) }), world.env, world.ctx);
+    assert.equal(res.status, 404, `${path} -> ${before} is the fall-through, not the guard`);
+    assert.deepEqual(world.fed.names, [], `${path} must not address a DO`);
+    assert.deepEqual(world.registry.calls, []);
+  }
+});
+
+// The order is the contract (R76), so the three refusals are run against the SAME
+// request body, each one allowed to answer only if the gate above it accepted.
+await checkAsync("the gates run in order: auth, then shape, then existence, then the DO (R76)", async () => {
+  const BAD_BODY = "{ not json";
+  // 1. No key: nothing else runs, not even the shape check that would 400.
+  const unauth = setup({ key: "" });
+  assert.equal(
+    (await handleFetch(req("/api/sessions/%2e%2e/message", "POST", { body: BAD_BODY }), unauth.env, unauth.ctx)).status,
+    404,
+    "the encoded traversal leaves the prefix before even the auth gate"
+  );
+  const badShape = setup();
+  assert.equal(
+    (await handleFetch(
+      req("/api/sessions/a%20b/message", "POST", { body: BAD_BODY }),
+      badShape.env,
+      badShape.ctx
+    )).status,
+    400,
+    "gate 2 answers before the body is parsed"
+  );
+  assert.deepEqual(badShape.fed.names, [], "a bad shape never resolves a DO id");
+  // 3. A good shape, a bad body and NO row: the row check wins, so the answer is 404.
+  const absent = setup({ rows: [] });
+  const absentRes = await handleFetch(
+    req("/api/sessions/abc/message", "POST", { body: BAD_BODY }),
+    absent.env,
+    absent.ctx
+  );
+  assert.equal(absentRes.status, 404, "gate 3 runs before the body parse, so an absent row answers 404");
+  assert.deepEqual(absent.fed.names, [], "an absent row never addresses a DO");
+  // 4. Good shape, real row, bad body: only now does the 400 get its turn.
+  const present = setup();
+  assert.equal(
+    (await handleFetch(req("/api/sessions/abc/message", "POST", { body: BAD_BODY }), present.env, present.ctx)).status,
+    400,
+    "gate 4 is where the body is finally read"
+  );
+  assert.deepEqual(present.registry.calls, [["exists", "abc"]]);
 });
 
 // ------------------------------------------------------------ auth and shapes ----

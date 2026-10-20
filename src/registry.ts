@@ -142,6 +142,25 @@ export class RegistryAgent extends Agent<Env> {
     return listSessions(this.db(), Math.min(Math.max(1, Math.floor(limit)), MAX_LIMIT));
   }
 
+  /**
+   * One-row read for the worker's session routes (R74): is this id in the index?
+   *
+   * The routes must be able to refuse a well-formed id that no one created BEFORE
+   * they address a session DO with it, because a DO name is an opaque string the
+   * platform hashes to an id (R38): nothing about `idFromName` says "no such
+   * session", so an uncreated id silently instantiates a DO, and its transcript
+   * then lives in an instance that `GET /api/sessions` never lists (R73 amendment
+   * 4). A DO name is not a path, so this is about orphan state and free DO
+   * instantiation, never about traversal.
+   *
+   * `getSession` is the store's own one-row read, so no SQL is restated here, and
+   * this is a real boolean rather than the affected-row count R58 forbids: it
+   * reports a row, not a write.
+   */
+  async exists(id: string): Promise<boolean> {
+    return getSession(this.db(), id) !== null;
+  }
+
   /** Whole-row write: the caller owns every column it sends, created_at included. */
   async put(row: SessionRow): Promise<void> {
     upsertSession(this.db(), row);

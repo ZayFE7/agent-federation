@@ -36,6 +36,7 @@ import {
   type TaskRow,
 } from "./memory";
 import { toSqlHandle, type SqlTag } from "./sql-handle";
+import { sessionScopeOk } from "./session-scope";
 import {
   ensureVaultSchema,
   vaultDelete as vaultDeleteChunks,
@@ -45,6 +46,13 @@ import {
 } from "./vault";
 import { isRisky } from "./guardrails";
 import { fetchRouter } from "./router";
+
+/**
+ * The DO name of the instance that owns the global memory store and the scheduler
+ * tick (R45, R46). It is also legacy session `main`: a session id IS the DO name
+ * (R38), and src/index.ts has always addressed the agent as `idFromName("main")`.
+ */
+const MAIN_DO_NAME = "main";
 
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
@@ -197,15 +205,116 @@ export class FederationAgent extends Agent<Env> {
     return handle;
   }
 
+  /**
+   * True when this instance IS the `main` DO, which is the only holder of the
+   * global memory store (R45) and of the scheduler tick (R46). The predicate is the
+   * same one the session guard uses, with `"main"` as the claimed session, so there
+   * is no second copy of "does this DO own that id".
+   *
+   * `this.ctx` and `this.env` are the protected members the Agents SDK's
+   * `DurableObject` base gives every subclass; neither is a field invented here.
+   */
+  private isMainInstance(): boolean {
+    return sessionScopeOk(
+      this.ctx,
+      (name) => this.env.FEDERATION_AGENT.idFromName(name),
+      MAIN_DO_NAME
+    );
+  }
+
+  /**
+   * A stub for the `main` DO, typed as this class, because a DO cannot read another
+   * DO's SQLite: the only way a session instance can reach the global memory store
+   * is an RPC to the instance that holds it (R45).
+   */
+  private mainStub(): FederationAgent {
+    const stub = this.env.FEDERATION_AGENT.get(
+      this.env.FEDERATION_AGENT.idFromName(MAIN_DO_NAME)
+    );
+    // Cast avoids depending on version-specific DurableObjectNamespace generics; the
+    // stub's methods are this class's RPC surface.
+    return stub as unknown as FederationAgent;
+  }
+
+  /**
+   * R45, MEMORY STAYS GLOBAL. On main this is `remember` against the local `sql`,
+   * exactly as the pre-shard call sites did. On any session DO the write is an RPC to
+   * main, because transcripts shard per session and memory does not: every memory the
+   * user has already accumulated lives in main's SQLite, so a "simplification" that
+   * makes it per-DO would silently hide all of it and make the persona prose at
+   * `DEFAULT_PERSONA`, the first `CAPABILITIES` bullet and the capability answer below
+   * ("remember you across sessions") false in the same deploy.
+   *
+   * Best-effort like every other memory write here: a failed hop is recorded locally
+   * and never costs the turn the answer it belongs to.
+   */
+  private async rememberGlobal(
+    kind: string,
+    text: string,
+    importance: number
+  ): Promise<void> {
+    if (this.isMainInstance()) {
+      remember(this.db(), kind, text, importance);
+      return;
+    }
+    try {
+      await this.mainStub().memoryRemember(kind, text, importance);
+    } catch (err) {
+      remember(this.db(), "error", `global remember failed: ${String(err)}`, 2);
+    }
+  }
+
+  /** R45 again, on the read side: recall always asks main, from whatever DO runs. */
+  private async recallGlobal(query: string, limit: number): Promise<MemoryRow[]> {
+    if (this.isMainInstance()) return recall(this.db(), query, limit);
+    return this.mainStub().memoryRecall(query, limit);
+  }
+
+  /**
+   * R45: the two RPCs that make main's store reachable from a session DO. They run
+   * `remember` / `recall` against this DO's own `db()`, exactly as the local call
+   * sites do, and main is the only instance a session ever asks.
+   */
+  async memoryRemember(kind: string, text: string, importance: number): Promise<void> {
+    remember(this.db(), kind, text, importance);
+  }
+
+  /** R45: one row-limit of global recall, as `recall` answers it locally. */
+  async memoryRecall(query: string, limit: number): Promise<MemoryRow[]> {
+    return recall(this.db(), query, limit);
+  }
+
   async onStart(): Promise<void> {
+    // Every DO keeps its own schema: a session DO needs its own `messages` table for
+    // its own transcript (R41), which is the one thing that DOES shard.
     this.db();
+    // R46: only main arms the tick. One alarm per DO is the platform's budget,
+    // `armTick` re-arms unconditionally, and `/api/tasks` only ever reads main, so a
+    // per-session alarm is pure burn. Task 33 owns the real scheduling fix.
+    if (!this.isMainInstance()) return;
     await this.armTick();
   }
 
-  /** RPC/HTTP entry used by the worker. */
-  async chat(content: string, tier?: ChatTier): Promise<AgentReply> {
+  /**
+   * RPC/HTTP entry used by the worker.
+   *
+   * `sessionId` is LAST and optional (Task 8): an absent id means unscoped, which is
+   * the pre-Phase-1 behaviour and stays main-only until Task 22 removes those callers.
+   */
+  async chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply> {
+    // The scope guard is the FIRST statement, ahead of the try below, and it RETURNS
+    // rather than throwing: a throw inside that try would come back as an HTTP 200
+    // carrying "agent error", and a thrown value crossing the RPC boundary arrives in
+    // another realm where the worker's `instanceof` can never match. Only the string
+    // `code` survives, which src/routes.ts turns into a 403.
+    if (
+      sessionId !== undefined &&
+      !sessionScopeOk(this.ctx, (name) => this.env.FEDERATION_AGENT.idFromName(name), sessionId)
+    ) {
+      return { reply: "", code: "invalid_session" };
+    }
     try {
-      return await this.handleChat(content, tier);
+      return await this.handleChat(content, tier, sessionId);
     } catch (err) {
       return { reply: "agent error: " + String(err) };
     }
@@ -271,6 +380,10 @@ export class FederationAgent extends Agent<Env> {
   /**
    * Human-in-the-loop gate. Approve: run the held command in the sandbox and mark
    * it ran. Deny: mark it denied and run nothing. Returns a UI-ready result.
+   *
+   * The `remember` calls here stay LOCAL (R45): src/index.ts addresses main for every
+   * approval, and on main the local handle IS the global store. Task 22 owns the
+   * session-scoped approve path.
    */
   async approveAction(
     id: number,
@@ -294,7 +407,10 @@ export class FederationAgent extends Agent<Env> {
       remember(sql, "tool", `User DENIED action #${id}: ${row.cmd}`, 3);
       return { ok: true, reply: "Denied. That command will not run.", state: "idle" };
     }
-    const r = await this.execSandbox(row.cmd);
+    // No session id reaches an approval (src/index.ts has always addressed main here),
+    // so the held command runs under main's sandbox lease. Task 22 owns the scoped
+    // approve path.
+    const r = await this.execSandbox(row.cmd, MAIN_DO_NAME);
     setPendingStatus(sql, id, r.ok ? "approved" : "failed");
     logMessage(sql, "assistant", `[approved] ${row.cmd}\n${r.out}`, "primary");
     remember(sql, "tool", `User APPROVED action #${id}: ${row.cmd} -> ${r.ok ? "ok" : "fail"}`, 3);
@@ -333,11 +449,18 @@ export class FederationAgent extends Agent<Env> {
       );
       return;
     }
+    // Unscoped on purpose: the WebSocket still pins main, and ChatRequest carries no
+    // session id. Task 22 owns the real fix, not this task.
     const reply = await this.handleChat(payload.content, payload.tier);
     connection.send(JSON.stringify({ type: "chat", ...reply }));
   }
 
-  /** Alarm tick: run due tasks, re-arm recurring ones, then re-schedule. */
+  /**
+   * Alarm tick: run due tasks, re-arm recurring ones, then re-schedule.
+   *
+   * R46 means this only ever runs on main, so every `remember` here stays LOCAL: on
+   * main the local handle IS the global store (R45).
+   */
   async onScheduledTask(_payload?: unknown): Promise<void> {
     const sql = this.db();
     const now = Date.now();
@@ -349,7 +472,9 @@ export class FederationAgent extends Agent<Env> {
       );
       try {
         const instructions = (task.payload && task.payload.trim()) || task.title;
-        const result = await this.handleChat(instructions, "cheap");
+        // A scheduled job belongs to main's own conversation, so it says so rather
+        // than inheriting an unscoped undefined (Task 8, R46).
+        const result = await this.handleChat(instructions, "cheap", MAIN_DO_NAME);
         remember(sql, "task-done", `Task #${task.id} (${task.title}) result: ${result.reply.slice(0, 800)}`, 3);
         logMessage(sql, "assistant", `[scheduled] ${result.reply}`, "cheap");
       } catch (err) {
@@ -466,8 +591,17 @@ export class FederationAgent extends Agent<Env> {
    * One place that runs a shell command in the E2B sandbox. Shared by the
    * deterministic "run:" path, the exec tool, and approveAction, so the sandbox
    * network contract lives once. Never throws: failures come back as text.
+   *
+   * `sessionId` is the caller's real session id, threaded from `chat` (Task 8): the
+   * sandbox used to file every thread's rows under one hardcoded "agent" id, so
+   * per-session work was indistinguishable in its lease table (R40). approveAction is
+   * only ever addressed to main (src/index.ts), so it passes MAIN_DO_NAME; Task 28
+   * owns the lease scoping and eviction this id keys.
    */
-  private async execSandbox(cmd: string): Promise<{ out: string; ok: boolean }> {
+  private async execSandbox(
+    cmd: string,
+    sessionId: string
+  ): Promise<{ out: string; ok: boolean }> {
     if (!this.env.SANDBOX) {
       return { out: "sandbox not configured", ok: false };
     }
@@ -478,7 +612,7 @@ export class FederationAgent extends Agent<Env> {
           authorization: `Bearer ${this.env.SBOX_TOKEN}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ cmd, sessionId: "agent" }),
+        body: JSON.stringify({ cmd, sessionId }),
       });
       const sd = (await sres.json()) as {
         stdout?: string;
@@ -504,20 +638,45 @@ export class FederationAgent extends Agent<Env> {
     }
   }
 
-  private async handleChat(content: string, tier?: ChatTier): Promise<AgentReply> {
+  /**
+   * The chat path, from whichever DO the caller addressed.
+   *
+   * `sessionId` (Task 8) is the session whose transcript this turn belongs to. It is
+   * optional because the unscoped entries (`/api/message`, the WebSocket, and the
+   * scheduler) still have none until Task 22, and an unscoped turn runs on main.
+   */
+  private async handleChat(
+    content: string,
+    tier?: ChatTier,
+    sessionId?: string
+  ): Promise<AgentReply> {
+    // `sql` is the LOCAL handle and stays that way for everything that shards per
+    // session: this DO's own transcript (logMessage, recentMessages), its plan and its
+    // pending actions. Memory is the one thing that does not shard, so every remember
+    // and recall in this method goes through the *Global helpers instead (R45).
     const sql = this.db();
     const chatTier: ChatTier = tier === "cheap" ? "cheap" : "primary";
     const { model } = this.tierModel(chatTier);
+    // The sandbox lease is keyed by the real session (R40), never again by the
+    // hardcoded "agent" that filed every thread's rows as one thread. An unscoped
+    // caller is on main by definition, so main's id is the honest fallback.
+    const sandboxSession = sessionId ?? MAIN_DO_NAME;
 
+    // R45, MEMORY STAYS GLOBAL: these two reads ask main's store even when a session
+    // DO runs them, because transcripts shard per session and memory does not. A
+    // per-DO read would start every new session with zero memory and make the persona
+    // promise at DEFAULT_PERSONA, the first CAPABILITIES bullet, and the capability
+    // answer below ("remember you across sessions") false. A failed hop degrades to no
+    // memories rather than to a lost turn, which is why the try still wraps it.
     let memories: MemoryRow[] = [];
     try {
-      memories = recall(sql, content.slice(0, 120), 8);
+      memories = await this.recallGlobal(content.slice(0, 120), 8);
     } catch {
       memories = [];
     }
     if (memories.length === 0) {
       try {
-        memories = recall(sql, "", 8);
+        memories = await this.recallGlobal("", 8);
       } catch {
         memories = [];
       }
@@ -543,8 +702,8 @@ export class FederationAgent extends Agent<Env> {
     const directRun = DIRECT_RUN_RE.exec(content);
     if (directRun) {
       const cmd = (directRun[2] || "").trim();
-      const r = await this.execSandbox(cmd);
-      remember(sql, "tool", `direct exec: ${cmd} -> ${r.ok ? "ok" : "fail"}`, 2);
+      const r = await this.execSandbox(cmd, sandboxSession);
+      await this.rememberGlobal("tool", `direct exec: ${cmd} -> ${r.ok ? "ok" : "fail"}`, 2);
       logMessage(sql, "assistant", r.out, chatTier);
       return { reply: r.out, state: r.ok ? "idle" : "error", verb: "Ran" };
     }
@@ -559,7 +718,7 @@ export class FederationAgent extends Agent<Env> {
       const runs: ToolRun[] = [
         { name: "web_search", cmd: query, output: r.out.slice(0, 4000), ok: r.ok },
       ];
-      if (r.ok) remember(sql, "tool", `direct web_search: "${query}" -> ok`, 2);
+      if (r.ok) await this.rememberGlobal("tool", `direct web_search: "${query}" -> ok`, 2);
       return {
         reply: r.out,
         state: r.ok ? "search" : "error",
@@ -588,7 +747,13 @@ export class FederationAgent extends Agent<Env> {
         "Safety: high-risk commands (destructive, irreversible, outward-facing, or spending money) are held for your explicit approval before they run.\n" +
         "Not connected yet: email, calendar, messaging apps, a full browser (I can search the web but not drive one), payments.";
       logMessage(sql, "assistant", reply, chatTier);
-      remember(sql, "exchange", `User: ${content}\nAgent: ${reply}`, 1);
+      // R45, at the site that matters most: this exchange belongs in main's store even
+      // when a session DO answered, because per-DO memory would make every memory the
+      // user already has invisible to a new session and would falsify the persona prose
+      // at DEFAULT_PERSONA, the first CAPABILITIES bullet and the answer this branch
+      // just gave ("chat and remember you across sessions"). The transcript above it
+      // does shard, so logMessage stays local.
+      await this.rememberGlobal("exchange", `User: ${content}\nAgent: ${reply}`, 1);
       return { reply, state: "idle", verb: "Ready" };
     }
 
@@ -728,7 +893,7 @@ export class FederationAgent extends Agent<Env> {
       } catch (err) {
         const timedOut =
           err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
-        remember(sql, "error", `Router fetch failed: ${String(err)}`, 3);
+        await this.rememberGlobal("error", `Router fetch failed: ${String(err)}`, 3);
         return timedOut
           ? {
               reply:
@@ -739,7 +904,7 @@ export class FederationAgent extends Agent<Env> {
           : { reply: "Router unreachable. Try again shortly.", state: "error", verb: "No route" };
       }
       if (!response.ok) {
-        remember(sql, "error", `Router HTTP ${response.status}`, 3);
+        await this.rememberGlobal("error", `Router HTTP ${response.status}`, 3);
         return { reply: `Router returned ${response.status}.` };
       }
       const data = (await response.json()) as RouterChatResponse;
@@ -782,7 +947,7 @@ export class FederationAgent extends Agent<Env> {
               out = `Plan set (${steps.length} steps):\n${steps
                 .map((s, i) => `${i + 1}. ${s}`)
                 .join("\n")}\nWork them in order and call plan_done after each.`;
-              remember(sql, "task", `Plan set: ${steps.join(" | ")}`, 2);
+              await this.rememberGlobal("task", `Plan set: ${steps.join(" | ")}`, 2);
             }
           } else if (tc.function.name === "plan_done") {
             const ord = Number(args.ord) || 0;
@@ -815,7 +980,11 @@ export class FederationAgent extends Agent<Env> {
             out = recurrence
               ? `Scheduled "${title}" daily at ${args.daily_at} UTC. Next run ${when}. It will run autonomously with tool access.`
               : `Scheduled "${title}" at ${when}. It will run autonomously with tool access.`;
-            remember(sql, "task", `Scheduled: ${title} at ${when}${recurrence ? ` (${recurrence})` : ""}`, 2);
+            await this.rememberGlobal(
+              "task",
+              `Scheduled: ${title} at ${when}${recurrence ? ` (${recurrence})` : ""}`,
+              2
+            );
             runCmd = title;
             runOk = true;
           } else if (tc.function.name === "save_workspace") {
@@ -829,7 +998,7 @@ export class FederationAgent extends Agent<Env> {
                   authorization: `Bearer ${this.env.SBOX_TOKEN}`,
                   "content-type": "application/json",
                 },
-                body: JSON.stringify({ sessionId: "agent" }),
+                body: JSON.stringify({ sessionId: sandboxSession }),
               });
               const sd = (await sres.json()) as Record<string, unknown>;
               runOk = sres.ok;
@@ -843,7 +1012,7 @@ export class FederationAgent extends Agent<Env> {
             const r = await this.webSearch(query, args.max_results ?? 5);
             out = r.out;
             runOk = r.ok;
-            if (r.ok) remember(sql, "tool", `web_search: "${query}" -> ok`, 2);
+            if (r.ok) await this.rememberGlobal("tool", `web_search: "${query}" -> ok`, 2);
           } else if (tc.function.name === "exec") {
             const cmd = args.cmd || "true";
             runCmd = cmd;
@@ -854,12 +1023,14 @@ export class FederationAgent extends Agent<Env> {
               pending = { id, cmd };
               runOk = false;
               out = `HELD for approval (#${id}): this command is high-risk (destructive, irreversible, outward-facing, or spends money), so it was NOT run. Tell the user it needs their approval in the panel; do not try to work around it.`;
-              remember(sql, "tool", `exec HELD for approval (#${id}): ${cmd}`, 3);
+              await this.rememberGlobal("tool", `exec HELD for approval (#${id}): ${cmd}`, 3);
             } else {
-              const r = await this.execSandbox(cmd);
+              // The exec tool runs in the calling session's sandbox lease, not in the
+              // single "agent" lease every thread used to share (R40).
+              const r = await this.execSandbox(cmd, sandboxSession);
               out = r.out;
               runOk = r.ok;
-              remember(sql, "tool", `exec: ${cmd} -> ${r.ok ? "ok" : "fail"}`, 2);
+              await this.rememberGlobal("tool", `exec: ${cmd} -> ${r.ok ? "ok" : "fail"}`, 2);
             }
           } else {
             // Unrecognized tool name: never fall through to exec (that used to run
@@ -913,7 +1084,9 @@ export class FederationAgent extends Agent<Env> {
     }
 
     logMessage(sql, "assistant", finalText, chatTier);
-    remember(sql, "exchange", `User: ${content}\nAgent: ${finalText}`, 2);
+    // The turn's exchange is the memory a later session is supposed to recall, so it
+    // goes to main (R45). The transcript line above it is this session's own.
+    await this.rememberGlobal("exchange", `User: ${content}\nAgent: ${finalText}`, 2);
 
     // Deterministic mascot state from what actually happened (no LLM decider).
     let state = "idle";
@@ -1014,7 +1187,7 @@ export class FederationAgent extends Agent<Env> {
     }
     const final = (parsed?.final || "").trim();
     if (parsed?.verdict === "revise" && final && final !== draft.trim()) {
-      remember(sql, "tool", "self-critique revised the answer before delivery", 1);
+      await this.rememberGlobal("tool", "self-critique revised the answer before delivery", 1);
       return final;
     }
     return null;

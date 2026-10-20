@@ -78,6 +78,9 @@ export default {
       }
       const tier: ChatTier | undefined =
         body.tier === "primary" || body.tier === "cheap" ? body.tier : undefined;
+      // Unscoped by design until Task 22: this route has always addressed main, so
+      // chat's third argument (Task 8's session id, R65) stays absent here and the DO's
+      // own scope check has nothing to refuse.
       const result = await agentStub(env).chat(body.content, tier);
       return Response.json(result);
     }

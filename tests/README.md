@@ -1,14 +1,15 @@
 # tests/
 
-Nineteen entries live here, this README included. Eleven are offline, framework-free, and run by
+Twenty entries live here, this README included. Twelve are offline, framework-free, and run by
 `npm test`:
 `guardrails.test.mjs` (a unit test for `../src/guardrails.ts`), `markdown.test.mjs` (a test of
 the `md()` renderer shipped in `ui/index.html`), `memory.test.mjs` (a test that compiles
 `src/memory.ts` and drives the real recall + task functions against a live `node:sqlite`
 database), `paths.test.mjs` (a test that the sandbox home is one constant and that no source
 file still promises `/workspace`), `registry.test.mjs` (a test that executes the registry
-Durable Object's two rulings that `tsc` cannot see, the R55 boot seed and the composite index
-that serves the sidebar's only query, against a real `node:sqlite` database),
+Durable Object's rulings that `tsc` cannot see, the R55 boot seed, the composite index that
+serves the sidebar's only query, and since Task 8 the R74 `exists` read the worker's session
+gates stand on, against a real `node:sqlite` database),
 `registry-input.test.mjs` (a test that executes `src/registry-input.ts`, the DO's query,
 segment and body parsing, which `npm test` could never reach through `src/registry.ts`
 itself), `registry-store.test.mjs` (a test of `src/registry-store.ts`, the pure session index

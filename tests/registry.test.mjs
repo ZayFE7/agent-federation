@@ -1,5 +1,6 @@
-// Contract tests for Task 6: the registry Durable Object's two rulings that a
-// compiler cannot see, plus the wrangler shape that only a text read can prove.
+// Contract tests for Task 6, plus Task 8's R74 `exists`: the registry Durable Object's
+// rulings that a compiler cannot see, the wrangler shape that only a text read can
+// prove, and the one read the worker's session gates now depend on.
 //
 // Plain Node, no framework, no build step: run with `node tests/registry.test.mjs`.
 //
@@ -33,6 +34,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   PLACEHOLDER_TITLE,
+  deleteSession,
   ensureRegistrySchema,
   getSession,
   listSessions,
@@ -205,6 +207,68 @@ check("the composite index matches the sidebar ORDER BY and removes the temp b-t
     );
   }
   db.close();
+});
+
+// ---- R74: the existence read Task 8's routes gate 3 stands on ----
+
+// Node cannot import src/registry.ts, so the halves of this rule are tested apart and
+// have to be read together: the PREDICATE is executed here against a real sqlite
+// database, and the DELEGATION that makes the DO's `exists` that predicate rather than
+// a second copy of it is pinned as text below.
+//
+// `exists` is also the one registry method that is NOT the R58 affected-row fiction:
+// `touchSession` cannot say whether a row was there, and this can, because it reports
+// a row and not a write.
+check("exists() reads one row, on a real database, and `main` is only ever there because the seed put it", () => {
+  const db = new DatabaseSync(":memory:");
+  const sql = realHandle(db);
+  ensureRegistrySchema(sql);
+  const present = (id) => getSession(sql, id) !== null;
+
+  // R38: `main` is a session id like any other, so nothing here may special-case it.
+  // The boot seed is the ONLY thing that ever puts a `main` row in the index, which
+  // makes an unseeded database the case R74 asks for: the id a placeholder seed alone
+  // could satisfy still reads false.
+  assert.equal(present("main"), false, "main reads present on a database the seed has not run on");
+  const seed = constString(registrySrc, "MAIN_SEED_STATEMENT", "src/registry.ts");
+  sql.exec(seed, "main", PLACEHOLDER_TITLE, 1000, 1000);
+  assert.equal(present("main"), true, "the seeded legacy id does not read present");
+
+  upsertSession(sql, {
+    id: "abc",
+    title: "a thread",
+    created_at: 1,
+    updated_at: 1,
+    workspace_ref: null,
+    unread: 0,
+    pinned: 0,
+  });
+  assert.equal(present("abc"), true, "a put row does not read present");
+  for (const absent of ["nope", "", "abc ", "ABC", "0123456789abcdef0123456789abcdef"]) {
+    assert.equal(present(absent), false, `${JSON.stringify(absent)} reads present with no row`);
+  }
+  deleteSession(sql, "abc");
+  assert.equal(present("abc"), false, "a removed row still reads present");
+  db.close();
+});
+
+check("src/registry.ts's exists delegates to the store's one-row read and restates no SQL (R74)", () => {
+  const exists = registrySrc.match(/\n {2}async\s+exists\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(exists, "src/registry.ts declares no async exists(id) RPC for the routes to call");
+  assert.ok(/getSession\(this\.db\(\),\s*id\)/.test(exists), "exists must use getSession, the store's own read");
+  assert.equal(
+    /SELECT|UPDATE|INSERT|\.prepare\(|this\.sql\(/i.test(exists),
+    false,
+    "exists carries SQL of its own, so the store and the DO can disagree about what a row is"
+  );
+  // A boolean, never a row: the worker only ever needs the yes/no, and returning a
+  // row would put session titles on a surface that does not need them.
+  assert.ok(/!?\s*==\s*null/.test(exists), "exists must collapse the row read to a boolean");
+  assert.equal(/SessionRow\s*\|/.test(exists), false, "exists returns a row rather than a boolean");
+  // src/types.ts is interfaces only, so tsc already enforces the RegistryStub widening,
+  // and this file's own rule (R64 I4) forbids restating a parameter list. The two pins
+  // above are what close the `as unknown as RegistryStub` hole: the DO declares
+  // `exists` and the routes call `exists`.
 });
 
 // ---- repo-clone/wrangler.jsonc only (R56, R57) ----

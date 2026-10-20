@@ -42,6 +42,18 @@ export interface AgentReply {
   pending?: { id: number; cmd: string };
   /** Current ordered plan checklist, when the agent decomposed the task. */
   plan?: Array<{ ord: number; title: string; status: string }>;
+  /**
+   * Set when this DO refused the work because the session id it was handed is not
+   * its own (Task 8). src/routes.ts maps it to HTTP 403 `{ok:false,error:"invalid
+   * session"}` and skips the registry `touch`: a refused request is not activity.
+   *
+   * A `code` field, not a thrown error, for two measured reasons: a throw inside
+   * `chat`'s existing `try` would come back as an HTTP 200 carrying an error string,
+   * and a value that crosses a DO RPC boundary arrives in another realm, so
+   * `instanceof` on anything the DO threw can never be true in the worker. Only
+   * strings and plain objects survive the hop.
+   */
+  code?: "invalid_session";
 }
 
 /** Inbound body for POST /api/message and WebSocket {type:"chat"}. */
@@ -55,15 +67,25 @@ export interface ChatRequest {
  *
  * Lifted out of src/index.ts, where it was unexported (R39): src/routes.ts is
  * dependency-free by rule, so the shapes it addresses DOs with have to live
- * here. Task 8 widens `chat` to take the session id; nothing else may restate
- * this interface.
+ * here. Nothing else may restate this interface.
+ *
+ * `chat` takes the session id LAST and optional (Task 8). That is not a style
+ * choice: a required `sessionId` first would sit after an optional `tier`, which
+ * TypeScript rejects, and every unscoped call site (`/api/message` in
+ * src/index.ts, the WebSocket path, `onScheduledTask` in src/agent.ts) has to keep
+ * compiling until Task 22 removes them. An absent id means "unscoped", which is
+ * today's behaviour and stays main-only.
  *
  * `messages` is Task 7's addition (R59): the transcript of one session, read from
  * that session's own DO. It returns MessageRow, the store's row shape with
  * `created_at` included, not UIMessage and not a {role, content} summary of one.
+ * OLDEST FIRST, deliberately: `recentMessages` reverses a DESC select
+ * (src/memory.ts:143-149), so the newest turn is the LAST element. The console
+ * day-groups this list, and a sort added here would be a second definition of
+ * transcript order (R71 amendment 3).
  */
 export interface AgentStub {
-  chat(content: string, tier?: ChatTier): Promise<AgentReply>;
+  chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply>;
   messages(limit?: number): Promise<MessageRow[]>;
   jobList(): Promise<unknown[]>;
   planState(): Promise<{ plan: unknown[]; pending: unknown }>;
@@ -86,6 +108,11 @@ export interface AgentStub {
  * rowsRead/rowsWritten and no per-statement affected-row count, so a boolean
  * here would be a fiction (R37, R58). The console re-lists after a rename or a
  * delete, so nothing consumes one.
+ *
+ * `exists` is a read, so it is not that fiction: a row either is in the index or
+ * is not. The worker needs it before it addresses a session DO, because a
+ * well-formed id with no row would otherwise instantiate a DO whose transcript
+ * can never appear in `GET /api/sessions` (R73 amendment 4, R74).
  */
 export interface RegistryStub {
   list(limit: number): Promise<SessionRow[]>;
@@ -93,6 +120,7 @@ export interface RegistryStub {
   rename(id: string, title: string): Promise<void>;
   remove(id: string): Promise<void>;
   touch(id: string, opts?: { unreadDelta?: number }): Promise<void>;
+  exists(id: string): Promise<boolean>;
 }
 
 /**
