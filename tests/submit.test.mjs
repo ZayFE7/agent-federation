@@ -8,8 +8,8 @@
 //
 //   1. the response carries BOTH ids and nothing else, so the UI has what it
 //      needs to open an EventSource before the model has said a word;
-//   2. `submitTurn` is called and `waitTurn` is NOT, because a route that waits
-//      would turn the durable stream into a slower version of the old route.
+//   2. `submitTurn` is the only turn RPC the route calls, because a route that
+//      waited would turn the durable stream into a slower version of the old route.
 //
 // And the hostile-id half: a segment that only turns hostile when decoded is a
 // 400 BEFORE any namespace or registry call, so a bad name never instantiates a
@@ -28,7 +28,7 @@ function checkAsync(name, fn) {
 
 /**
  * A registry that only records, and a federation namespace whose stub is the
- * submit/wait contract itself. `exists` answers true so the case is always about
+ * submit contract itself. `exists` answers true so the case is always about
  * the send, never gate 3; the hostile-id cases never get this far.
  */
 function world() {
@@ -53,7 +53,6 @@ function world() {
   const names = [];
   const addressed = [];
   const submits = [];
-  const waits = [];
   const stubs = new Map();
   const agent = {
     idFromName(name) {
@@ -68,10 +67,6 @@ function world() {
           async submitTurn(...args) {
             submits.push({ name, args, arity: args.length });
             return { operationId: "op-7", streamId: `s:${name}:op-7` };
-          },
-          async waitTurn(...args) {
-            waits.push({ name, args });
-            return { reply: "waitTurn must never be reached" };
           },
         });
       }
@@ -93,7 +88,7 @@ function world() {
     },
     passThroughOnException() {},
   };
-  return { env, ctx, registryCalls, names, addressed, submits, waits, promised, releaseTouch };
+  return { env, ctx, registryCalls, names, addressed, submits, promised, releaseTouch };
 }
 
 const post = (path, body) =>
@@ -119,7 +114,6 @@ await checkAsync("the accepted send returns the receipt and never waits on the t
   assert.equal(w.submits.length, 1, "the send reaches the DO exactly once");
   assert.equal(w.submits[0].arity, 3, "submitTurn(content, tier, sessionId)");
   assert.deepEqual(w.submits[0].args, ["hello", undefined, "abc"]);
-  assert.equal(w.waits.length, 0, "a route that waited would hold the response until the model finished");
   assert.deepEqual(w.names, ["abc"]);
   assert.deepEqual(w.addressed, ["abc"]);
   assert.deepEqual(

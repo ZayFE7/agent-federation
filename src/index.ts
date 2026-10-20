@@ -4,7 +4,7 @@ import { fetchRouter } from "./router";
 import { authed, safeEq } from "./auth";
 import { MAIN_DO_NAME, isSessionId } from "./session-scope";
 import { handleFetch } from "./routes";
-import type { AgentStub, ChatRequest, ChatTier, Env } from "./types";
+import type { AgentStub, Env } from "./types";
 
 // Wrangler discovers Durable Object classes from the entry module's exports, so
 // every class a binding names has to be exported here (plan Task 6 Step 1).
@@ -52,7 +52,7 @@ export default {
 
     // The /api/sessions* family lives in src/routes.ts, which is the only part of
     // this worker an offline Node test can import (R42). The prefix is the whole
-    // handover: /api/message, /api/tasks, /api/approve, /api/decide, the WebSocket
+    // handover: /api/tasks, /api/approve, /api/decide, the WebSocket
     // upgrade above and /internal/vault/* keep their addressing right here. The
     // delegation sits below the upgrade gate so an Upgrade: websocket request can
     // never be swallowed by the session family.
@@ -62,32 +62,6 @@ export default {
 
     if (url.pathname === "/health") {
       return Response.json({ ok: true });
-    }
-
-    if (url.pathname === "/api/message" && request.method === "POST") {
-      if (!authed(request, env)) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
-      let body: ChatRequest;
-      try {
-        body = (await request.json()) as ChatRequest;
-      } catch {
-        return Response.json({ error: "invalid JSON body" }, { status: 400 });
-      }
-      if (typeof body?.content !== "string" || body.content.length === 0) {
-        return Response.json({ error: "content required" }, { status: 400 });
-      }
-      const tier: ChatTier | undefined =
-        body.tier === "primary" || body.tier === "cheap" ? body.tier : undefined;
-      // Task 23 keeps the legacy alias alive as submit-then-wait: the turn is
-      // durable before this handler waits on it, so the console keeps working
-      // until Task 25 moves it onto the stream. Pinned to main, as it always was.
-      const receipt = await agentStub(env).submitTurn(body.content, tier, MAIN_DO_NAME);
-      if ("code" in receipt) {
-        return Response.json({ error: "invalid session" }, { status: 403 });
-      }
-      const result = await agentStub(env).waitTurn(MAIN_DO_NAME, receipt.operationId);
-      return Response.json(result);
     }
 
     if (url.pathname === "/api/tasks" && request.method === "GET") {

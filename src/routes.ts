@@ -7,8 +7,8 @@
 // plus dependency-free modules only (R39), and takes both DO namespaces from the
 // `env` argument instead of the classes they are bound to.
 //
-// WHAT IT OWNS (R42): the eight routes below and nothing else. `/api/message`,
-// `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six
+// WHAT IT OWNS (R42): the eight routes below and nothing else. `/api/tasks`,
+// `/api/approve`, `/api/decide`, the WebSocket upgrade and the six
 // `/internal/vault/*` handlers keep their existing addressing in src/index.ts;
 // src/index.ts delegates here on the `/api/sessions` prefix only. `/api/plan` is
 // removed by Task 15, not by this file.
@@ -55,13 +55,12 @@
 // TRAVERSAL IS NOT WHAT STEP 2 STOPS, because the URL layer gets there first. A path
 // whose NORMALIZED form leaves the prefix never reaches any of this: the prefix test
 // fails and the request goes back to src/index.ts. What happens then depends on where
-// the dots land, and it is NOT always a 404: a whole `%2e%2e` segment counts as a
-// double dot to WHATWG normalization (measured: `/api/sessions/%2e%2e/message` is
-// `/api/message` before this module sees it, upper- or lowercase alike), and
-// `/api/message` is a live route served by src/index.ts, authed and pinned to main, so
-// that spelling is served rather than refused. `/api/sessions/../etc/message` ->
-// `/api/etc/message` is what actually 404s. Either way this module is not involved,
-// which is the only claim the prefix test makes for itself.
+// the dots land and which method it carries: a whole `%2e%2e` segment counts as a
+// double dot to WHATWG normalization (measured: `/api/sessions/%2e%2e/tasks` is
+// `/api/tasks` before this module sees it, upper- or lowercase alike), and a live
+// route answers while anything else falls through to the static assets. Either way
+// this module is not involved, which is the only claim the prefix test makes for
+// itself.
 //
 // What step 2 does stop is the segment that SURVIVES normalization and only turns
 // hostile when decoded, because `idFromSegment` runs `decodeURIComponent` after the URL

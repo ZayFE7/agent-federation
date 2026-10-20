@@ -36,7 +36,7 @@ probe "valid" '{"context":"checking the mail"}'
 say "/api/decide  form-encoded content-type (expect 400 invalid JSON body)"
 probe "form" 'context=hi' 'application/x-www-form-urlencoded'
 
-say "/api/message  invalid-JSON no-auth (documents endpoint order)"
-curl -s -o /tmp/m.json -w "HTTP %{http_code}\n" -X POST "$BASE/api/message" \
+say "/api/sessions  invalid-JSON no-auth (expect 401: auth precedes the body)"
+curl -s -o /tmp/m.json -w "HTTP %{http_code}\n" -X POST "$BASE/api/sessions" \
      -H 'content-type: application/json' -d '{bad'
 head -c 200 /tmp/m.json; echo

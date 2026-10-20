@@ -60,26 +60,30 @@ one file directly with `node tests/guardrails.test.mjs`.
 
 ## What it actually checks
 
-`live-matrix.mjs` is a live smoke matrix against the **deployed** brain. It reads
-`../.dev.vars` (`:16`), POSTs 4 probes to `URL_ENDPOINT` with `Authorization: Bearer
-<AGENT_API_KEY>`, waits up to 120 000 ms each (`:13`), and prints status, reply preview, tool
-count, state, PASS/FAIL per probe. The target origin comes from `process.env.BLIP_URL` (`:20`)
-and `/api/message` is appended to it (`:28`). Exit code 0 only when all four pass, 1 on any
-FAIL, 2 on fatal setup errors (`:26,38,49,54`). The four assertions (`:57-99`):
+`live-matrix.mjs` is a live smoke matrix against the **deployed** brain, driven entirely
+through the durable stream. It reads `../.dev.vars` (`:19`), creates one session per probe,
+POSTs the turn to that session's submit route with `Authorization: Bearer <AGENT_API_KEY>`,
+then reads the returned operation stream as SSE (`readStream`, `:174`) for up to 120 000 ms
+(`:16`). The target origin comes from `process.env.BLIP_URL` (`:23`). Exit code 0 only when
+all four pass, 1 on any FAIL, 2 on fatal setup errors (`:29,41,52,57`). The four assertions
+(`:60-114`):
 
-1. **ping**, body `{content:"say pong"}`: HTTP 200 and `/pong/i` matches `reply` (`:61-66`).
-2. **deterministic tool run**, `{content:"run: echo blip-can-run"}`: `tools[0].cmd` includes
-   `echo blip-can-run` **and** `tools[0].output` includes `blip-can-run` (`:71-78`).
-3. **capabilities**, `{content:"what can you do"}`: `reply` lowercased contains `sandbox`
-   (`:83-88`). This one hits the deterministic capability branch in `runTurn`
-   (`../src/agent.ts`), which now renders from `capabilitiesText`.
-4. **freeform generation**, `{content:"write a 2-line poem about butterflies"}`: `reply`
-   non-empty and does not contain `[error]` (`:92-98`).
+1. **ping**, `say pong`: the `done` frame's `reply` matches `/pong/i`.
+2. **deterministic tool run**, `run: echo blip-can-run`: a `tool-start` names `exec` with
+   input containing `echo blip-can-run`, and the same id's `tool-result` output includes
+   `blip-can-run`.
+3. **capabilities**, `what can you do`: the reply contains `capabilitiesText(EXPECTED_TOOLS)`
+   and does not say `planned`. This hits the deterministic capability branch in
+   `../src/agent.ts`, which renders from the same table (`:100`).
+4. **freeform generation**, `write a 2-line poem about butterflies`: at least 3 non-empty
+   `text` frames arrive before `done`.
 
 ## Self-contained
 
-Only `node:fs`, `node:url`, `node:path` are imported (`:9-11`). No dependencies, so it runs
-on any Node with global `fetch` (18+), with or without `node_modules`.
+The matrix imports `node:fs`, `node:url`, `node:path` and the dependency-free
+`../src/capabilities.ts` (`:11-14`). It needs global `fetch` (18+) and nothing from
+`node_modules`; importing the capability table is what keeps the probe honest, because the
+reply and the assertion are generated from the same source.
 
 ## How to run it
 
@@ -238,7 +242,7 @@ and
 404 paths. Two rules that nothing else can test are pinned in the same file: R39, a source scan
 proving `routes.ts` value-imports only dependency-free `src/*.ts` modules and addresses both DOs
 through `env` instead of importing a class, and R42, proving `src/index.ts` keeps its own
-handlers for `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade
+handlers for `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade
 and the six `/internal/vault/*` routes while delegating only the `/api/sessions` prefix.
 
 What it cannot prove: every agent-side answer here is a stub, so nothing about the Durable

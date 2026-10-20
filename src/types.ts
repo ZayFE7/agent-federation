@@ -29,7 +29,7 @@ export interface ToolRun {
   ok: boolean;
 }
 
-/** Response shape for POST /api/message and the DO chat method. */
+/** Response shape for the DO chat method (WebSocket turns and scheduled jobs). */
 export interface AgentReply {
   reply: string;
   /** Deterministic mascot state (replaces the flaky LLM decider). */
@@ -58,7 +58,7 @@ export interface AgentReply {
   code?: "invalid_session";
 }
 
-/** Inbound body for POST /api/message and WebSocket {type:"chat"}. */
+/** Inbound body for WebSocket {type:"chat"}. */
 export interface ChatRequest {
   content: string;
   tier?: ChatTier;
@@ -88,10 +88,9 @@ export interface TurnRefusal {
  *
  * `chat` takes the session id LAST and optional (Task 8). That is not a style
  * choice: a required `sessionId` first would sit after an optional `tier`, which
- * TypeScript rejects, and every unscoped call site (`/api/message` in
- * src/index.ts, the WebSocket path, `onScheduledTask` in src/agent.ts) has to keep
- * compiling until Task 22 removes them. An absent id means "unscoped", which is
- * today's behaviour and stays main-only.
+ * TypeScript rejects, and the remaining unscoped call sites (the WebSocket path
+ * and `onScheduledTask` in src/agent.ts) have to keep compiling. An absent id
+ * means "unscoped", which stays main-only.
  *
  * `messages` is Task 7's addition (R59): the transcript of one session, read from
  * that session's own DO. It returns MessageRow, the store's row shape with
@@ -110,8 +109,6 @@ export interface AgentStub {
     tier: ChatTier | undefined,
     sessionId: string
   ): Promise<TurnReceipt | TurnRefusal>;
-  /** Resolve a submitted operation into the legacy AgentReply shape (Task 23). */
-  waitTurn(sessionId: string, operationId: string): Promise<AgentReply>;
   /** Stop one operation, or everything open in a session; false when nothing matched. */
   abortTurn(sessionId: string, operationId?: string): Promise<boolean>;
   chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply>;
@@ -172,7 +169,7 @@ export interface Env {
   /** Defaults below apply when these vars are unset in wrangler. */
   MODEL_PRIMARY?: string;
   MODEL_CHEAP?: string;
-  /** Bearer token required by POST /api/message. */
+  /** Bearer token required by the console API routes and the WebSocket upgrade. */
   AGENT_API_KEY: string;
   /** Bearer token required by /internal/vault/* (9router state sync). */
   STATE_KEY: string;

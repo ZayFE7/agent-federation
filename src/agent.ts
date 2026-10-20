@@ -498,36 +498,6 @@ export class FederationAgent extends Agent<Env> {
     }
   }
 
-  /**
-   * The legacy wait path (Task 23 keeps `/api/message` working as submit then
-   * wait): resolve one submitted operation into the same AgentReply shape
-   * `chat()` returns. The transcript is read after settlement because a
-   * `wait()` result carries only the text, and `replyFrom` projects tool runs
-   * from the assistant message.
-   */
-  async waitTurn(sessionId: string, operationId: string): Promise<AgentReply> {
-    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
-      return { reply: "", code: "invalid_session" };
-    }
-    try {
-      const session = this.harness.session(sessionId);
-      const outcome = await session.wait(operationId);
-      let messages: readonly UIMessage[] = [];
-      try {
-        messages = await session.messages();
-      } catch {
-        messages = [];
-      }
-      return replyFrom({
-        status: outcome.status,
-        ...(outcome.status === "done" ? { text: outcome.text } : { reason: outcome.reason }),
-        messages,
-      });
-    } catch (err) {
-      return { reply: "agent error: " + String(err) };
-    }
-  }
-
   /** Stop one operation, or everything open in the session when no id is named. */
   async abortTurn(sessionId: string, operationId?: string): Promise<boolean> {
     if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return false;

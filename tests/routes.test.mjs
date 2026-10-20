@@ -103,7 +103,6 @@ function fakeAgentNamespace() {
   const messageCalls = [];
   const fetches = [];
   const submits = [];
-  const waits = [];
   const aborts = [];
   const stubs = new Map();
   const ns = {
@@ -113,7 +112,6 @@ function fakeAgentNamespace() {
     messageCalls,
     fetches,
     submits,
-    waits,
     aborts,
     reply: { reply: "pong" },
     messageRows: [],
@@ -139,10 +137,6 @@ function fakeAgentNamespace() {
           async submitTurn(...args) {
             submits.push({ name, args, arity: args.length });
             return ns.submitReply ?? { operationId: "op-1", streamId: `s:${name}:op-1` };
-          },
-          async waitTurn(...args) {
-            waits.push({ name, args, arity: args.length });
-            return ns.reply;
           },
           async abortTurn(...args) {
             aborts.push({ name, args, arity: args.length });
@@ -405,8 +399,8 @@ check("src/index.ts no longer declares safeEq or authed and imports them from ./
 });
 
 // The R42 rule: src/routes.ts owns the /api/sessions* family ONLY, and src/index.ts
-// keeps /api/message, /api/tasks, /api/approve, /api/decide, the WS upgrade and the
-// six /internal/vault/* handlers. If index.ts handed over all of /api/* the four live
+// keeps /api/tasks, /api/approve, /api/decide, the WS upgrade and the
+// six /internal/vault/* handlers. If index.ts handed over all of /api/* the live
 // routes would die, so the delegation has to be prefix-scoped.
 check("src/index.ts delegates the /api/sessions* family and nothing else", () => {
   assert.ok(
@@ -422,7 +416,7 @@ check("src/index.ts delegates the /api/sessions* family and nothing else", () =>
     false,
     "delegating all of /api/* is the R42 defect"
   );
-  for (const kept of ["/api/message", "/api/tasks", "/api/approve", "/api/decide", "/internal/vault/push", "/internal/vault/chunk", "/internal/vault/pull", "/internal/vault/health", "/internal/vault"]) {
+  for (const kept of ["/api/tasks", "/api/approve", "/api/decide", "/internal/vault/push", "/internal/vault/chunk", "/internal/vault/pull", "/internal/vault/health", "/internal/vault"]) {
     assert.ok(
       INDEX_SOURCE.includes(`"${kept}"`),
       `${kept} must keep its existing handler in src/index.ts (R42)`
@@ -702,7 +696,6 @@ check("agentStubFor resolves the bare id as the DO name, with no prefix", () => 
   assert.equal(typeof stub.chat, "function");
   assert.equal(typeof stub.messages, "function");
   assert.equal(typeof stub.submitTurn, "function", "Task 23 routes every send through submitTurn");
-  assert.equal(typeof stub.waitTurn, "function", "Task 23 keeps the legacy send via waitTurn");
   assert.equal(typeof stub.abortTurn, "function", "Task 23 exposes the stop button's RPC");
   assert.equal(typeof stub.fetch, "function", "Task 22 proxies the SSE stream into the same stub");
   // The legacy conversation stays reachable as a session, addressed exactly as
@@ -946,7 +939,6 @@ await checkAsync("POST /api/sessions/abc/message submits to the abc DO and retur
   assert.equal(world.fed.addressed.includes("main"), false, "R41: the send is session-scoped");
   assert.equal(world.fed.submits.length, 1);
   assert.equal(world.fed.chats.length, 0, "the submit route no longer waits on chat()");
-  assert.equal(world.fed.waits.length, 0, "waiting is only the legacy /api/message alias");
 });
 
 // The id travels twice (Task 8, kept in Task 23's submitTurn): once as the DO this
@@ -1218,7 +1210,6 @@ await checkAsync("a receipt carrying code invalid_session is 403 and skips the t
   assert.equal(res.status, 403);
   assert.deepEqual(await res.json(), { ok: false, error: "invalid session" });
   assert.equal(world.fed.submits.length, 1, "the DO made the refusal, the worker only relayed it");
-  assert.equal(world.fed.waits.length, 0, "a refused turn is never waited on");
   assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the refusal must not touch the registry");
   assert.deepEqual(world.registry.touchCalls, []);
   assert.deepEqual(world.promised, [], "the 403 branch schedules nothing");
@@ -1284,13 +1275,12 @@ await checkAsync("a decoded-hostile :id is 400 before any idFromName call (R76 g
 
 // Amendment 1 (R71), as it actually measures. A `%2e%2e` SEGMENT is normalized by the
 // URL parser exactly like a literal `..` (both are "double-dot path segments", and
-// the encoding is decoded for that comparison), so `/api/sessions/%2e%2e/message`
-// reaches this module as `/api/message`: outside the prefix, so this module's fall-
+// the encoding is decoded for that comparison), so `/api/sessions/%2e%2e/tasks`
+// reaches this module as `/api/tasks`: outside the prefix, so this module's fall-
 // through answers 404 and the guard never runs, which is why the case can never be a
-// 400. What the WORKER then does with it is src/index.ts's business, and it is not a
-// refusal: `/api/message` is a live route, authed and pinned to main. `/api/etc/
-// message` is the one that truly 404s. The encoded form therefore proves nothing about
-// the guard, and both spellings are the same fact.
+// 400. What the WORKER then does with a spelling that normalises onto one of its own
+// routes is src/index.ts's business, not this module's. The encoded form therefore
+// proves nothing about the guard, and both spellings are the same fact.
 await checkAsync("a path that normalises out of the prefix is a 404, not a 400 (amendment 1)", async () => {
   for (const path of [
     "/api/sessions/../etc/message",
@@ -1405,7 +1395,6 @@ await checkAsync("a path with an unknown shape 404s", async () => {
     ["/api/sessions/abc/messages", "POST"],
     ["/api/sessions/abc/message", "GET"],
     ["/api/sessionsXYZ", "GET"],
-    ["/api/message", "POST"],
     ["/api/tasks", "GET"],
   ]) {
     const world = setup();
