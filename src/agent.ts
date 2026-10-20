@@ -584,9 +584,11 @@ export class FederationAgent extends Agent<Env> {
         }
       }
       // ONE poll row, never one per arming. A one-shot schedule deduplicates only
-      // when `idempotent: true` matches an existing row's exact timing, and
-      // `wakeAt` moves on every call, so a bare schedule() left a permanent
-      // cf_agents_jobs row behind for every arming event: onStart, each
+      // when `idempotent: true`, and the SDK matches a reusable row on callback plus
+      // payload and never on its time, so this option is load-bearing, not
+      // decorative: `wakeAt` legitimately moves on every call, and the option is
+      // what lets the same row be retimed instead of a new one inserted. Without it
+      // every arming event left a permanent cf_agents_jobs row behind: onStart, each
       // schedule_task, each tick that re-arms. The fired row is deleted, the extra
       // rows are not, so main ends up waking and running this handler once per
       // leftover row, every period, forever. This is the SDK's own dedup idiom for

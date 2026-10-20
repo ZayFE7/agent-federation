@@ -534,6 +534,14 @@ check("src/agent.ts schedules jobs where the alarm that fires them can see them 
   assert.ok(hop, "src/agent.ts declares no enqueueGlobal");
   assert.ok(/if\s*\(this\.isMainInstance\(\)\)/.test(hop), "main writes locally, exactly as rememberGlobal does");
   assert.ok(/Promise<boolean>/.test(hop), "the hop must report whether the row landed, or the tool lies again");
+  // Fix-round 3 (reviewer N4): the RPC arm re-arms, and the main branch used to be
+  // unpinned (mutation i, exit 0). A row inserted while sitting in main re-arms the
+  // same way, or the most common path - the user scheduling from the main chat -
+  // waits the full 60s poll for a job due in seconds.
+  assert.ok(
+    /if\s*\(this\.isMainInstance\(\)\)\s*\{[\s\S]{0,140}?await this\.armTick\(\)/.test(hop),
+    "main's own insert must re-arm too, not only the taskEnqueue RPC that serves a session DO"
+  );
   // Fix-round 2 (reviewer section C, the hole the first version of this pin left):
   // `this.taskEnqueue(...)` satisfied the loose `taskEnqueue(` test here and
   // recreated finding B1 exactly, because it runs on the CALLING DO's store while
@@ -568,7 +576,15 @@ check("src/agent.ts keeps exactly one alarm row for its own tick (R46, fix-round
     tick.indexOf("this.cancelSchedule(") < tick.indexOf("this.schedule("),
     "arm order must be cancel-then-arm; arming first leaves the row it just cancelled's replacement behind"
   );
-  assert.ok(/idempotent:\s*true/.test(tick), "the arm must declare its dedup choice (the SDK warns on startup arms without it)");
+  // Fix-round 3 (reviewer N1): the first version of this pin tested the bare string
+  // `idempotent: true`, and the WHY comment above the arm contains that string, so
+  // deleting the option from the call left the suite green (mutation c, exit 0). The
+  // dedup lives in the call, so the pin names the call: callback argument, then the
+  // absent payload, then the options object.
+  assert.ok(
+    /"onScheduledTask",\s*undefined,\s*\{\s*idempotent:\s*true\s*\}/.test(tick),
+    "the arm must pass idempotent:true in the schedule() call itself; without it every re-arm inserts another permanent row"
+  );
   assert.equal((tick.match(/this\.schedule\(/g) ?? []).length, 1, "one arm per tick, or the amplification returns");
   assert.equal(
     (AGENT_SOURCE.match(/this\.schedule\(/g) ?? []).length,
