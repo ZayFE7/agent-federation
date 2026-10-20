@@ -65,6 +65,21 @@ export interface ChatRequest {
 }
 
 /**
+ * The receipt a durably submitted turn hands back (plan Task 23). The response
+ * returns before the model runs; the console opens `streamId` to watch what the
+ * operation produces. Both ids are the DO's own, never derived by the worker.
+ */
+export interface TurnReceipt {
+  operationId: string;
+  streamId: string;
+}
+
+/** The DO refused work for a session id it does not own (Task 8's code). */
+export interface TurnRefusal {
+  code: "invalid_session";
+}
+
+/**
  * Minimal RPC surface of FederationAgent used over the DO stub.
  *
  * Lifted out of src/index.ts, where it was unexported (R39): src/routes.ts is
@@ -89,6 +104,16 @@ export interface ChatRequest {
 export interface AgentStub {
   /** The DO's own HTTP entry: WS upgrades and internal routes such as /internal/stream. */
   fetch(request: Request): Promise<Response>;
+  /** Durably submit one turn and return its stream id without awaiting the model (Task 23). */
+  submitTurn(
+    content: string,
+    tier: ChatTier | undefined,
+    sessionId: string
+  ): Promise<TurnReceipt | TurnRefusal>;
+  /** Resolve a submitted operation into the legacy AgentReply shape (Task 23). */
+  waitTurn(sessionId: string, operationId: string): Promise<AgentReply>;
+  /** Stop one operation, or everything open in a session; false when nothing matched. */
+  abortTurn(sessionId: string, operationId?: string): Promise<boolean>;
   chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply>;
   messages(limit?: number): Promise<MessageRow[]>;
   jobList(): Promise<unknown[]>;

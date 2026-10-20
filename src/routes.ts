@@ -7,7 +7,7 @@
 // plus dependency-free modules only (R39), and takes both DO namespaces from the
 // `env` argument instead of the classes they are bound to.
 //
-// WHAT IT OWNS (R42): the seven routes below and nothing else. `/api/message`,
+// WHAT IT OWNS (R42): the eight routes below and nothing else. `/api/message`,
 // `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six
 // `/internal/vault/*` handlers keep their existing addressing in src/index.ts;
 // src/index.ts delegates here on the `/api/sessions` prefix only. `/api/plan` is
@@ -18,7 +18,8 @@
 //   PATCH  /api/sessions/:id              { ok }
 //   DELETE /api/sessions/:id              { ok }
 //   GET    /api/sessions/:id/messages     { ok, messages: MessageRow[] }  (oldest first)
-//   POST   /api/sessions/:id/message      the agent's AgentReply, unmodified
+//   POST   /api/sessions/:id/message      { ok, streamId, operationId }   (Task 23, submit-and-return)
+//   POST   /api/sessions/:id/abort        { ok, aborted }                 (Task 23)
 //   GET    /api/sessions/:id/stream/:id   the durable operation stream, as SSE
 //
 // Every one of them 401s when `authed()` fails and 400s on a malformed body. A shape
@@ -32,12 +33,13 @@
 //   1. auth                     401
 //   2. isSessionId(id)          400, BEFORE any idFromName call
 //   3. registry.exists(id)      404 on a well-formed id with no row, BEFORE the DO
-//   4. the DO                   200, or 403 for a reply carrying code "invalid_session"
+//   4. the DO                   200, or 403 for a submit refused with code "invalid_session"
 //
-// Gate 3 guards the three routes that could otherwise report a success that changed
-// nothing: PATCH, GET messages, POST message. DELETE answers ok:true for an absent id
-// by design (the handler below says why). PATCH runs the read INSIDE its handler, so a
-// blank title still 400s ahead of the 404, as the order above requires.
+// Gate 3 guards every route that could otherwise act on, or report a success
+// about, a row nobody created: PATCH, GET messages, POST message, POST abort and
+// the stream proxy. DELETE answers ok:true for an absent id by design (the
+// handler below says why). PATCH runs the read INSIDE its handler, so a blank
+// title still 400s ahead of the 404, as the order above requires.
 //
 // Step 2 is where an attacker-controlled string is actually stopped, and it covers
 // `messages` as well as `chat`: the rule has ONE copy, `isSessionId()` in
@@ -86,7 +88,7 @@ import { isSessionId } from "./session-scope.ts";
 import { authed, tokenOk } from "./auth.ts";
 import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
-import type { AgentReply, AgentStub, ChatTier, Env, RegistryStub } from "./types";
+import type { AgentStub, ChatTier, Env, RegistryStub } from "./types";
 
 /** The one path prefix this module answers for. */
 const SESSIONS_PATH = "/api/sessions";
@@ -198,27 +200,21 @@ async function readTranscript(env: Env, id: string, search: URLSearchParams): Pr
 }
 
 /**
- * Submit and return (R41). The session id travels in the DO this addresses AND, since
- * Task 8, in `chat`'s third argument, so the DO can verify the claim (R39): the id is
- * LAST and optional, which is what lets src/index.ts's unscoped `/api/message` keep
- * compiling until Task 22 removes it. An absent or unrecognised tier is `undefined`,
- * the same rule src/index.ts applies to /api/message.
+ * Submit and return (Task 23). The DO durably enqueues the turn and answers with
+ * `{operationId, streamId}` before the model runs, so a long multi-step build
+ * outlives the Worker's wall clock and the console watches the stream. The
+ * session id travels in the DO this addresses AND in `submitTurn`'s last
+ * argument, so the DO can verify the claim (R39).
  *
- * A reply carrying `code: "invalid_session"` is a DO that refused work outside its own
- * session (Task 8) and answers 403. It is NOT activity, so the registry `touch` is
- * skipped: a request the DO refused must not reorder or re-date the session list
- * (R71 amendment 2). Any other reply, including one carrying a different code, is a
- * real answer and bumps updated_at and nothing else, because the list is
- * `ORDER BY pinned DESC, updated_at DESC` (R54) and a route that only returned the
- * reply would leave the session being typed in where it was. `touch` with no opts:
- * unread is a later phase, since the person sending is reading that session (Task 33).
- *
- * The touch goes through `ctx.waitUntil`, not an `await` (R71 amendment 5): the reply
- * is already paid for, and an `await` here would let a rejecting registry RPC escape
- * `handleFetch` and cost the caller an answer the model already produced. The reply
- * is durable either way, because the platform runs the promised work to completion.
+ * A refusal carrying `code: "invalid_session"` is a DO that refused work outside
+ * its own session (Task 8) and answers 403. It is NOT activity, so the registry
+ * `touch` is skipped (R71 amendment 2). An accepted submit bumps updated_at and
+ * nothing else, because the list is `ORDER BY pinned DESC, updated_at DESC`
+ * (R54). The touch goes through `ctx.waitUntil` (R71 amendment 5): the receipt is
+ * already paid for, and an awaited registry RPC could cost the caller a receipt
+ * for a turn that is already durable.
  */
-async function sendMessage(
+async function submitMessage(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
@@ -230,12 +226,44 @@ async function sendMessage(
   }
   const tier: ChatTier | undefined =
     body.tier === "primary" || body.tier === "cheap" ? body.tier : undefined;
-  const reply: AgentReply = await agentStubFor(env, id).chat(body.content, tier, id);
-  if (reply.code === "invalid_session") {
+  const receipt = await agentStubFor(env, id).submitTurn(body.content, tier, id);
+  if ("code" in receipt) {
     return fail(403, "invalid session");
   }
   ctx.waitUntil(registryStubFor(env).touch(id));
-  return json(reply);
+  return json({ ok: true, streamId: receipt.streamId, operationId: receipt.operationId });
+}
+
+/**
+ * POST /api/sessions/:id/abort, body `{operationId?}` or empty.
+ *
+ * An empty body aborts everything open in the session; a named operation aborts
+ * only that one. A malformed body is 400 rather than a silent abort-all, so a
+ * client bug cannot kill a turn it did not name.
+ */
+async function abortSession(request: Request, env: Env, id: string): Promise<Response> {
+  const raw = await request.text();
+  let operationId: string | undefined;
+  if (raw.trim() !== "") {
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return fail(400, "invalid JSON body");
+    }
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      return fail(400, "invalid JSON body");
+    }
+    const value = (body as { operationId?: unknown }).operationId;
+    if (value !== undefined) {
+      if (typeof value !== "string" || value.length === 0) {
+        return fail(400, "operationId must be a non-empty string");
+      }
+      operationId = value;
+    }
+  }
+  const aborted = await agentStubFor(env, id).abortTurn(id, operationId);
+  return json({ ok: true, aborted });
 }
 
 /**
@@ -279,7 +307,7 @@ function isSessionsPath(pathname: string): boolean {
  * typo here can never reach a handler this file does not own.
  *
  * `ctx` carries the background work these routes promise (Task 8: the accepted
- * send's registry `touch`; Task 22: the stream proxy) so a rejecting RPC cannot
+ * submit's registry `touch`; Task 22: the stream proxy) so a rejecting RPC cannot
  * cost a reply the model already produced.
  */
 export async function handleFetch(
@@ -358,7 +386,11 @@ export async function handleFetch(
     }
     if (sub === "message" && request.method === "POST") {
       if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
-      return sendMessage(request, env, ctx, id);
+      return submitMessage(request, env, ctx, id);
+    }
+    if (sub === "abort" && request.method === "POST") {
+      if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+      return abortSession(request, env, id);
     }
     return fail(404, "not found");
   }

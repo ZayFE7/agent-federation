@@ -102,6 +102,9 @@ function fakeAgentNamespace() {
   const chats = [];
   const messageCalls = [];
   const fetches = [];
+  const submits = [];
+  const waits = [];
+  const aborts = [];
   const stubs = new Map();
   const ns = {
     names,
@@ -109,8 +112,13 @@ function fakeAgentNamespace() {
     chats,
     messageCalls,
     fetches,
+    submits,
+    waits,
+    aborts,
     reply: { reply: "pong" },
     messageRows: [],
+    submitReply: null,
+    abortReply: true,
     idFromName(name) {
       names.push(name);
       return { __sessionName: name, toString: () => `do:${name}` };
@@ -125,6 +133,20 @@ function fakeAgentNamespace() {
           async chat(...args) {
             chats.push({ name, args, arity: args.length });
             return ns.reply;
+          },
+          // Task 23: the submit route returns the DO's receipt before the model
+          // runs, so these two recorders are the whole worker-side contract.
+          async submitTurn(...args) {
+            submits.push({ name, args, arity: args.length });
+            return ns.submitReply ?? { operationId: "op-1", streamId: `s:${name}:op-1` };
+          },
+          async waitTurn(...args) {
+            waits.push({ name, args, arity: args.length });
+            return ns.reply;
+          },
+          async abortTurn(...args) {
+            aborts.push({ name, args, arity: args.length });
+            return ns.abortReply;
           },
           async messages(...args) {
             messageCalls.push({ name, args, arity: args.length });
@@ -632,8 +654,14 @@ check("src/agent.ts keeps memory global from any DO (R45, Step 3b)", () => {
   const runTurn = AGENT_SOURCE.match(/private\s+async\s+runTurn\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(runTurn, "src/agent.ts declares no private runTurn(...) to read");
   assert.ok(
-    /this\.rememberGlobal\(/.test(runTurn),
-    "the turn path must write memory through rememberGlobal"
+    /this\.runDirect\(/.test(runTurn),
+    "Task 23 split the deterministic branch out of runTurn, so the memory write moved with it"
+  );
+  const runDirect = AGENT_SOURCE.match(/private\s+async\s+runDirect\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(runDirect, "src/agent.ts declares no private runDirect(...) to read");
+  assert.ok(
+    /this\.rememberGlobal\(/.test(runDirect),
+    "the deterministic turn path must write memory through rememberGlobal"
   );
   const beforeTurn = AGENT_SOURCE.match(/private\s+async\s+beforeTurn\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(beforeTurn, "src/agent.ts declares no private beforeTurn(...) to read");
@@ -641,7 +669,7 @@ check("src/agent.ts keeps memory global from any DO (R45, Step 3b)", () => {
   const turnEnd = AGENT_SOURCE.match(/private\s+async\s+onHarnessTurnEnd\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(turnEnd, "src/agent.ts declares no private onHarnessTurnEnd(...) to read");
   assert.ok(/this\.rememberGlobal\(/.test(turnEnd), "the exchange memory must be written through rememberGlobal");
-  for (const [name, body] of [["runTurn", runTurn], ["beforeTurn", beforeTurn], ["onHarnessTurnEnd", turnEnd]]) {
+  for (const [name, body] of [["runTurn", runTurn], ["runDirect", runDirect], ["beforeTurn", beforeTurn], ["onHarnessTurnEnd", turnEnd]]) {
     assert.equal(
       /\b(?:remember|recall)\(this\.db\(/.test(body),
       false,
@@ -673,6 +701,10 @@ check("agentStubFor resolves the bare id as the DO name, with no prefix", () => 
   assert.deepEqual(fed.addressed, ["abc"], "get() must receive the id resolved from that name");
   assert.equal(typeof stub.chat, "function");
   assert.equal(typeof stub.messages, "function");
+  assert.equal(typeof stub.submitTurn, "function", "Task 23 routes every send through submitTurn");
+  assert.equal(typeof stub.waitTurn, "function", "Task 23 keeps the legacy send via waitTurn");
+  assert.equal(typeof stub.abortTurn, "function", "Task 23 exposes the stop button's RPC");
+  assert.equal(typeof stub.fetch, "function", "Task 22 proxies the SSE stream into the same stub");
   // The legacy conversation stays reachable as a session, addressed exactly as
   // src/index.ts:84 addresses it today.
   agentStubFor(env, "main");
@@ -896,7 +928,7 @@ await checkAsync("GET /api/sessions/abc/messages reads the session DO, never mai
 
 // ------------------------------------------------ POST /api/sessions/:id/message ----
 
-await checkAsync("POST /api/sessions/abc/message forwards to the abc DO and not to main", async () => {
+await checkAsync("POST /api/sessions/abc/message submits to the abc DO and returns its receipt", async () => {
   const world = setup();
   const res = await handleFetch(
     req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "say pong" }) }),
@@ -904,17 +936,24 @@ await checkAsync("POST /api/sessions/abc/message forwards to the abc DO and not 
     world.ctx
   );
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { reply: "pong" }, "the agent's AgentReply is returned as-is");
+  assert.deepEqual(
+    await res.json(),
+    { ok: true, streamId: "s:abc:op-1", operationId: "op-1" },
+    "the route returns the DO's receipt, not an AgentReply (Task 23)"
+  );
   assert.deepEqual(world.fed.names, ["abc"], "the id is the DO name (R38)");
   assert.deepEqual(world.fed.addressed, ["abc"]);
   assert.equal(world.fed.addressed.includes("main"), false, "R41: the send is session-scoped");
-  assert.equal(world.fed.chats.length, 1);
+  assert.equal(world.fed.submits.length, 1);
+  assert.equal(world.fed.chats.length, 0, "the submit route no longer waits on chat()");
+  assert.equal(world.fed.waits.length, 0, "waiting is only the legacy /api/message alias");
 });
 
-// The id travels twice (Task 8): once as the DO this addresses, and once as `chat`'s
-// third argument, which is the only way the DO can check the claim. Drop the third
-// argument and src/agent.ts's guard becomes dead code and the 403 unreachable.
-await checkAsync("the send calls chat(content, tier, sessionId) with three arguments (R65, Task 8)", async () => {
+// The id travels twice (Task 8, kept in Task 23's submitTurn): once as the DO this
+// addresses, and once as submitTurn's third argument, which is the only way the DO
+// can check the claim. Drop the third argument and src/agent.ts's guard becomes
+// dead code and the 403 unreachable.
+await checkAsync("the submit calls submitTurn(content, tier, sessionId) with three arguments (R65)", async () => {
   const world = setup();
   await handleFetch(
     req("/api/sessions/abc/message", "POST", {
@@ -923,10 +962,10 @@ await checkAsync("the send calls chat(content, tier, sessionId) with three argum
     world.env,
     world.ctx
   );
-  const call = world.fed.chats[0];
-  assert.equal(call.arity, 3, "chat grows exactly the session id, in last position");
+  const call = world.fed.submits[0];
+  assert.equal(call.arity, 3, "submitTurn grows exactly the session id, in last position");
   assert.deepEqual(call.args, ["say pong", "cheap", "abc"]);
-  assert.equal(call.args[2], "abc", "the id handed to chat is the id the route addressed");
+  assert.equal(call.args[2], "abc", "the id handed to submitTurn is the id the route addressed");
 });
 
 await checkAsync("an absent or unknown tier is passed through as undefined, still three arguments", async () => {
@@ -936,16 +975,16 @@ await checkAsync("an absent or unknown tier is passed through as undefined, stil
     world.env,
     world.ctx
   );
-  assert.equal(world.fed.chats[0].arity, 3);
-  assert.deepEqual(world.fed.chats[0].args, ["hello", undefined, "abc"]);
-  assert.equal(world.fed.chats[0].args[1], undefined, "no tier means undefined, the same rule as src/index.ts:82");
+  assert.equal(world.fed.submits[0].arity, 3);
+  assert.deepEqual(world.fed.submits[0].args, ["hello", undefined, "abc"]);
+  assert.equal(world.fed.submits[0].args[1], undefined, "no tier means undefined, the same rule src/index.ts:82");
 });
 
 // R74: this sequence is the gate order made visible, exists then touch, and R73's
 // amendment 5 is the reason the touch still lands in the recorder: the fake pushes
 // before its first `await`, so the call happens even though the route now hands the
 // promise to `ctx.waitUntil` instead of awaiting it.
-await checkAsync("a successful send touches the registry once with (id, undefined)", async () => {
+await checkAsync("an accepted submit touches the registry once with (id, undefined)", async () => {
   const world = setup();
   const res = await handleFetch(
     req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
@@ -956,7 +995,7 @@ await checkAsync("a successful send touches the registry once with (id, undefine
   assert.deepEqual(
     world.registry.calls,
     [["exists", "abc"], ["touch", "abc", undefined]],
-    "gate 3 reads the index, then the accepted reply touches it, and nothing else"
+    "gate 3 reads the index, then the accepted submit touches it, and nothing else"
   );
   assert.deepEqual(
     world.registry.touchCalls,
@@ -967,17 +1006,47 @@ await checkAsync("a successful send touches the registry once with (id, undefine
   assert.equal(world.promised.length, 1, "the touch went through ctx.waitUntil, exactly once (amendment 5)");
 });
 
-await checkAsync("any reply bumps updated_at, including one carrying a code", async () => {
+await checkAsync("POST /api/sessions/abc/abort forwards the operation id", async () => {
   const world = setup();
-  world.fed.reply = { reply: "", code: "still_a_reply" };
   const res = await handleFetch(
-    req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
+    req("/api/sessions/abc/abort", "POST", { body: JSON.stringify({ operationId: "op-9" }) }),
     world.env,
     world.ctx
   );
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { reply: "", code: "still_a_reply" });
-  assert.deepEqual(world.registry.touchCalls, [["abc", undefined]]);
+  assert.deepEqual(await res.json(), { ok: true, aborted: true });
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]]);
+  assert.deepEqual(world.fed.aborts, [
+    { name: "abc", args: ["abc", "op-9"], arity: 2 },
+  ]);
+});
+
+await checkAsync("POST abort with no body aborts everything open in the session", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/abc/abort", "POST", { body: "" }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, aborted: true });
+  assert.deepEqual(world.fed.aborts[0].args, ["abc", undefined]);
+});
+
+// Gate 3 runs before the body is parsed here for the same reason it does on the
+// send route (R76): the exists read is the one thing that may not be skipped.
+await checkAsync("POST abort rejects a malformed body before reaching the session DO", async () => {
+  for (const body of ["{oops", "null", "[]", '{"operationId":5}', '{"operationId":""}']) {
+    const world = setup();
+    const res = await handleFetch(
+      req("/api/sessions/abc/abort", "POST", { body }),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 400, `body ${body} must be a 400`);
+    assert.deepEqual(world.registry.calls, [["exists", "abc"]], `body ${body} must not touch the registry`);
+    assert.equal(world.fed.aborts.length, 0, `body ${body} must not abort anything`);
+  }
 });
 
 await checkAsync("touch never runs when the send 401s", async () => {
@@ -993,7 +1062,7 @@ await checkAsync("touch never runs when the send 401s", async () => {
   assert.equal(res.status, 401);
   assert.deepEqual(world.registry.touchCalls, []);
   assert.deepEqual(world.registry.calls, []);
-  assert.equal(world.fed.chats.length, 0, "an unauthenticated send must not reach the agent");
+  assert.equal(world.fed.submits.length, 0, "an unauthenticated send must not reach the agent");
 });
 
 // Gate 3 runs BEFORE the body is parsed (R76), so the existence read happens even on
@@ -1012,7 +1081,7 @@ await checkAsync("touch never runs when the body is malformed", async () => {
     assert.deepEqual(world.registry.calls, [["exists", "abc"]], `body ${body} must not touch`);
     assert.deepEqual(world.registry.touchCalls, [], `body ${body} must not bump updated_at`);
     assert.deepEqual(world.promised, [], `body ${body} must schedule nothing`);
-    assert.equal(world.fed.chats.length, 0, `body ${body} must not reach the agent`);
+    assert.equal(world.fed.submits.length, 0, `body ${body} must not reach the agent`);
   }
 });
 
@@ -1026,7 +1095,7 @@ await checkAsync("POST /api/sessions/main/message reaches the legacy DO as sessi
   assert.deepEqual(world.fed.names, ["main"], "no prefix and no special case (R38)");
   assert.deepEqual(world.registry.touchCalls, [["main", undefined]]);
   assert.equal(
-    world.fed.chats[0].args[2],
+    world.fed.submits[0].args[2],
     "main",
     "main is the session id the legacy DO owns, so the DO's own guard accepts it"
   );
@@ -1135,12 +1204,12 @@ await checkAsync("?token= authenticates only the GET stream shape", async () => 
 
 // --------------------------------------------- Task 8: gates, refusal, shapes ----
 
-// Step 3a: the DO's refusal is a `code` on the reply, and R76 turns it into a 403.
+// Step 3a: the DO's refusal is a `code` on the receipt, and R76 turns it into a 403.
 // Amendment 2 is the half a status code cannot show: a refused request is not
 // activity, so the registry must not hear about it at all, not even via waitUntil.
-await checkAsync("a reply carrying code invalid_session is 403 and skips the touch (R71 amendment 2)", async () => {
+await checkAsync("a receipt carrying code invalid_session is 403 and skips the touch (R71 amendment 2)", async () => {
   const world = setup();
-  world.fed.reply = { reply: "", code: "invalid_session" };
+  world.fed.submitReply = { code: "invalid_session" };
   const res = await handleFetch(
     req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
     world.env,
@@ -1148,25 +1217,11 @@ await checkAsync("a reply carrying code invalid_session is 403 and skips the tou
   );
   assert.equal(res.status, 403);
   assert.deepEqual(await res.json(), { ok: false, error: "invalid session" });
+  assert.equal(world.fed.submits.length, 1, "the DO made the refusal, the worker only relayed it");
+  assert.equal(world.fed.waits.length, 0, "a refused turn is never waited on");
   assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the refusal must not touch the registry");
   assert.deepEqual(world.registry.touchCalls, []);
   assert.deepEqual(world.promised, [], "the 403 branch schedules nothing");
-});
-
-// The 403 is a DIFFERENT code from the codes that already mean something, so a reply
-// carrying any other code is still an answer the person gets (Task 7's pin above).
-await checkAsync("only code invalid_session refuses; another code is still a 200 answer", async () => {
-  for (const code of ["pending", "still_a_reply", ""]) {
-    const world = setup();
-    world.fed.reply = { reply: "an answer", code };
-    const res = await handleFetch(
-      req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
-      world.env,
-      world.ctx
-    );
-    assert.equal(res.status, 200, `code ${JSON.stringify(code)} is not a refusal`);
-    assert.deepEqual(world.registry.touchCalls, [["abc", undefined]]);
-  }
 });
 
 // Amendment 4 (R73): `idFromName` cannot report absence, so gate 3 is the only thing
@@ -1190,7 +1245,7 @@ await checkAsync("a well-formed id with no registry row is 404 and never address
     assert.deepEqual(await res.json(), { ok: false, error: "not found" });
     assert.deepEqual(world.registry.calls, [["exists", GHOST]], "the existence read is the only registry call");
     assert.deepEqual(world.fed.names, [], "gate 3 runs before idFromName, so no DO is instantiated");
-    assert.equal(world.fed.chats.length, 0, `${method} ${path}: an uncreated session must not run the agent`);
+    assert.equal(world.fed.submits.length, 0, `${method} ${path}: an uncreated session must not run the agent`);
     assert.equal(world.fed.messageCalls.length, 0, `${method} ${path}: an uncreated session must not read a transcript`);
     assert.deepEqual(world.registry.touchCalls, []);
     assert.deepEqual(world.promised, []);
@@ -1320,7 +1375,7 @@ await checkAsync("with AGENT_API_KEY empty every session route 401s and nothing 
     );
     assert.equal(res.status, 401, `${method} ${path} must fail closed with no key`);
     assert.deepEqual(world.registry.calls, [], `${method} ${path} must not touch the registry`);
-    assert.equal(world.fed.chats.length, 0, `${method} ${path} must not reach the agent`);
+    assert.equal(world.fed.submits.length, 0, `${method} ${path} must not reach the agent`);
     assert.equal(world.fed.messageCalls.length, 0, `${method} ${path} must not read a transcript`);
   }
 });
@@ -1361,7 +1416,7 @@ await checkAsync("a path with an unknown shape 404s", async () => {
     );
     assert.equal(res.status, 404, `${method} ${path} is not one of the seven routes`);
     assert.deepEqual(world.registry.calls, [], `${method} ${path} must not reach the registry`);
-    assert.equal(world.fed.chats.length, 0, `${method} ${path} must not reach the agent`);
+    assert.equal(world.fed.submits.length, 0, `${method} ${path} must not reach the agent`);
     assert.equal(world.fed.messageCalls.length, 0, `${method} ${path} must not read a transcript`);
   }
 });

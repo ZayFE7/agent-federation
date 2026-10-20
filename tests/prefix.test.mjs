@@ -63,11 +63,17 @@ check("the multi-line form still parses (s flag)", () => {
 
 check("the dispatch site cannot run a directive with an empty arg", () => {
   // parseDirective never returns an empty arg (the guard inside it is the belt),
-  // and the branches strip to a truthy command before any sandbox call.
-  const execBranch = agentSrc.match(/if\s*\(directive\?\.kind === "exec"\)\s*\{[\s\S]*?\n {4}\}/)?.[0] ?? "";
+  // and the branches strip to a truthy command before any sandbox call. Task 23
+  // moved the branch into runDirect, so the arg now arrives through `kind`.
+  const execBranch = agentSrc.match(/if\s*\(kind === "exec"\)\s*\{[\s\S]*?\n {4}\}/)?.[0] ?? "";
   assert.ok(execBranch, "src/agent.ts has no exec directive branch to read");
-  assert.ok(/const cmd = directive\.arg;/.test(execBranch), "the branch must take the parsed arg");
+  assert.ok(/const cmd = arg;/.test(execBranch), "the branch must take the parsed arg");
   assert.match(execBranch, /this\.runSandbox\(cmd, session\)/);
+  const runDirect = agentSrc.match(/private\s+async\s+runDirect\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(
+    /const arg = parseDirective\(content\)\?\.arg \?\? "";/.test(runDirect),
+    "the arg must come from parseDirective, never from the raw message"
+  );
   assert.equal(/runSandbox\(\s*""/.test(agentSrc), false, "no empty-command dispatch may exist");
 });
 

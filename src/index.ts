@@ -79,10 +79,14 @@ export default {
       }
       const tier: ChatTier | undefined =
         body.tier === "primary" || body.tier === "cheap" ? body.tier : undefined;
-      // Unscoped by design until Task 22: this route has always addressed main, so
-      // chat's third argument (Task 8's session id, R65) stays absent here and the DO's
-      // own scope check has nothing to refuse.
-      const result = await agentStub(env).chat(body.content, tier);
+      // Task 23 keeps the legacy alias alive as submit-then-wait: the turn is
+      // durable before this handler waits on it, so the console keeps working
+      // until Task 25 moves it onto the stream. Pinned to main, as it always was.
+      const receipt = await agentStub(env).submitTurn(body.content, tier, MAIN_DO_NAME);
+      if ("code" in receipt) {
+        return Response.json({ error: "invalid session" }, { status: 403 });
+      }
+      const result = await agentStub(env).waitTurn(MAIN_DO_NAME, receipt.operationId);
       return Response.json(result);
     }
 

@@ -15,6 +15,8 @@ import type {
   ChatTier,
   Env,
   ToolRun,
+  TurnReceipt,
+  TurnRefusal,
 } from "./types";
 import { DEFAULT_MODEL_CHEAP } from "./types";
 import {
@@ -54,7 +56,7 @@ import { fetchRouter } from "./router";
 import { parseDirective } from "./directives";
 import { buildHarness } from "./harness";
 import { MAX_STEPS_CHAT } from "./harness-config";
-import { framesFromEvent } from "./frames";
+import { framesFromEvent, TOOL_WIDGET } from "./frames";
 import { StreamHub, streamIdFor } from "./stream-hub";
 import { messageText, replyFrom } from "./reply";
 import {
@@ -447,6 +449,96 @@ export class FederationAgent extends Agent<Env> {
   }
 
   /**
+   * Task 23: durably submit one turn and return its stream id without awaiting
+   * the model. A long multi-step build then outlives the Worker's wall clock: the
+   * harness runs it from its own durable job queue, and the console watches the
+   * operation stream. Deterministic turns (a directive or the capability answer)
+   * open the same stream and write their own frames behind `waitUntil`.
+   */
+  async submitTurn(
+    content: string,
+    tier: ChatTier | undefined,
+    sessionId: string
+  ): Promise<TurnReceipt | TurnRefusal> {
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
+      return { code: "invalid_session" };
+    }
+    const chatTier: ChatTier = tier === "cheap" ? "cheap" : "primary";
+    // The operation id is ours so the stream exists before the first chunk: an
+    // observer that only reacts to run-start would race the async open().
+    const operationId = crypto.randomUUID();
+    const streamId = streamIdFor(sessionId, operationId);
+    await this.hub.open(streamId, sessionId);
+    // Task 9's fiber takes its words from the triggering message and runs on its
+    // own fiber, so starting it here cannot delay the submit response.
+    this.startTitle(content, sessionId);
+    logMessage(this.db(), "user", content, chatTier);
+
+    const direct = this.directKind(content);
+    if (direct) {
+      // Still real work (a sandbox fetch can outlive the response), so it runs
+      // behind waitUntil and reports through the same stream.
+      this.ctx.waitUntil(
+        this.streamDirect(content, direct, chatTier, sessionId, streamId)
+      );
+      return { operationId, streamId };
+    }
+
+    this.stashTurn(sessionId, { content, tier: chatTier });
+    try {
+      const receipt = await this.harness.session(sessionId).submit(content, {
+        source: "server",
+        operationId,
+      });
+      return { operationId: receipt.operationId, streamId };
+    } catch (err) {
+      this.turnUser.delete(sessionId);
+      this.hub.fail(streamId, String(err));
+      throw err;
+    }
+  }
+
+  /**
+   * The legacy wait path (Task 23 keeps `/api/message` working as submit then
+   * wait): resolve one submitted operation into the same AgentReply shape
+   * `chat()` returns. The transcript is read after settlement because a
+   * `wait()` result carries only the text, and `replyFrom` projects tool runs
+   * from the assistant message.
+   */
+  async waitTurn(sessionId: string, operationId: string): Promise<AgentReply> {
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
+      return { reply: "", code: "invalid_session" };
+    }
+    try {
+      const session = this.harness.session(sessionId);
+      const outcome = await session.wait(operationId);
+      let messages: readonly UIMessage[] = [];
+      try {
+        messages = await session.messages();
+      } catch {
+        messages = [];
+      }
+      return replyFrom({
+        status: outcome.status,
+        ...(outcome.status === "done" ? { text: outcome.text } : { reason: outcome.reason }),
+        messages,
+      });
+    } catch (err) {
+      return { reply: "agent error: " + String(err) };
+    }
+  }
+
+  /** Stop one operation, or everything open in the session when no id is named. */
+  async abortTurn(sessionId: string, operationId?: string): Promise<boolean> {
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return false;
+    try {
+      return await this.harness.session(sessionId).abort(operationId);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * One turn, from whichever DO the caller addressed.
    *
    * Deterministic directives and the capability answer short-circuit BEFORE the
@@ -460,15 +552,70 @@ export class FederationAgent extends Agent<Env> {
     tier: ChatTier | undefined,
     session: string
   ): Promise<AgentReply> {
-    const sql = this.db();
     const chatTier: ChatTier = tier === "cheap" ? "cheap" : "primary";
-    logMessage(sql, "user", content, chatTier);
+    logMessage(this.db(), "user", content, chatTier);
+
+    const direct = this.directKind(content);
+    if (direct) return this.runDirect(content, direct, chatTier, session);
+
+    // The harness owns the model's context. The user row above and the assistant
+    // row `onHarnessTurnEnd` writes are the console's display projection only.
+    this.stashTurn(session, { content, tier: chatTier });
+    // The operation id is ours so the stream exists before the first chunk: an
+    // observer that only reacts to run-start would race the async open().
+    const opId = crypto.randomUUID();
+    await this.hub.open(streamIdFor(session, opId), session);
+    const result = await this.harness.session(session).prompt(content, {
+      source: "server",
+      operationId: opId,
+    });
+    return replyFrom(result);
+  }
+
+  /** The three deterministic turn kinds. Nothing here reaches the model. */
+  private directKind(content: string): "exec" | "search" | "capabilities" | null {
+    const directive = parseDirective(content);
+    if (directive) return directive.kind;
+    if (/what can you do|what are you (able|capable)|your capabilit|help me with what/i.test(content)) {
+      return "capabilities";
+    }
+    return null;
+  }
+
+  /** Run a deterministic turn; the caller has already logged the user row. */
+  private async runDirect(
+    content: string,
+    kind: "exec" | "search" | "capabilities",
+    chatTier: ChatTier,
+    session: string
+  ): Promise<AgentReply> {
+    const sql = this.db();
+
+    // Deterministic answer for capability questions: the free-tier model
+    // ignores the system prompt here, and this is factual product copy. Every
+    // line comes from the one capability table (Task 16).
+    if (kind === "capabilities") {
+      const wired = capabilitiesText(EXPECTED_TOOLS);
+      const missing = capabilityList(EXPECTED_TOOLS)
+        .filter((c) => !c.wired)
+        .map((c) => c.label.toLowerCase())
+        .join(", ");
+      const reply =
+        "Right now I can:\n" +
+        wired +
+        (missing ? `\n\nNot connected yet: ${missing}.` : "") +
+        "\n\nSafety: high-risk commands (destructive, irreversible, outward-facing, or spending money) are held for your explicit approval before they run.";
+      logMessage(sql, "assistant", reply, chatTier);
+      await this.rememberGlobal("exchange", `User: ${content}\nAgent: ${reply}`, 1);
+      return { reply, state: "idle", verb: "Ready" };
+    }
+
+    const arg = parseDirective(content)?.arg ?? "";
 
     // The human typed this command themselves, so it is already authorized and
     // bypasses the isRisky approval gate that guards MODEL-emitted commands.
-    const directive = parseDirective(content);
-    if (directive?.kind === "exec") {
-      const cmd = directive.arg;
+    if (kind === "exec") {
+      const cmd = arg;
       const result = await this.runSandbox(cmd, session);
       const output = formatExecResult(result);
       await this.rememberGlobal(
@@ -490,61 +637,86 @@ export class FederationAgent extends Agent<Env> {
 
     // Deterministic web search: "search: <query>" hits Parallel with no LLM
     // round trip, so search stays reliable even when the free model skips tools.
-    if (directive?.kind === "search") {
-      const query = directive.arg;
-      let output: string;
-      let ok = false;
-      try {
-        const results = await this.searchParallel(query);
-        output = formatSearchResults(query, results, 5);
-        ok = results.length > 0;
-      } catch (err) {
-        output = `web search error: ${err instanceof Error ? err.message : String(err)}`;
+    const query = arg;
+    let output: string;
+    let ok = false;
+    try {
+      const results = await this.searchParallel(query);
+      output = formatSearchResults(query, results, 5);
+      ok = results.length > 0;
+    } catch (err) {
+      output = `web search error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    logMessage(sql, "assistant", output, chatTier);
+    if (ok) await this.rememberGlobal("tool", `direct web_search: "${query}" -> ok`, 2);
+    const runs: ToolRun[] = [
+      { name: "web_search", cmd: query, output: output.slice(0, 4000), ok },
+    ];
+    return {
+      reply: output,
+      state: ok ? "search" : "error",
+      verb: ok ? "Searched the web" : "Search failed",
+      tools: runs,
+    };
+  }
+
+  /**
+   * Run a deterministic turn into its operation stream: a live widget for the
+   * exec/search arm, a text frame for the capability answer, then `done`. The
+   * frame shapes are the same ones the harness path emits, so the console needs
+   * no branch for which kind of turn produced them.
+   */
+  private async streamDirect(
+    content: string,
+    kind: "exec" | "search" | "capabilities",
+    tier: ChatTier,
+    session: string,
+    streamId: string
+  ): Promise<void> {
+    const toolCallId = crypto.randomUUID();
+    const tool = kind === "exec" ? "exec" : kind === "search" ? "web_search" : null;
+    const input = parseDirective(content)?.arg ?? "";
+    try {
+      if (tool) {
+        const widget = TOOL_WIDGET[tool] ?? { label: "Tool", state: "code" };
+        this.hub.write(streamId, {
+          t: "tool-start",
+          id: toolCallId,
+          name: tool,
+          label: widget.label,
+          state: widget.state,
+          input,
+        });
+        this.hub.write(streamId, {
+          t: "tool-progress",
+          id: toolCallId,
+          phase: kind === "exec" ? "running" : "searching",
+          message: kind === "exec" ? "Running command" : "Searching the web",
+          fraction: null,
+        });
+      } else {
+        this.hub.write(streamId, { t: "state", state: "think", verb: "Thinking" });
       }
-      logMessage(sql, "assistant", output, chatTier);
-      if (ok) await this.rememberGlobal("tool", `direct web_search: "${query}" -> ok`, 2);
-      const runs: ToolRun[] = [
-        { name: "web_search", cmd: query, output: output.slice(0, 4000), ok },
-      ];
-      return {
-        reply: output,
-        state: ok ? "search" : "error",
-        verb: ok ? "Searched the web" : "Search failed",
-        tools: runs,
-      };
+      const reply = await this.runDirect(content, kind, tier, session);
+      if (tool) {
+        const run = reply.tools?.[0];
+        this.hub.write(streamId, {
+          t: "tool-result",
+          id: toolCallId,
+          name: tool,
+          ok: run?.ok ?? false,
+          output: run?.output ?? reply.reply,
+        });
+      } else {
+        this.hub.write(streamId, { t: "text", d: reply.reply });
+      }
+      if (reply.state) {
+        this.hub.write(streamId, { t: "state", state: reply.state, verb: reply.verb ?? "" });
+      }
+      this.hub.finish(streamId, session, reply.reply);
+    } catch (err) {
+      this.hub.fail(streamId, String(err));
     }
-
-    // Deterministic answer for capability questions: the free-tier model
-    // ignores the system prompt here, and this is factual product copy. Every
-    // line comes from the one capability table (Task 16).
-    if (/what can you do|what are you (able|capable)|your capabilit|help me with what/i.test(content)) {
-      const wired = capabilitiesText(EXPECTED_TOOLS);
-      const missing = capabilityList(EXPECTED_TOOLS)
-        .filter((c) => !c.wired)
-        .map((c) => c.label.toLowerCase())
-        .join(", ");
-      const reply =
-        "Right now I can:\n" +
-        wired +
-        (missing ? `\n\nNot connected yet: ${missing}.` : "") +
-        "\n\nSafety: high-risk commands (destructive, irreversible, outward-facing, or spending money) are held for your explicit approval before they run.";
-      logMessage(sql, "assistant", reply, chatTier);
-      await this.rememberGlobal("exchange", `User: ${content}\nAgent: ${reply}`, 1);
-      return { reply, state: "idle", verb: "Ready" };
-    }
-
-    // The harness owns the model's context. The user row above and the assistant
-    // row `onHarnessTurnEnd` writes are the console's display projection only.
-    this.stashTurn(session, { content, tier: chatTier });
-    // The operation id is ours so the stream exists before the first chunk: an
-    // observer that only reacts to run-start would race the async open().
-    const operationId = crypto.randomUUID();
-    await this.hub.open(streamIdFor(session, operationId), session);
-    const result = await this.harness.session(session).prompt(content, {
-      source: "server",
-      operationId,
-    });
-    return replyFrom(result);
   }
 
   private stashTurn(session: string, turn: StashedTurn): void {
