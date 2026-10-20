@@ -9,6 +9,7 @@ import type {
   ToolRun,
 } from "./types";
 import { DEFAULT_MODEL_CHEAP, DEFAULT_MODEL_PRIMARY } from "./types";
+import { SANDBOX_HOME } from "./capabilities";
 import {
   dueTasks,
   enqueueTask,
@@ -605,14 +606,14 @@ export class FederationAgent extends Agent<Env> {
         function: {
           name: "exec",
           description:
-            "Run one shell command in the agent's persistent Linux sandbox: files, Python, downloads, data work, installs, anything that needs a real machine. Internet works. Your home working directory is /workspace (save_workspace snapshots it so files survive restarts). Always gets back exit code, stdout, and stderr: on a non-zero exit read stderr before retrying, and never report success for a command that failed. Prefer python3 for Python; write multi-line scripts to a file and run the file rather than inlining them.",
+            `Run one shell command in the agent's persistent Linux sandbox: files, Python, downloads, data work, installs, anything that needs a real machine. Internet works. Your home working directory is ${SANDBOX_HOME}, and files there survive until the sandbox lease expires unless you call save_workspace first. Always gets back exit code, stdout, and stderr: on a non-zero exit read stderr before retrying, and never report success for a command that failed. Prefer python3 for Python; write multi-line scripts to a file and run the file rather than inlining them.`,
           parameters: {
             type: "object",
             properties: {
               cmd: {
                 type: "string",
                 description:
-                  "A single shell command line, e.g. 'python3 solve.py' or 'ls -la /workspace'. Times out after 60s; background long-running work (e.g. 'sleep 120 &').",
+                  `A single shell command line, e.g. 'python3 solve.py' or 'ls -la ${SANDBOX_HOME}'. Times out after 60s; background long-running work (e.g. 'sleep 120 &').`,
               },
             },
             required: ["cmd"],
@@ -665,7 +666,7 @@ export class FederationAgent extends Agent<Env> {
         function: {
           name: "save_workspace",
           description:
-            "Snapshot the sandbox /workspace directory into persistent storage so files survive sandbox restarts. Call after creating important files.",
+            `Snapshot the sandbox ${SANDBOX_HOME} directory into persistent storage so files survive a sandbox restart. Nothing is snapshotted automatically: call this yourself after creating important files.`,
           parameters: { type: "object", properties: {} },
         },
       },

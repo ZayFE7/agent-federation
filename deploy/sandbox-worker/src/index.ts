@@ -11,6 +11,9 @@ interface Env {
 
 const BOOT_TIMEOUT_MS = 300_000; // 5 min lease
 const POOL_TTL = 600; // reuse window seconds
+// Mirrors src/capabilities.ts: this worker builds separately and cannot import
+// from the brain's src/. tests/paths.test.mjs pins that both say /home/user.
+const SANDBOX_HOME = "/home/user";
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -47,14 +50,13 @@ async function poolGet(env: Env, sessionId: string): Promise<Sandbox> {
   } catch {
     /* non-fatal: alias is best-effort */
   }
-  // Persistent workspaces: restore last snapshot into /workspace on fresh boots.
+  // Persistent workspaces: restore the last snapshot into the home dir on a
+  // fresh boot. The home dir always exists, so no mkdir.
   try {
     const tar = await env.SESSIONS.get(`ws:tar:${sessionId}`);
     if (tar) {
       await sbx.commands.run(
-        "mkdir -p /workspace && cd /workspace && echo '" +
-          tar +
-          "' | base64 -d | tar xzf -",
+        `cd ${SANDBOX_HOME} && echo '` + tar + `' | base64 -d | tar xzf -`,
         { timeoutMs: 30_000 }
       );
     }
@@ -106,11 +108,11 @@ export default {
         return json(502, { error: String(e) });
       }
       const packed = await sbx.commands.run(
-        "mkdir -p /workspace && cd /workspace && tar czf - . 2>/dev/null | base64 -w0",
+        `cd ${SANDBOX_HOME} && tar czf - . 2>/dev/null | base64 -w0`,
         { timeoutMs: 30_000 }
       );
       const b64 = (packed.stdout || "").trim();
-      if (!b64) return json(200, { ok: true, bytes: 0, note: "workspace empty" });
+      if (!b64) return json(200, { ok: true, bytes: 0, note: "home directory empty" });
       await env.SESSIONS.put(`ws:tar:${sid}`, b64);
       return json(200, { ok: true, bytes: Math.floor((b64.length * 3) / 4), sessionId: sid });
     }
@@ -134,6 +136,7 @@ export default {
       try {
         const result = await sbx.commands.run(body.cmd, {
           timeoutMs: 60_000,
+          cwd: SANDBOX_HOME,
           onError: () => {},
         });
         await keepWarm();

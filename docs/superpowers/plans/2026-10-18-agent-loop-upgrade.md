@@ -244,8 +244,8 @@ git commit -m "P0: chat and decide use the ROUTER service binding; delete the de
 ### Task 4: Make the sandbox home directory real
 
 **Files:**
-- Modify: `deploy/sandbox-worker/src/index.ts` (the `/run` call at `:135`, the restore command at `:55`, the snapshot command at `:109`)
-- Modify: `src/agent.ts` prompt text and the `save_workspace` description (`/workspace` appears at `:607`, `:614`, `:667`, `:834`)
+- Modify: `deploy/sandbox-worker/src/index.ts` (the `/run` `commands.run` call, the restore command in `poolGet`, the snapshot command in the `/workspace/snapshot` handler)
+- Modify: `src/agent.ts` prompt text and the `save_workspace` description (three `/workspace` mentions promise a directory, plus one inside the snapshot endpoint URL)
 - Create: `src/capabilities.ts`
 - Create: `tests/paths.test.mjs`
 
@@ -256,7 +256,7 @@ git commit -m "P0: chat and decide use the ROUTER service binding; delete the de
 
 `tests/paths.test.mjs` reads `src/agent.ts`, `src/capabilities.ts`, and `deploy/sandbox-worker/src/index.ts` as text and asserts: `src/agent.ts` contains no `/workspace` occurrence that is not inside the literal `zay-sandbox/workspace/snapshot`; `SANDBOX_HOME` is exported from `src/capabilities.ts` and equals `"/home/user"`; the sandbox worker declares its own `const SANDBOX_HOME` with the identical value; and every `tar` command string in the sandbox worker interpolates `SANDBOX_HOME` rather than a literal `/workspace`.
 
-**Why the route keeps its name.** Of the four `/workspace` mentions in `src/agent.ts`, three (`:607`, `:614`, `:667`) promise a filesystem directory that does not exist, which is the bug this task fixes. The fourth (`:834`) is the path half of `https://zay-sandbox/workspace/snapshot`, an endpoint name on the private service binding to the sandbox worker, matched by `url.pathname === "/workspace/snapshot"` there. Renaming it would move a wire contract for no user benefit, and Task 30 owns that endpoint's future. So the assertion is written as an exception, not as a zero count: a test that demanded zero occurrences could only pass by breaking the fetch or the route.
+**Why the route keeps its name.** Of the four `/workspace` mentions in `src/agent.ts`, three promise a filesystem directory that does not exist (the `exec` tool description, its `cmd` parameter example, and the `save_workspace` description), which is the bug this task fixes. The fourth is the path half of `https://zay-sandbox/workspace/snapshot` in the `save_workspace` handler, an endpoint name on the private service binding to the sandbox worker, matched by `url.pathname === "/workspace/snapshot"` there. Renaming it would move a wire contract for no user benefit, and Task 30 owns that endpoint's future. So the assertion is written as an exception, not as a zero count: a test that demanded zero occurrences could only pass by breaking the fetch or the route.
 
 **Why the sandbox worker declares its own const.** `deploy/sandbox-worker/` is a separate Worker with its own `wrangler.jsonc` and `package.json`, and the root `tsconfig.json` has `"include": ["src"]`, so it cannot import `src/capabilities.ts`. The two declarations are kept honest by this text test rather than by a shared import.
 
@@ -270,7 +270,7 @@ Declare `const SANDBOX_HOME = "/home/user"` at the top of `deploy/sandbox-worker
 
 - [ ] **Step 4: Fix the prompt and the tool description**
 
-Replace the three `/workspace` mentions that describe a directory (`:607`, `:614`, `:667`) with the home path, and say plainly that the directory is snapshotted at the end of a turn (Phase 4 makes that true; until then the description says "on request" rather than promising automation). Do not touch `:834`.
+Replace the three `/workspace` mentions that describe a directory (the `exec` description, the `cmd` parameter example, the `save_workspace` description) with the home path, interpolating `SANDBOX_HOME` rather than typing it again, and say plainly that nothing is snapshotted automatically until Phase 4 makes it so: the description tells the model to call the tool on request instead of promising a turn-end snapshot it does not get. Do not touch the snapshot endpoint URL.
 
 - [ ] **Step 5: Run the test and typecheck**
 
