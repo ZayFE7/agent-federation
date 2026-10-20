@@ -644,8 +644,10 @@ After the first assistant reply in a session whose registry title is still `PLAC
 Four things this step pins, each because the plan's prose alone left it inventable wrong:
 
 - **`firstMessage` is the triggering turn's content**, the string `chat` was called with - not a read
-  from the store. There is no by-session first-row reader and `recentMessages` is DESC
-  (`src/memory.ts:144`), so a store-based "first message" would need a new query for no benefit.
+  from the store. There is no by-session first-row reader: `recentMessages` returns the last six
+  messages oldest-first (`src/memory.ts:143-149` selects DESC then reverses), so its first row is
+  the session's first message only while the session has six or fewer; a store-based "first
+  message" would need a new query for no benefit.
   Consequence worth stating in the commit message: `main` arrives with the seeded placeholder, so it
   gets its model title on its **next** turn, not on the turn that seeded it.
 - **The completion is a string the harness does not hand you.** `fetchRouter(env, path, body, stream,
