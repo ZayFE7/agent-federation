@@ -94,7 +94,7 @@ first fire**.
 (`src/memory.ts:180-185`) — pure UTC arithmetic on the epoch. Same function is used by the tool
 (`src/agent.ts:807`) and by the re-arm (`src/agent.ts:368`). No user timezone exists anywhere in the
 data model: not in `tasks`, not in `memories` (the only mention is a *test fixture*,
-`tests/memory.test.mjs:91`), not in `Env` (`src/types.ts:51-77`), not in `wrangler.jsonc:37-40`.
+`tests/memory.test.mjs:91`), not in `Env` (`src/types.ts`), not in `wrangler.jsonc:37-40`.
 
 ### Where results go
 

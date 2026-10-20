@@ -222,7 +222,7 @@ Run `node tests/router.test.mjs`. Expected: `Cannot find module ... src/router.t
 
 - [ ] **Step 3: Implement `src/router.ts`**
 
-Three exported functions plus `fetchRouter`, which is `env.ROUTER ? env.ROUTER.fetch(request) : fetch(request)`. Dependency-free: it must import only `./types.ts` types, so the test can load the `.ts` directly. Set no `X-Tier` header anywhere in this file, by construction. `Env.ROUTER?: Fetcher` is already declared at `src/types.ts:68` and the `ROUTER` service binding to `zay-router` is already in `wrangler.jsonc:11-12`, so neither needs adding; changing no `wrangler.jsonc` value in this task means the two trees stay as they are.
+Three exported functions plus `fetchRouter`, which is `env.ROUTER ? env.ROUTER.fetch(request) : fetch(request)`. Dependency-free: it must import only `./types.ts` types, so the test can load the `.ts` directly. Set no `X-Tier` header anywhere in this file, by construction. `Env.ROUTER?: Fetcher` is already declared in `src/types.ts` and the `ROUTER` service binding to `zay-router` is already in `wrangler.jsonc:11-12`, so neither needs adding; changing no `wrangler.jsonc` value in this task means the two trees stay as they are.
 
 - [ ] **Step 4: Re-run the test**
 

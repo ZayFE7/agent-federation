@@ -50,9 +50,9 @@ until that secret exists.
 ## Env (names only, never values)
 
 `ROUTER_URL`, `MODEL_PRIMARY`, `MODEL_CHEAP` are plain vars (`wrangler.jsonc:37-41`);
-`ROUTER_KEY` and `AGENT_API_KEY` are secrets documented at `:42-44`; `STATE_KEY`
-(`src/types.ts:58`) and `SBOX_TOKEN` (`:68`) are secrets **no wrangler config mentions**;
-`RENDER_URL` (`:60`) is optional and absent from `wrangler.jsonc`; bindings are `ASSETS`,
+`ROUTER_KEY` and `AGENT_API_KEY` are secrets documented at `:42-44`; `STATE_KEY` and
+`SBOX_TOKEN` (both declared in `src/types.ts` `Env`) are secrets **no wrangler config mentions**;
+`RENDER_URL` is optional and absent from `wrangler.jsonc`; bindings are `ASSETS`,
 `ROUTER`, `SANDBOX`, `FEDERATION_AGENT`.
 
 `.dev.vars` is byte-identical to `.dev.vars.example` and contains **no working credentials**:

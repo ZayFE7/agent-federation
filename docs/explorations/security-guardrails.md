@@ -222,7 +222,7 @@ prefer storing exit status only, not raw output.
 - Sandbox never receives brain secrets: only `{cmd, sessionId}` crosses the binding
   (`src/agent.ts:473-479`); `ROUTER_KEY`/`PARALLEL_API_KEY`/`AGENT_API_KEY` stay in
   the brain/router Workers, and `E2B_API_KEY`/`SBOX_TOKEN` stay in the sandbox Worker.
-  Good isolation (env-var names listed in `wrangler.jsonc:41-48`, `src/types.ts:51-77`).
+  Good isolation (env-var names listed in `wrangler.jsonc:41-48`, `src/types.ts` `Env`).
 - KV snapshot restore injection risk is nil: the interpolated value is pure base64
   (`deploy/sandbox-worker/src/index.ts:52-59`) — the alphabet excludes quotes.
 - `recall` escapes LIKE wildcards (`src/memory.ts:87-108`); all SQL is parameterized.

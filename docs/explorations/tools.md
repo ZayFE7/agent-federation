@@ -182,7 +182,7 @@ Tools tab parity — documented at :56 and :573, OK.
 Selected for workflow shape (5 new tools, not one-per-endpoint). Not recommended: a *set model
 tier* tool — tier is a channel-level argument (`onMessage` `src/agent.ts:338`, scheduled runs pin
 "cheap" :354); letting the model escalate its own cost is a footgun, and `primary`/`cheap` are
-currently the same model anyway (`src/types.ts:48-49`). Not recommended: a separate *edit_file* —
+currently the same model anyway (`src/types.ts` `DEFAULT_MODEL_*`). Not recommended: a separate *edit_file*:
 `files.write` (full content) + `exec` covers it at this scale.
 
 ### 1. `files` — workspace file I/O (highest priority)

@@ -16,7 +16,7 @@ Objects. This report analyses only the **web search** path (`web_search` tool + 
 - The `web_search` tool schema offered to the model — `src/agent.ts:614-636`.
 - The tool dispatch inside the model loop — `src/agent.ts:841-847`.
 - The deterministic direct path for `search: <query>` — `src/agent.ts:87`, `552-567`.
-- Config/env wiring: optional `PARALLEL_API_KEY` (`src/types.ts:73-74`, `wrangler.jsonc:45`).
+- Config/env wiring: optional `PARALLEL_API_KEY` (`src/types.ts` `Env`, `wrangler.jsonc:45`).
 - Capability copy that promises search — `src/agent.ts:58`, `575-577`, `587`.
 - Provider research: Parallel Web Search official docs (request/response/params/pricing) + a short
   comparison vs Brave / Tavily / Exa / Perplexity Sonar.
@@ -30,7 +30,7 @@ Objects. This report analyses only the **web search** path (`web_search` tool + 
 - Endpoint: `POST https://api.parallel.ai/v1/search` — **correct, current** version (not the older
   `/v1beta`). Confirmed against `docs.parallel.ai/api-reference/search`.
 - Auth header: `x-api-key: this.env.PARALLEL_API_KEY` (`:443`). Key is **optional**
-  (`src/types.ts:74`); when unset the helper short-circuits with a non-error text (`:430-432`).
+  (`src/types.ts` `Env`); when unset the helper short-circuits with a non-error text (`:430-432`).
 - `content-type: application/json` (`:444`).
 - Body (the whole payload): `{ objective: q, search_queries: [q] }` (`:444`) — i.e. the **same**
   trimmed string is used as both the natural-language objective and the single query string.

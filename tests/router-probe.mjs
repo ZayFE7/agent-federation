@@ -3,7 +3,8 @@
 // WHICH LAYER THIS MEASURES. There are two routers in this stack and they are not the same
 // program, so a row printed here is a statement about ONE of them:
 //   - MEASURED LAYER = the local omniroute. The base URL comes from BLIP_ROUTER_URL, which the
-//     deploy tree's .dev.vars sets to a 127.0.0.1 origin with a 3304-entry catalog. This script
+//     deploy tree's .dev.vars sets to a 127.0.0.1 origin with a 3300-plus entry catalog (the
+//     exact count moves as models are added, so it is deliberately not pinned here). This script
 //     can reach that layer offline and nothing else; every "the router says" below means omniroute.
 //   - NOT MEASURED = production's LLM path, which goes through the `ROUTER` service binding to
 //     the `zay-router` Worker. That Worker runs its own resolve() over aliases, combos,
@@ -158,7 +159,7 @@ const escBoundary = "(?<![A-Za-z0-9_-])(?:%L)(?![A-Za-z0-9_-])";
 
 function buildRedactor(literals) {
   const res = SECRET_PATTERNS.slice();
-  if (literals.length) res.push(new RegExp(escBoundary.replace("%L", literals.join("|")), "gi"));
+  if (literals.length) res.push(new RegExp(escBoundary.replace("%L", () => literals.join("|")), "gi"));
   return (v) => {
     let s = String(v ?? "");
     for (const re of res) s = s.replace(re, "[redacted]");
@@ -527,8 +528,10 @@ async function probeOne(model, emitRow) {
       ? note(`sse ${isSse ? "yes" : "NO"}`, `events ${stream.events}, chunks ${stream.argChunks.length}, names ${stream.names.length}, text ${stream.text ? "yes" : "no"}, body ${red((stream.body || "").replace(/\s+/g, " ").slice(0, 100))}`)
       : note(`events ${stream.events}, ${streamRes === "ok"
           // `parsed` is the reassembled arguments object; the key names are what makes this row
-          // checkable by a reader, the raw string alone could be any fragment.
-          ? `tool args reassembled into valid JSON, keys ${red(Object.keys(parsed).join("+") || "none")}: ${red(joined.slice(0, 60))}`
+          // checkable by a reader, the raw string alone could be any fragment. `|| {}` because a
+          // body of the four characters `null` parses cleanly and would throw here, killing the
+          // whole sweep for one row.
+          ? `tool args reassembled into valid JSON, keys ${red(Object.keys(parsed || {}).join("+") || "none")}: ${red(joined.slice(0, 60))}`
           : "text-only stream, no tool delta"}`,
         `chunks ${stream.argChunks.length}, streamed-turn usage ${stream.sawUsage ? "yes" : "no"}, streamed-turn finish_reason=${stream.finish || "absent"}, streamed-turn done marker ${stream.sawFinish ? "yes" : "no"}`)]);
 

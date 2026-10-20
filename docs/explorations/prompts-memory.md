@@ -212,14 +212,14 @@ Tasks tab shows yesterday's stale checklist indefinitely (`ui/index.html:362-364
 
 **[Major, now closed on the model side] "Cheap" tier was the same model as primary, so
 self-critique cost a full-price second generation.** This was written when
-`DEFAULT_MODEL_CHEAP === DEFAULT_MODEL_PRIMARY` (`src/types.ts:48-49`) and both wrangler vars were
+`DEFAULT_MODEL_CHEAP === DEFAULT_MODEL_PRIMARY` (`src/types.ts`) and both wrangler vars were
 set to the identical `cf/@cf/qwen/qwen3.8-27b` (`wrangler.jsonc:37-40`). `tierModel("cheap")`
 therefore returned the same model string (`src/agent.ts:420-425`), the `X-Tier: cheap` header was
 the only difference, and the cloud router resolved purely on `model`
 (`deploy/router-worker/src/index.ts:396-423`), not on the tier header, so the "bounded cheap-tier
 pass" comment was inaccurate: a second full model call on the same model. Both halves of that are
 no longer true. The vars are pinned to two different probed ids (`gemini3.7flash` for primary,
-`gemini3.8flash` for cheap, `wrangler.jsonc:38-39`), `src/types.ts:48-49` now defaults to the same
+`gemini3.8flash` for cheap, `wrangler.jsonc:38-39`), `src/types.ts` `DEFAULT_MODEL_*` now defaults to the same
 pair, and `X-Tier` was deleted outright in `e85d0c3` (Task 3), so nothing is sent that the router
 ignores. What still holds is the cost shape: the `Self-critique (phase 1)` block in `src/agent.ts`
 is one more full generation on every tool-using turn, worst case 20 s of extra latency on top of
@@ -324,7 +324,7 @@ Ordered by value/effort. All are additive and keep the `recall`/`remember` signa
   `{steps, done?: number[]}` so `plan_done` is not needed for every step; raise the cap for
   `primary` and lower it for `cheap` instead of the flat 4 at `src/agent.ts:715`.
 - **N7 (S) — make the tier real or remove the pretense.** Point `MODEL_CHEAP` at an
-  actually-cheap lane (`src/types.ts:49`, `wrangler.jsonc:39`) — the router already supports
+  actually-cheap lane (`src/types.ts` `DEFAULT_MODEL_CHEAP`, `wrangler.jsonc:39`), and the router already supports
   aliases/combos/prefixes (`deploy/router-worker/src/index.ts:81-133`) — or collapse
   `tierModel` to one model and say so, so cost claims are honest.
 - **N8 (S-M) — gate the self-critique.** Trigger only when something looks wrong:
@@ -539,7 +539,7 @@ Cost: ≤2 cheap-tier calls/day worst case, ~0 most days; a few SQL statements o
    card) and create one Vectorize index, or do you want the no-new-service Path B (SQLite
    BLOB + brute-force) first? B is strictly smaller and migrates into A.
 3. What is the *actual* cheap lane? `MODEL_CHEAP` is now a distinct probed id
-   (`gemini3.8flash`, `src/types.ts:48-49` and `wrangler.jsonc:39`), so the tier is no longer a
+   (`gemini3.8flash`, `src/types.ts` `DEFAULT_MODEL_*` and `wrangler.jsonc:39`), so the tier is no longer a
    no-op; the open part is whether a zero-measured-cost free tier is a lane you want to depend on.
    Confirm it, or drop the tier pretense.
 4. Self-critique: keep it as a gated pass (failures/long deliverables only), keep it always-on

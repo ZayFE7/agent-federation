@@ -18,7 +18,7 @@ ranked list of upstream connections and forwards with the right credential shape
 model/provider layer it depends on. It also cross-references how the brain actually calls it:
 the chat/tool loop `src/agent.ts:715-745`, the self-critique call `src/agent.ts:967-1019`, the
 mascot decider `src/index.ts:149-189`, the TEMP debug branch `src/index.ts:128-139`, and the
-tier model names `src/agent.ts:412-417` + `src/types.ts:48-49`.
+tier model names `src/agent.ts:412-417` + `src/types.ts` `DEFAULT_MODEL_*`.
 
 In scope: resolution order, prefix/provider conventions, openai-vs-anthropic request building,
 the fetch/rotate loop and its retry policy, the SSE-collapse path, error/observability shape,
@@ -67,7 +67,7 @@ walks candidates in that order (`:423`).
 primary→`MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY`. They no longer resolve to the same string: the
 committed config (`wrangler.jsonc:38-39`) pins `gemini3.7flash` for primary and `gemini3.8flash`
 for cheap, the two ids probed on the local omniroute in
-`docs/explorations/router-capability-probe.md`, and `src/types.ts:48-49` defaults to the same pair.
+`docs/explorations/router-capability-probe.md`, and `src/types.ts` `DEFAULT_MODEL_*` defaults to the same pair.
 So **MODEL_CHEAP !== MODEL_PRIMARY**: the two tiers hit different upstream models at different
 measured costs, and the earlier state (both `cf/@cf/qwen/qwen3.8-27b`, one identical upstream) is
 history. `X-Tier` no longer exists at all: it was deleted in `e85d0c3` (Task 3) because it was the
@@ -210,7 +210,7 @@ reaches the router Worker, so none of the `RETRY_STATUSES`/rotation/404/502 logi
 not an upstream HTTP status.
 
 **Why chat uses the URL and not the service binding.** A same-account binding `ROUTER` →
-`zay-router` already exists (`wrangler.jsonc:12`, typed `src/types.ts:68`, used in the decider
+`zay-router` already exists (`wrangler.jsonc:12`, typed `Env.ROUTER` in `src/types.ts`, used in the decider
 `src/index.ts:168-170`). Chat was deliberately *not* cut over (see
 `docs/explorations/streaming.md:40-44`), and there is a real reason: the edge twin is **unseeded**
 (KV `router:config` missing → `/v1/*` 401, `/health` 500, `README.md:61-70`) and its **v2 OAuth

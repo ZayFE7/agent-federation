@@ -39,7 +39,7 @@ quality, guardrail policy, sandbox semantics.
   non-streaming `choices[0].message` shape — there is no delta/chunk type anywhere in `src/`.
 - Transport note: `src/agent.ts:718` uses plain `fetch(ROUTER_URL)` even though a same-account
   service binding `ROUTER` → `zay-router` exists (`wrangler.jsonc:12`, declared
-  `src/types.ts:68`, and already used in the `/api/decide` pattern `src/index.ts:168-170`). So
+  `src/types.ts` `Env.ROUTER`, and already used in the `/api/decide` pattern `src/index.ts:168-170`). So
   every chat round trip — and, if we flip the flag, every token — currently traverses the public
   `ROUTER_URL` (local omniroute behind a cloudflared quick tunnel), not the edge-native binding.
 
@@ -172,7 +172,7 @@ On a `forceStream` lane that means the brain sees no tool calls and empty conten
   can reach the browser earlier without changing all four.
 - **[Critical] The quick-tunnel hop is where SSE actually breaks.** Brain→router goes over public
   `ROUTER_URL` (`src/agent.ts:718`) instead of the existing `ROUTER` service binding
-  (`wrangler.jsonc:12`, `src/types.ts:68`). Cloudflared quick tunnels are documented to buffer GET
+  (`wrangler.jsonc:12`, `src/types.ts` `Env.ROUTER`). Cloudflared quick tunnels are documented to buffer GET
   responses so `text/event-stream` arrives all-at-once rather than incrementally (upstream report
   and workaround: use `POST` or a named tunnel —
   https://github.com/cloudflare/cloudflared/issues/1449). A naive `stream:true` flip can therefore
