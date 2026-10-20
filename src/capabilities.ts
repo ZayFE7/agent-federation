@@ -6,13 +6,11 @@
 // description tells the model to write where it has no permission.
 export const SANDBOX_HOME = "/home/user";
 
-// The tool set src/agent.ts must keep in step with the prompt's tool list.
-// tests/tools.test.mjs compares the wired set against this.
+// The tool set buildTools must wire by default. tests/tools.test.mjs compares
+// the built set against this constant, so the two cannot drift.
 export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
   "exec",
   "web_search",
   "schedule_task",
   "save_workspace",
-  "plan",
-  "plan_done",
 ]);

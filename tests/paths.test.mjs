@@ -11,7 +11,7 @@ import { SANDBOX_HOME, EXPECTED_TOOLS } from "../src/capabilities.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
-const agentSrc = readFileSync(join(root, "src", "agent.ts"), "utf8");
+const toolsSrc = readFileSync(join(root, "src", "tools.ts"), "utf8");
 const sandboxSrc = readFileSync(join(root, "deploy", "sandbox-worker", "src", "index.ts"), "utf8");
 
 // The snapshot endpoint URL is a route name on the zay-sandbox worker, not a
@@ -34,22 +34,20 @@ check("SANDBOX_HOME is the real E2B home", () => {
   assert.equal(SANDBOX_HOME, "/home/user");
 });
 
-check("EXPECTED_TOOLS is the six wired tools, frozen", () => {
+check("EXPECTED_TOOLS is the four wired tools, frozen", () => {
   assert.deepEqual([...EXPECTED_TOOLS], [
     "exec",
     "web_search",
     "schedule_task",
     "save_workspace",
-    "plan",
-    "plan_done",
   ]);
   assert.ok(Object.isFrozen(EXPECTED_TOOLS), "EXPECTED_TOOLS must be frozen");
 });
 
-check("src/agent.ts names no /workspace directory", () => {
-  const withoutEndpoint = agentSrc.split(ENDPOINT).join("");
+check("src/tools.ts names no /workspace directory", () => {
+  const withoutEndpoint = toolsSrc.split(ENDPOINT).join("");
   const hits = withoutEndpoint.match(/\/workspace/g) || [];
-  assert.equal(hits.length, 0, `${hits.length} /workspace occurrence(s) left in src/agent.ts`);
+  assert.equal(hits.length, 0, `${hits.length} /workspace occurrence(s) left in src/tools.ts`);
 });
 
 check("sandbox worker declares its own SANDBOX_HOME", () => {
