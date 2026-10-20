@@ -7,7 +7,7 @@
 // plus dependency-free modules only (R39), and takes both DO namespaces from the
 // `env` argument instead of the classes they are bound to.
 //
-// WHAT IT OWNS (R42): the six routes below and nothing else. `/api/message`,
+// WHAT IT OWNS (R42): the seven routes below and nothing else. `/api/message`,
 // `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six
 // `/internal/vault/*` handlers keep their existing addressing in src/index.ts;
 // src/index.ts delegates here on the `/api/sessions` prefix only. `/api/plan` is
@@ -19,9 +19,13 @@
 //   DELETE /api/sessions/:id              { ok }
 //   GET    /api/sessions/:id/messages     { ok, messages: MessageRow[] }  (oldest first)
 //   POST   /api/sessions/:id/message      the agent's AgentReply, unmodified
+//   GET    /api/sessions/:id/stream/:id   the durable operation stream, as SSE
 //
 // Every one of them 401s when `authed()` fails and 400s on a malformed body. A shape
 // the family does not serve, including a wrong method on a shape it does, is 404.
+// The ONE exception to header auth is a GET of the stream shape: `EventSource`
+// cannot set an Authorization header, so that request may carry `?token=` and is
+// checked by `tokenOk` (which still fails closed on a blank key).
 //
 // THE GATE ORDER for a session-addressed request (R76), and what each answer means:
 //
@@ -79,7 +83,7 @@
 import { idFromSegment, limitFrom, readJson } from "./registry-input.ts";
 import { PLACEHOLDER_TITLE } from "./registry-store.ts";
 import { isSessionId } from "./session-scope.ts";
-import { authed } from "./auth.ts";
+import { authed, tokenOk } from "./auth.ts";
 import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
 import type { AgentReply, AgentStub, ChatTier, Env, RegistryStub } from "./types";
@@ -234,6 +238,37 @@ async function sendMessage(
   return json(reply);
 }
 
+/**
+ * GET /api/sessions/:id/stream/:streamId
+ *
+ * `sseResponse` runs where the Streams instance lives, so this forwards to the
+ * owning session DO; the worker itself never reads a chunk. The stream id must name
+ * THIS session, and the DO repeats that check before it serves anything: the route
+ * gates hostile ids, and the DO does not trust the route (defense in depth, R38).
+ *
+ * The Authorization header is dropped on the internal hop (the DO is not
+ * authenticated) and `token` is stripped from the URL; `from` and `Last-Event-ID`
+ * survive, because they are how a reconnecting EventSource resumes mid-stream.
+ */
+async function sessionStreamProxy(
+  request: Request,
+  env: Env,
+  id: string,
+  rawStreamId: string
+): Promise<Response> {
+  const streamId = idFromSegment(rawStreamId);
+  if (!streamId || !streamId.startsWith(`s:${id}:`)) return fail(404, "not found");
+  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+  const target = new URL(request.url);
+  target.pathname = `/internal/stream/${encodeURIComponent(streamId)}`;
+  target.searchParams.delete("token");
+  const headers = new Headers(request.headers);
+  headers.delete("authorization");
+  return agentStubFor(env, id).fetch(
+    new Request(target.toString(), { method: "GET", headers })
+  );
+}
+
 function isSessionsPath(pathname: string): boolean {
   return pathname === SESSIONS_PATH || pathname.startsWith(`${SESSIONS_PATH}/`);
 }
@@ -254,12 +289,19 @@ export async function handleFetch(
 ): Promise<Response> {
   const url = new URL(request.url);
   if (!isSessionsPath(url.pathname)) return fail(404, "not found");
-  if (!authed(request, env)) return fail(401, "unauthorized");
 
   const parts = url.pathname
     .slice(SESSIONS_PATH.length)
     .split("/")
     .filter((segment) => segment !== "");
+
+  // EventSource cannot set headers, so the stream shape alone may authenticate with
+  // ?token=. Every other route keeps the bearer-only rule.
+  const streamShape =
+    request.method === "GET" && parts.length === 3 && parts[1] === "stream";
+  if (!authed(request, env) && !(streamShape && tokenOk(request, url, env))) {
+    return fail(401, "unauthorized");
+  }
 
   // GET /api/sessions  |  POST /api/sessions
   if (parts.length === 0) {
@@ -295,6 +337,11 @@ export async function handleFetch(
       return json({ ok: true });
     }
     return fail(404, "not found");
+  }
+
+  // GET /api/sessions/:id/stream/:streamId
+  if (parts.length === 3 && parts[1] === "stream" && request.method === "GET") {
+    return sessionStreamProxy(request, env, id, parts[2]);
   }
 
   // GET /api/sessions/:id/messages  |  POST /api/sessions/:id/message

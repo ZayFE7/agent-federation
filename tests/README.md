@@ -130,15 +130,16 @@ i.e. dead code. That was wrong; the code wins.)
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the harness approval round trip needs a Durable
   Object and is only exercised live.
-- `npm test` runs twenty offline files (`approval`, `context`, `fake-sql`, `guardrails`,
-  `harness`, `markdown`, `memory`, `paths`, `prefix`, `provider`, `registry`, `registry-input`,
-  `registry-store`, `reply`, `router`, `routes`, `session-scope`, `sql-handle`, `titles`,
-  `tools`). No offline
+- `npm test` runs twenty-three offline files (`approval`, `context`, `fake-sql`, `frames`,
+  `guardrails`, `harness`, `markdown`, `memory`, `paths`, `prefix`, `provider`, `registry`,
+  `registry-input`, `registry-store`, `reply`, `router`, `routes`, `session-scope`, `sql-handle`,
+  `sse-auth`, `stream-hub`, `titles`, `tools`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
-- `routes.test.mjs` covers the six worker-side session routes: `GET /api/sessions?limit=N`,
+- `routes.test.mjs` covers the seven worker-side session routes: `GET /api/sessions?limit=N`,
   `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`,
-  `GET /api/sessions/:id/messages` and `POST /api/sessions/:id/message`. Every agent-side answer
+  `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message` and
+  `GET /api/sessions/:id/stream/:streamId`. Every agent-side answer
   in it is a stub, so it proves nothing about the Durable Object behind those calls, and it
   never opens `project/agent-federation`, so it cannot see deploy-tree drift.
 - `fake-sql.mjs` is the fixture the pure-store tests of later tasks build on, and
@@ -226,10 +227,14 @@ The first offline test that reaches the worker's HTTP surface. It imports the re
 `../src/routes.ts` and calls `handleFetch()` on constructed `Request` objects against a fake
 `env`: a fake registry DO stub that records `list`/`put`/`rename`/`remove`/`touch` in call
 order, and a fake `FEDERATION_AGENT` namespace whose stub answers `chat` and `messages` from a
-fixture table and records the exact arity each call used. No browser, no dev server and no
-Durable Object. The checks cover the six routes: the `{ ok, sessions, truncated }` list and its
+fixture table, answers `fetch` with a recorded `text/event-stream` response, and records the exact
+arity each call used. No browser, no dev server and no
+Durable Object. The checks cover the seven routes: the `{ ok, sessions, truncated }` list and its
 `limit` clamp, the created row, the rename title rule, the delete, the transcript read from the
-addressed session, and the reply passthrough with `touch(id)` and no opts, plus the 401, 400 and
+addressed session, the reply passthrough with `touch(id)` and no opts, and the stream proxy
+(query-token auth on the GET stream shape only, the owning DO addressed, `token` and
+`authorization` stripped on the internal hop, `from`/`Last-Event-ID` preserved), plus the 401, 400
+and
 404 paths. Two rules that nothing else can test are pinned in the same file: R39, a source scan
 proving `routes.ts` value-imports only dependency-free `src/*.ts` modules and addresses both DOs
 through `env` instead of importing a class, and R42, proving `src/index.ts` keeps its own

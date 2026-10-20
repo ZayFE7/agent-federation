@@ -7,7 +7,7 @@ import type {
   ThinkTurnContext,
   ThinkTurnEndContext,
 } from "agents/harness/think";
-import { Streams } from "agents/streams";
+import { Streams, sseResponse } from "agents/streams";
 import type { ToolSet, UIMessage } from "ai";
 import type {
   AgentReply,
@@ -40,7 +40,7 @@ import {
   type TaskRow,
 } from "./memory";
 import { toSqlHandle, type SqlTag } from "./sql-handle";
-import { MAIN_DO_NAME, sessionScopeOk } from "./session-scope";
+import { MAIN_DO_NAME, assertSessionScope, sessionScopeOk } from "./session-scope";
 import { PLACEHOLDER_TITLE } from "./registry-store";
 import { parseTitle, titleMessages } from "./titles";
 import {
@@ -138,6 +138,7 @@ function toolOutputOf(messages: readonly UIMessage[], toolCallId: string): strin
 
 export class FederationAgent extends Agent<Env> {
   private readonly harness: ThinkHarness<ToolSet>;
+  private readonly streams: Streams;
   private readonly hub: StreamHub;
   private readonly turnUser = new Map<string, StashedTurn[]>();
   /** The running operation per session, so tool progress lands on its stream. */
@@ -153,6 +154,7 @@ export class FederationAgent extends Agent<Env> {
     // disjoint: the harness writes think:<uuid>, the hub writes s:<session>:<op>.
     const streams = new Streams({ maxChunkBytes: 64 * 1024 });
     this.lifecycle.use(streams);
+    this.streams = streams;
     this.hub = new StreamHub(streams, this.db());
     // Exactly one harness for every lane (R70). maxSteps is a construction-time
     // number in agents 0.28.1, and a second harness would mean a second Sessions
@@ -369,6 +371,47 @@ export class FederationAgent extends Agent<Env> {
     // holds a task row for that alarm to be needed for. Task 33 owns the redesign.
     if (!this.isMainInstance()) return;
     await this.armTick();
+  }
+
+  /**
+   * HTTP traffic that is neither an RPC nor a WebSocket upgrade. The only route
+   * this DO serves is the internal stream read; the worker proxies a public SSE
+   * request here so `sseResponse` runs beside the Streams instance that owns the
+   * chunks.
+   */
+  async onRequest(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const prefix = "/internal/stream/";
+    if (request.method !== "GET" || !url.pathname.startsWith(prefix)) {
+      return new Response("not found", { status: 404 });
+    }
+    let streamId: string;
+    try {
+      streamId = decodeURIComponent(url.pathname.slice(prefix.length));
+    } catch {
+      return new Response("not found", { status: 404 });
+    }
+    return this.internalStream(request, streamId);
+  }
+
+  /**
+   * Serve one operation stream as SSE. The stream id names its session, and this DO
+   * asserts that the named session is its own before reading a single chunk: a
+   * routing mistake upstream must not turn one session's DO into a reader of
+   * another session's stream.
+   */
+  async internalStream(request: Request, streamId: string): Promise<Response> {
+    const match = /^s:([A-Za-z0-9_-]{1,40}):(.+)$/.exec(streamId);
+    if (!match) return new Response("not found", { status: 404 });
+    try {
+      assertSessionScope(this.ctx, (name) => this.idFor(name), match[1]);
+    } catch {
+      return new Response("forbidden", { status: 403 });
+    }
+    return sseResponse(this.streams, streamId, {
+      request,
+      heartbeatMs: 30_000,
+    });
   }
 
   /**

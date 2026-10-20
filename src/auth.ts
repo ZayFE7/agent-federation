@@ -32,3 +32,19 @@ export function authed(request: Request, env: Env): boolean {
     .trim();
   return safeEq(got, key);
 }
+
+/**
+ * The SSE variant of `authed`: `EventSource` cannot set an Authorization header,
+ * so the stream route also accepts `?token=<AGENT_API_KEY>`. Both halves fail
+ * closed on an unset/blank key and compare through `safeEq`.
+ */
+export function tokenOk(request: Request, url: URL, env: Env): boolean {
+  const key = (env.AGENT_API_KEY ?? "").trim();
+  if (!key) return false;
+  const header = (request.headers.get("Authorization") ?? "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  if (header && safeEq(header, key)) return true;
+  const query = (url.searchParams.get("token") ?? "").trim();
+  return query.length > 0 && safeEq(query, key);
+}

@@ -101,12 +101,14 @@ function fakeAgentNamespace() {
   const addressed = [];
   const chats = [];
   const messageCalls = [];
+  const fetches = [];
   const stubs = new Map();
   const ns = {
     names,
     addressed,
     chats,
     messageCalls,
+    fetches,
     reply: { reply: "pong" },
     messageRows: [],
     idFromName(name) {
@@ -127,6 +129,16 @@ function fakeAgentNamespace() {
           async messages(...args) {
             messageCalls.push({ name, args, arity: args.length });
             return ns.messageRows.map((row) => ({ ...row }));
+          },
+          // Task 22: the worker forwards the GET stream to the owning DO and never
+          // reads a chunk itself, so the recording stub is the whole worker-side
+          // contract: which URL, which headers, and whose DO.
+          async fetch(request) {
+            fetches.push({ name, request });
+            return new Response("data: {\"t\":\"done\"}\n\n", {
+              status: 200,
+              headers: { "content-type": "text/event-stream" },
+            });
           },
         });
       }
@@ -1020,6 +1032,107 @@ await checkAsync("POST /api/sessions/main/message reaches the legacy DO as sessi
   );
 });
 
+// -------------------------------------------- GET /api/sessions/:id/stream/:id ----
+
+// Task 22: EventSource cannot set an Authorization header, so this ONE shape may
+// authenticate with ?token=. The route forwards to the DO that owns the Streams
+// instance, because sseResponse must run where the chunks were written.
+const STREAM_SEGMENT = encodeURIComponent("s:abc:op1");
+
+await checkAsync("GET stream accepts ?token= and proxies to the session DO", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req(`/api/sessions/abc/stream/${STREAM_SEGMENT}?token=k&from=7`, "GET", { headers: {} }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") ?? "", /text\/event-stream/);
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the row is checked before the DO is addressed");
+  assert.deepEqual(world.fed.names, ["abc"], "the owning session's DO is the only one addressed");
+  assert.equal(world.fed.fetches.length, 1);
+  const forwarded = world.fed.fetches[0];
+  const target = new URL(forwarded.request.url);
+  assert.equal(target.pathname, `/internal/stream/${STREAM_SEGMENT}`);
+  assert.equal(target.searchParams.get("token"), null, "the shared key never crosses the internal hop");
+  assert.equal(target.searchParams.get("from"), "7", "from survives, so sseResponse can resume");
+  assert.equal(forwarded.request.headers.get("authorization"), null, "the internal hop carries no auth header");
+});
+
+await checkAsync("GET stream keeps Last-Event-ID on the internal hop", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req(`/api/sessions/abc/stream/${STREAM_SEGMENT}`, "GET", {
+      headers: { ...AUTH, "last-event-id": "5" },
+    }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200, "the bearer header alone is still accepted");
+  const forwarded = world.fed.fetches[0].request;
+  assert.equal(forwarded.headers.get("last-event-id"), "5", "a reconnect resumes from its cursor");
+});
+
+await checkAsync("a stream id that does not name the session is 404 before any DO", async () => {
+  for (const raw of [encodeURIComponent("s:def:op1"), "op1", "s%3Aabc"]) {
+    const world = setup();
+    const res = await handleFetch(
+      req(`/api/sessions/abc/stream/${raw}`, "GET"),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 404, `${raw} must not name another session's stream`);
+    assert.deepEqual(world.registry.calls, [], `${raw} must not reach the registry`);
+    assert.deepEqual(world.fed.names, [], `${raw} must not address a DO`);
+    assert.equal(world.fed.fetches.length, 0, `${raw} must not reach a DO fetch`);
+  }
+});
+
+await checkAsync("GET stream for an absent session is 404 and never addresses a DO", async () => {
+  const world = setup({ rows: [] });
+  const res = await handleFetch(
+    req(`/api/sessions/abc/stream/${STREAM_SEGMENT}`, "GET"),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 404);
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]]);
+  assert.deepEqual(world.fed.names, []);
+  assert.equal(world.fed.fetches.length, 0);
+});
+
+await checkAsync("a wrong query token is 401 and reaches nothing", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req(`/api/sessions/abc/stream/${STREAM_SEGMENT}?token=wrong`, "GET", { headers: {} }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 401);
+  assert.deepEqual(world.registry.calls, []);
+  assert.deepEqual(world.fed.names, []);
+  assert.equal(world.fed.fetches.length, 0);
+});
+
+await checkAsync("?token= authenticates only the GET stream shape", async () => {
+  for (const [path, method, body] of [
+    ["/api/sessions/abc/message?token=k", "POST", JSON.stringify({ content: "hi" })],
+    ["/api/sessions/abc/messages?token=k", "GET", undefined],
+    ["/api/sessions?token=k", "GET", undefined],
+    ["/api/sessions/abc?token=k", "DELETE", undefined],
+  ]) {
+    const world = setup();
+    const res = await handleFetch(
+      req(path, method, body === undefined ? { headers: {} } : { headers: {}, body }),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 401, `${method} ${path}: the query token is not a general credential`);
+    assert.deepEqual(world.registry.calls, []);
+    assert.equal(world.fed.fetches.length, 0);
+  }
+});
+
 // --------------------------------------------- Task 8: gates, refusal, shapes ----
 
 // Step 3a: the DO's refusal is a `code` on the reply, and R76 turns it into a 403.
@@ -1196,6 +1309,7 @@ await checkAsync("with AGENT_API_KEY empty every session route 401s and nothing 
     ["/api/sessions/abc", "DELETE", undefined],
     ["/api/sessions/abc/messages", "GET", undefined],
     ["/api/sessions/abc/message", "POST", JSON.stringify({ content: "hello" })],
+    [`/api/sessions/abc/stream/${STREAM_SEGMENT}?token=k`, "GET", undefined],
   ];
   for (const [path, method, body] of routes) {
     const world = setup({ key: "" });
@@ -1221,7 +1335,7 @@ await checkAsync("a wrong bearer token is 401 on the list route", async () => {
   assert.equal(res.status, 401);
 });
 
-// The six routes the Interfaces block enumerates are the whole family: a shape, or
+// The seven routes the Interfaces block enumerates are the whole family: a shape, or
 // a method on a shape, that is not one of them is a 404. `GET /api/sessions/:id` is
 // deliberately NOT one of them: the plan lists no single-session read on the worker
 // (the registry DO has one under /registry/, and Task 22 adds /:id/stream/:streamId).
@@ -1245,7 +1359,7 @@ await checkAsync("a path with an unknown shape 404s", async () => {
       world.env,
       world.ctx
     );
-    assert.equal(res.status, 404, `${method} ${path} is not one of the six routes`);
+    assert.equal(res.status, 404, `${method} ${path} is not one of the seven routes`);
     assert.deepEqual(world.registry.calls, [], `${method} ${path} must not reach the registry`);
     assert.equal(world.fed.chats.length, 0, `${method} ${path} must not reach the agent`);
     assert.equal(world.fed.messageCalls.length, 0, `${method} ${path} must not read a transcript`);

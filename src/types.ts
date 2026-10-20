@@ -87,6 +87,8 @@ export interface ChatRequest {
  * transcript order (R71 amendment 3).
  */
 export interface AgentStub {
+  /** The DO's own HTTP entry: WS upgrades and internal routes such as /internal/stream. */
+  fetch(request: Request): Promise<Response>;
   chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply>;
   messages(limit?: number): Promise<MessageRow[]>;
   jobList(): Promise<unknown[]>;
