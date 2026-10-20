@@ -6,7 +6,7 @@
 
 **Goal:** Replace BLIP's hand-rolled 4-round chat loop with a durable, streamed, multi-session agent built on the `agents` SDK's `ThinkHarness`, `Sessions`, and `Streams` capabilities, and give it sub-agents and a persistent per-session workspace.
 
-**Architecture:** One `FederationAgent` Durable Object class serves many sessions: the worker resolves `sessionId -> idFromName("s:" + sessionId)` and the DO verifies that the session it was handed belongs to its own DO id. Each instance installs a `ThinkHarness` (its own durable loop and transcript store) plus a `Streams` capability we own, which mirrors harness turn events into a small frame protocol served as Server-Sent Events by `sseResponse`. A separate registry DO holds the session index so the sidebar can list sessions transactionally. Sandboxes become per-session with tarballs in R2 instead of base64 in KV. Sub-agents are dynamic-agent facets of the same class, and their progress frames are forwarded into the parent's stream.
+**Architecture:** One `FederationAgent` Durable Object class serves many sessions: the worker resolves `sessionId -> idFromName(sessionId)` (the id is the DO name, no prefix, so the legacy `main` DO stays reachable as session `main`) and the DO verifies that the session it was handed belongs to its own DO id. Each instance installs a `ThinkHarness` (its own durable loop and transcript store) plus a `Streams` capability we own, which mirrors harness turn events into a small frame protocol served as Server-Sent Events by `sseResponse`. A separate registry DO holds the session index so the sidebar can list sessions transactionally. Sandboxes become per-session with workspace tarballs in the existing free KV namespace (R26; R2 needs a verification card this project does not have). Sub-agents are dynamic-agent facets of the same class, and their progress frames are forwarded into the parent's stream.
 
 **Tech Stack:** Cloudflare Workers, Durable Objects with SQLite, `agents@0.28.1` (`ThinkHarness`, `Sessions`, `Streams`, `DynamicAgents`), `ai` v6/v7 plus `@ai-sdk/openai-compatible`, `zod`, a Cloudflare Worker LLM router (`zay-router`) reached by service binding, E2B sandboxes reached by service binding (`zay-sandbox`), R2, and one vanilla-JS console in `ui/index.html` whose visual design is unchanged.
 
@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Edit in `repo-clone/` only (git source of truth). After each commit, copy every changed file to the matching path under `project/agent-federation/` and prove they match: `diff <repo-clone path> <deploy path>` must print nothing. **Never** copy `wrangler.jsonc` across the trees: the deploy tree's copy carries the live `vars.ROUTER_URL`. When a task changes a `wrangler.jsonc` value, hand-edit both files to the same value. The mirroring rule applies to files the deploy tree must *execute*: `src/`, `tests/`, `deploy/`. It does not apply to `docs/`: the deploy tree has no `docs/` directory at all (verified), and creating one would put the public repo's documentation into the deploy artifact. A task whose only change is a doc is done after its repo-clone commit.
+- Edit in `repo-clone/` only (git source of truth). After each commit, copy every changed file to the matching path under `project/agent-federation/` and prove they match: `diff <repo-clone path> <deploy path>` must print nothing. **Never** copy `wrangler.jsonc` across the trees: the deploy tree's copy carries the live `vars.ROUTER_URL`. When a task changes a `wrangler.jsonc` value, hand-edit both files to the same value. The mirroring rule applies to files the deploy tree must *execute*: `src/`, `tests/`, `deploy/`, and `ui/` (R48: the deploy tree serves the console from its own `ui/index.html`, so a `ui/` change that is not mirrored is a change `wrangler dev` cannot see). It does not apply to `docs/`: the deploy tree has no `docs/` directory at all (verified), and creating one would put the public repo's documentation into the deploy artifact. A task whose only change is a doc is done after its repo-clone commit.
 - Deploys run from `project/agent-federation/`. Before any deploy run `npx wrangler whoami`; if not authenticated, stop and tell the user. The user runs logins. The user pushes; this plan commits locally only.
 - Never commit or print: `.dev.vars`, `deploy/router-worker/router-config.json`, any `sk-` key, any `trycloudflare.com` tunnel URL, any live secret value. The repo `ZayFE7/agent-federation` is public. Before any push the user runs `git status` and reads it line by line.
 - Never write the strings `oc/` or `muse-spark` anywhere: forbidden model families.
@@ -79,7 +79,7 @@ Modified files:
 | `package.json` | Pin `agents`, add `ai` + `@ai-sdk/openai-compatible`, add `test` script. |
 | `src/types.ts` | `WORKSPACE_R2`, `REGISTRY` DO namespace, model-id fields, remove the dead `ChatTier` tier claim. |
 | `src/agent.ts` | Loses the 4-round loop, `plan`/`plan_done`, the blocking self-critique call, `recentMessages(sql, 6)`, and the `sessionId: "agent"` hardcode. Gains the harness install and the session-scoped methods. |
-| `src/index.ts` | Thin: authenticates, delegates every `/api/*` to `src/routes.ts`, serves assets. `/api/plan` removed, `/api/message` kept as an alias until Task 25. |
+| `src/index.ts` | Thin, but not empty: it authenticates, delegates the `/api/sessions*` family to `src/routes.ts`, and keeps `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and `/internal/vault/*` until a named task moves them (R42). `/api/plan` is removed by Task 15, not Phase 1. `/api/message` stays as an alias until Task 25. |
 | `src/memory.ts` | Keeps `memories` and `tasks`; `messages` table reads/writes deleted. |
 | `ui/index.html` | Session list, `EventSource` client, incremental append, live tool widgets, stop button. Design untouched. |
 | `deploy/sandbox-worker/src/index.ts` | `/home/user` cwd, R2 snapshot/restore, per-session sandboxes, idle GC. |
@@ -122,7 +122,7 @@ Run `npm test`. Expected: `PASS tests/guardrails.test.mjs` then `1/1 files passe
 
 - [ ] **Step 5: Write `tests/fake-sql.mjs`**
 
-`export function fakeSql()` returns a dependency-free object with: `stmts` (every `[query, bindings]` pushed in call order), `log` (the `{ results, meta }` each `exec` returned), `query(needle, rows, changes = 0)` to seed (chainable), and `exec(query, ...bindings)` returning `{ results, meta: { changes } }`. `rowsFor`/`changesFor` resolve the **first** seeded needle contained in the statement. Only statements matching `/^\s*select\b/i` get rows; a write returns `{ results: [] }`, like the real `ctx.storage.sql`, so a store test cannot accidentally pass on a `DELETE`. `meta.changes` is whatever the seed declared, default 0, so `deleteSession` can assert on affected rows. `tests/fake-sql.test.mjs` is the contract test; `src/memory.ts`'s `SqlHandle` type gains the `meta` field in Task 5, which owns that widening.
+`export function fakeSql()` returns a dependency-free object with: `stmts` (every `[query, bindings]` pushed in call order), `log` (the `{ results }` each `exec` returned), `query(needle, rows)` to seed (chainable), and `exec(query, ...bindings)` returning `{ results }`. `rowsFor` resolves the **first** seeded needle contained in the statement. Only statements matching `/^\s*select\b/i` get rows; a write returns `{ results: [] }`, like the real `ctx.storage.sql`, so a store test cannot accidentally pass on a `DELETE`. **No `meta`, and no `changes`:** `ctx.storage.sql.exec()` hands back a `SqlStorageCursor`, which exposes `rowsRead`/`rowsWritten` and nothing per statement, so a fake that answers `.meta.changes` lets a store test pass against an interface production cannot supply (R37). The shipped fake still carries that field and `tests/fake-sql.test.mjs` still asserts on it; **Task 5 removes both**, and `src/memory.ts`'s `SqlHandle` type is *not* widened, which is the opposite of what this section said before the Phase 1 amendments. Nothing in this plan asserts an affected-row count. `tests/fake-sql.test.mjs` is the contract test.
 
 - [ ] **Step 6: Make `live-matrix.mjs` runnable**
 
@@ -289,32 +289,58 @@ git commit -m "P0: sandbox runs and snapshots /home/user; stop promising a path 
 
 ## Phase 1: Sessions
 
+**Phase 1 amendments, ruled 2026-10-20 after the pre-flight conflict scan.** The scan found ten
+blocking defects in Tasks 5-10 as originally written: some mandated something the platform cannot do,
+others contradicted a neighbouring task. They are ruled in full in
+`.superpowers/sdd/2026-10-18-agent-loop-upgrade/progress.md` (R37-R48, with the evidence). The lines
+below were corrected in place, and where a task's text still disagrees with this block, **this block
+wins**:
+
+- No affected-row booleans anywhere. `SqlStorageCursor` has no `meta`, so `renameSession` and
+  `deleteSession` return `void` (R37).
+- One session id namespace: the bare id is the DO name, `idFromName(sessionId)`, no `"s:"` prefix, and
+  `main` is an ordinary session id, so the legacy DO stays reachable with no special case (R38).
+- `src/session-scope.ts` exports `isSessionId()` and every other copy of that regex imports it (R38).
+- Task 8 widens `chat` to take the session id, and owns `src/index.ts` in its own commit (R39).
+- Task 7 owns only the `/api/sessions*` family, gains `POST /api/sessions/:id/message`, and reads the
+  existing `messages` table for the transcript route. `/api/message`, `/api/tasks`, `/api/approve`,
+  `/api/decide`, the WS upgrade and `/internal/vault/*` stay in `src/index.ts` (R40-R42).
+- Task 6 seeds the legacy `main` row so the sidebar never opens empty (R43).
+- The console key is `blip_key`, and memory stays GLOBAL: `remember`/`recall` address the main DO,
+  because every memory that exists today lives there (R44-R45).
+- Only the main DO arms the scheduler tick (R46).
+- The every-phase gate runs `npm test` + `npm run typecheck`; `node tests/live-stream.mjs` joins it
+  only from Phase 6, when Task 37 creates the file (R47). `ui/` joins the mirror list (R48).
+
 ### Task 5: The session index store
 
 **Files:**
 - Create: `src/registry-store.ts`
 - Create: `tests/registry-store.test.mjs`
+- Modify: `tests/fake-sql.mjs`, `tests/fake-sql.test.mjs` (remove the invented `meta`, Step 3)
 
 **Interfaces:**
-- Consumes: `SqlHandle` from `src/memory.ts`.
+- Consumes: `SqlHandle` from `src/memory.ts`. That type stays exactly as it is: this task does not
+  widen it (R37).
 - Produces:
 ```ts
 export interface SessionRow {
   id: string; title: string; created_at: number; updated_at: number;
   workspace_ref: string | null; unread: number; pinned: number;
 }
+export const PLACEHOLDER_TITLE: string; // "New session"; Task 6 seeds it, Task 9 compares against it
 export function ensureRegistrySchema(sql: SqlHandle): void;
 export function upsertSession(sql: SqlHandle, row: SessionRow): void;
 export function listSessions(sql: SqlHandle, limit: number): SessionRow[];
 export function getSession(sql: SqlHandle, id: string): SessionRow | null;
-export function renameSession(sql: SqlHandle, id: string, title: string): boolean;
+export function renameSession(sql: SqlHandle, id: string, title: string): void;
 export function touchSession(sql: SqlHandle, id: string, now: number, opts?: { unreadDelta?: number }): void;
-export function deleteSession(sql: SqlHandle, id: string): boolean;
+export function deleteSession(sql: SqlHandle, id: string): void;
 ```
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/registry-store.test.mjs` with `fakeSql()` asserts: `ensureRegistrySchema` emits a `CREATE TABLE IF NOT EXISTS sessions` statement containing `id TEXT PRIMARY KEY`, `title TEXT NOT NULL`, `updated_at INTEGER NOT NULL`, `unread INTEGER NOT NULL DEFAULT 0`; `listSessions` selects `ORDER BY pinned DESC, updated_at DESC LIMIT ?` and passes the limit as a binding, never interpolated; `deleteSession` returns `false` when the exec affected row count reports 0 and `true` otherwise; `renameSession` likewise.
+`tests/registry-store.test.mjs` with `fakeSql()` asserts: `ensureRegistrySchema` emits a `CREATE TABLE IF NOT EXISTS sessions` statement containing `id TEXT PRIMARY KEY`, `title TEXT NOT NULL`, `updated_at INTEGER NOT NULL`, `unread INTEGER NOT NULL DEFAULT 0`; `listSessions` selects `ORDER BY pinned DESC, updated_at DESC LIMIT ?` and passes the limit as a binding, never interpolated; `renameSession` and `deleteSession` are tested by the statement shape and the bound id, and return `undefined`, never by an affected-row count (R37).
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -322,14 +348,14 @@ export function deleteSession(sql: SqlHandle, id: string): boolean;
 
 - [ ] **Step 3: Implement `src/registry-store.ts`**
 
-Follow `src/memory.ts`'s style exactly: `sql.exec(...)` with `?` bindings only, no string interpolation of values. Import only types from `./memory.ts` so the file stays dependency-free.
+Follow `src/memory.ts`'s style exactly: `sql.exec(...)` with `?` bindings only, no string interpolation of values. Import only types from `./memory.ts` so the file stays dependency-free. Then delete the `meta.changes` field `tests/fake-sql.mjs` invented: the platform's cursor exposes `rowsRead`/`rowsWritten` and nothing per statement, so a fake that answers `.meta.changes` lets a future test depend on a value production cannot supply. Rewrite the `fake-sql.test.mjs` checks that assert on it, and keep the rest.
 
 - [ ] **Step 4: Run the test to make sure it passes**
 
-`node tests/registry-store.test.mjs`, exit 0.
+`node tests/registry-store.test.mjs`, exit 0, then `npm test` (the fake's own file must still pass).
 
 ```bash
-git add src/registry-store.ts tests/registry-store.test.mjs
+git add src/registry-store.ts tests/registry-store.test.mjs tests/fake-sql.mjs tests/fake-sql.test.mjs
 git commit -m "P1: session index store"
 ```
 
@@ -341,11 +367,12 @@ git commit -m "P1: session index store"
 
 **Interfaces:**
 - Consumes: `registry-store.ts` from Task 5, `authed`-style bearer check from `src/index.ts`.
-- Produces: `export class RegistryAgent extends Agent<Env>` with RPC methods `list(limit: number): Promise<SessionRow[]>`, `put(row: SessionRow): Promise<void>`, `rename(id: string, title: string): Promise<boolean>`, `remove(id: string): Promise<boolean>`, `touch(id: string, opts?: { unreadDelta?: number }): Promise<void>`, and `async fetch(request: Request): Promise<Response>` serving the same surface under `/registry/...` for the worker proxy. Env gains `REGISTRY: DurableObjectNamespace`.
+- Produces: `export class RegistryAgent extends Agent<Env>` with RPC methods `list(limit: number): Promise<SessionRow[]>`, `put(row: SessionRow): Promise<void>`, `rename(id: string, title: string): Promise<void>`, `remove(id: string): Promise<void>`, `touch(id: string, opts?: { unreadDelta?: number }): Promise<void>`, and `async fetch(request: Request): Promise<Response>` serving the same surface under `/registry/...` for the worker proxy, falling through to `super.fetch(request)` for any path it does not own (R: overriding `fetch` on an `Agent` subclass replaces the SDK's own entry point, which routes through `this.lifecycle.fetch`, so a hard stop there would shadow every SDK HTTP surface on the DO). Env gains `REGISTRY: DurableObjectNamespace`. `rename`/`remove` return `void`, not a boolean, per R37.
+- Also produces, in `src/types.ts` (this task already modifies that file): `export interface AgentStub`, lifted out of `src/index.ts:8-21` where it is unexported, and a matching `export interface RegistryStub`. `src/routes.ts` is dependency-free by rule, so it can only consume shapes that live in `src/types.ts` (R39).
 
 - [ ] **Step 1: Add the class and the binding**
 
-`idFromName("registry")` is the only instance ever created. `onStart()` runs `ensureRegistrySchema(this.db())` using the same `db()` adapter pattern as `src/agent.ts`. Hand-edit both `wrangler.jsonc` files: add the `durable_objects` binding `{name: "REGISTRY", class_name: "RegistryAgent"}` and append `"RegistryAgent"` to a **new** migration version so the existing `v1` migration is never edited.
+`idFromName("registry")` is the only instance ever created. `onStart()` runs `ensureRegistrySchema(this.db())` using the same `db()` adapter pattern as `src/agent.ts`, then seeds the legacy session: an idempotent `upsertSession` for `id: "main"` with `PLACEHOLDER_TITLE` and `created_at` from `Date.now()`, using `INSERT ... ON CONFLICT(id) DO NOTHING` semantics so it never overwrites a title a user renamed. Without this the registry-backed sidebar opens empty and every conversation that already exists disappears from the list (R43). Hand-edit both `wrangler.jsonc` files: add the `durable_objects` binding `{name: "REGISTRY", class_name: "RegistryAgent"}` and append `"RegistryAgent"` to a **new** migration version so the existing `v1` migration is never edited.
 
 - [ ] **Step 2: Prove the migration is valid**
 
@@ -366,13 +393,13 @@ git commit -m "P1: registry DO holds the session index"
 
 **Interfaces:**
 - Consumes: `RegistryAgent` RPC, `FederationAgent` stub RPC.
-- Produces: `src/auth.ts` with `safeEq(a: string, b: string): boolean` and `authed(request: Request, env: Env): boolean`, moved out of `src/index.ts` (Task 22 later adds `tokenOk` to this same file; Task 35 adds `vaultAuthed`). `src/routes.ts` with `handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and `agentStubFor(env: Env, sessionId: string): AgentStub`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`. Route responses: list `{ok: true, sessions: SessionRow[]}`; create `{ok: true, session: SessionRow}`; rename and delete `{ok: boolean}`; messages `{ok: true, messages: UIMessage[]}`. Every one of them 401s when `authed()` fails and 400s on a malformed body.
+- Produces: `src/auth.ts` with `safeEq(a: string, b: string): boolean` and `authed(request: Request, env: Env): boolean`, moved out of `src/index.ts` (Task 22 later adds `tokenOk` to this same file; Task 35 adds `vaultAuthed`). `src/routes.ts` with `handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and `agentStubFor(env: Env, sessionId: string): AgentStub`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message`. Route responses: list `{ok: true, sessions: SessionRow[], truncated: boolean}` and takes `?limit=`, default 50, hard max 200, `truncated` true when the store returned exactly the limit; create `{ok: true, session: SessionRow}`, filling `created_at`/`updated_at` from `Date.now()`, `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0`, `workspace_ref: null`; rename and delete `{ok: true}`; messages `{ok: true, messages: UIMessage[]}`; send returns the agent's `AgentReply`. Every one of them 401s when `authed()` fails and 400s on a malformed body. **`src/routes.ts` owns the `/api/sessions*` family only** (R42): `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six `/internal/vault/*` handlers keep their existing addressing in `src/index.ts`, and `/api/plan` is still deleted by Task 15, not here.
 
 **Why `src/routes.ts` is its own file.** `src/index.ts:1` value-imports `./agent`, and `src/agent.ts` value-imports `agents`, which pulls in `cloudflare:workers`. Node cannot resolve that, so no offline test can import `src/index.ts` or anything under `src/agent.ts`. `src/routes.ts` must therefore import nothing but types (`import type { Env } from "./types"`) plus `./auth`, and take the DO namespaces from the `env` argument rather than importing the classes.
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/routes.test.mjs` imports `handleFetch` from `src/routes.ts` and calls it with a fake env whose `FEDERATION_AGENT.get()` and `REGISTRY.get()` return recorded stubs. Assert: `POST /api/sessions` with no auth is 401; with `Authorization: Bearer k` and `AGENT_API_KEY: "k"` it calls `registry.put` and returns 200 with a session id of 26 chars; `GET /api/sessions` returns the registry's list; `PATCH /api/sessions/abc` with body `{title:"New"}` calls `rename("abc","New")`; `DELETE` calls `remove`; a path with an unknown shape 404s; and with `AGENT_API_KEY: ""` every route 401s. Add the import-guard assertion from the Global Constraints: the test asserts `src/routes.ts` source contains no non-type `import` of `./agent` or `agents`.
+`tests/routes.test.mjs` imports `handleFetch` from `src/routes.ts` and calls it with a fake env whose `FEDERATION_AGENT.get()` and `REGISTRY.get()` return recorded stubs. Assert: `POST /api/sessions` with no auth is 401; with `Authorization: Bearer k` and `AGENT_API_KEY: "k"` it calls `registry.put` and returns 200 with a session id of 26 chars, and the row it stored carries `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0` and both timestamps filled (R: nothing else in the plan fills them, and `title TEXT NOT NULL` would fail at runtime); `GET /api/sessions` returns the registry's list, defaults to limit 50, clamps a `?limit=99999` to 200, and sets `truncated` when the stub returns exactly the limit; `GET /api/sessions/abc` and `PATCH /api/sessions/abc` with body `{title:"New"}` call `rename("abc","New")`; `DELETE` calls `remove`; `POST /api/sessions/abc/message` forwards to the `abc` DO's stub and not to `main` (R41); `idFromName` is called with the bare id, so `main` routes to `idFromName("main")` and not to a prefixed name (R38); a path with an unknown shape 404s; and with `AGENT_API_KEY: ""` every route 401s. Add the import-guard assertion from the Global Constraints: the test asserts `src/routes.ts` source contains no non-type `import` of `./agent` or `agents`.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -380,7 +407,10 @@ git commit -m "P1: registry DO holds the session index"
 
 - [ ] **Step 3: Implement**
 
-Extract the body of the worker's `fetch` into `export async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and make the default export call it. Session ids come from `crypto.randomUUID().replace(/-/g, "").slice(0, 26)`, the Cloudflare id length. Routing is `env.FEDERATION_AGENT.get(env.FEDERATION_AGENT.idFromName("s:" + sessionId))`. The legacy `idFromName("main")` stays reachable as session id `main`, which keeps every existing memory, task, and vault chunk alive: this is the spec's ruling 7.
+Extract the body of the worker's `fetch` into `export async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and make the default export call it. Session ids come from `crypto.randomUUID().replace(/-/g, "").slice(0, 26)`, the Cloudflare id length. Routing is `env.FEDERATION_AGENT.get(env.FEDERATION_AGENT.idFromName(sessionId))`: the id **is** the DO name, with no prefix (R38), so the legacy `idFromName("main")` stays reachable as session `main` and keeps every existing memory, task, and vault chunk alive. Two consequences of sharding, both ruled and both required here:
+
+- Memory stays global (R45). `remember`/`recall` continue to read and write the **main** DO's SQLite from whatever session DO is running, by stubbing `idFromName("main")`, because every memory the user has already accumulated lives in that one DO. Transcripts shard per session; memory does not. If this is later "simplified" to per-DO memory, the persona prose at `src/agent.ts:49,57,589` becomes false and existing memories go invisible, so state the rule in the code where the call happens.
+- Only the main DO arms the scheduler tick (R46). `onStart()` returns before `armTick()` for any session id that is not `main`: one alarm per DO is the platform's budget, `armTick` re-arms unconditionally today, and `/api/tasks` only ever reads main, so a per-session alarm is pure burn. Task 33 owns the real scheduling fix.
 
 - [ ] **Step 4: Run the test to make sure it passes**
 
@@ -396,15 +426,16 @@ git commit -m "P1: per-session DO routing and session CRUD routes; main survives
 **Files:**
 - Create: `src/session-scope.ts`
 - Create: `tests/session-scope.test.mjs`
-- Modify: `src/agent.ts`
+- Modify: `src/agent.ts`, `src/index.ts` (the 403 mapping is this task's, and so is its commit line: R39)
 
 **Interfaces:**
 - Consumes: `Env.FEDERATION_AGENT: DurableObjectNamespace`, `DurableObjectState.id`.
-- Produces: `assertSessionScope(ctx: { id: { toString(): string } }, idFromName: (name: string) => { toString(): string }, sessionId: string): void` which throws `ScopeError` on mismatch. `class ScopeError extends Error` exported. Pure over its arguments so the test needs no platform types.
+- Produces: `SESSION_ID_RE: RegExp`, `isSessionId(id: string): boolean` (the one copy of the rule, which Task 23 imports instead of restating it, R38), and `assertSessionScope(ctx: { id: { toString(): string } }, idFromName: (name: string) => { toString(): string }, sessionId: string): void` which throws `ScopeError` on mismatch. `class ScopeError extends Error` exported. Pure over its arguments so the test needs no platform types.
+- Also produces: the widening of `FederationAgent.chat(content, tier?)` to `chat(sessionId, content, tier?)`, matching `AgentStub` in `src/types.ts` (Task 6 exported it), and the same first-statement check in `onMessage`. `src/agent.ts`'s two hardcoded `sessionId: "agent"` sandbox calls take the real id from here (R39, R40).
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/session-scope.test.mjs` asserts: the call returns normally when `sessionId === "s:abc"` matches what `idFromName` produces; it throws `ScopeError` when the names differ; it throws for `sessionId === ""`; and it throws for a `sessionId` containing `/`, `..`, or a space, so a client cannot steer the DO id itself.
+`tests/session-scope.test.mjs` asserts: the call returns normally when `sessionId === "abc"` matches what `idFromName` produces; it throws `ScopeError` when the names differ; it throws for `sessionId === ""`; it throws for a `sessionId` containing `/`, `..`, a space, or a `:`, so a client cannot steer the DO id itself and no prefixed id can sneak through; and `isSessionId("main")` is true while `isSessionId("s:main")` is false (R38).
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -412,7 +443,7 @@ git commit -m "P1: per-session DO routing and session CRUD routes; main survives
 
 - [ ] **Step 3: Implement, then call it**
 
-Validate `sessionId` against `/^[A-Za-z0-9_-]{1,40}$/` first, before any `idFromName` call. Then in `FederationAgent`, every entry point that takes a session id (`chat`, `messages`, the future `submitTurn`, `streamFetch`) calls `assertSessionScope` as its first statement, and `src/index.ts` maps `ScopeError` to a 403 response.
+Validate `sessionId` against `SESSION_ID_RE` (`/^[A-Za-z0-9_-]{1,40}$/`) first, before any `idFromName` call. Then in `FederationAgent`, every entry point that takes a session id calls `assertSessionScope` as its first statement: today that is `chat` and `onMessage`, and after this task the widening makes it true for both. `messages`, `submitTurn` and `streamFetch` do not exist yet; when Tasks 14 and 22 add them, they carry the same first statement, and that requirement belongs in their briefs, not in an assertion here about code that has not been written. `src/index.ts` maps `ScopeError` to a 403 response. Note what this does **not** close: the WebSocket upgrade path in `src/index.ts` still pins main and is unscoped until Task 22, so Review Focus line 1 is only fully closed there.
 
 - [ ] **Step 4: Run the test to make sure it passes**
 
@@ -428,10 +459,11 @@ git commit -m "P1: the agent DO refuses work for a session id outside its own sc
 **Files:**
 - Create: `src/titles.ts`
 - Create: `tests/titles.test.mjs`
-- Modify: `src/agent.ts` (first-reply hook), `src/registry-store.ts` (already supports rename)
+- Modify: `src/agent.ts` (first-reply hook)
+- Consumes but does not modify: `PLACEHOLDER_TITLE` from `src/registry-store.ts`
 
 **Interfaces:**
-- Consumes: `fetchRouter` from Task 3, `env.MODEL_CHEAP`, `RegistryAgent.rename`.
+- Consumes: `fetchRouter` from Task 3, `env.MODEL_CHEAP`, `RegistryAgent.rename`, `RegistryAgent.list`.
 - Produces: `TITLE_SYSTEM: string`, `titleMessages(first: string): Array<{ role: "system" | "user"; content: string }>`, `parseTitle(raw: string, fallback: string): string`.
 
 - [ ] **Step 1: Write the failing test**
@@ -448,7 +480,7 @@ Dependency-free. `TITLE_SYSTEM` asks for two to five words, sentence case, no qu
 
 - [ ] **Step 4: Wire it non-blockingly**
 
-After the first assistant reply in a session whose registry title is still the placeholder, start a fiber (`this.runFiber("title", ...)`) that calls `fetchRouter` with `env.MODEL_CHEAP`, then `registry.rename`. The reply must already have been sent. On any error, `rename` with `parseTitle("", firstMessage)`. A turn never waits on its own title.
+After the first assistant reply in a session whose registry title is still `PLACEHOLDER_TITLE`, start a fiber (`this.runFiber("title", ...)`) that calls `fetchRouter` with `env.MODEL_CHEAP`, then `registry.rename`. The reply must already have been sent. On any error, rename with `parseTitle("", firstMessage)`, the deterministic fallback built from the user's own words rather than a model attempt; the two branches differ in the value they produce, not in shape. Two rules this task owns (P14): before renaming, re-read the row and **skip the rename if the title is no longer `PLACEHOLDER_TITLE`**, because a user may have typed one in the seconds the cheap model was busy, and the fiber must never touch `updated_at`, because that is the sidebar's sort key and a background writer reordering the list behind the user looks like a bug in the list. `agents@0.28.1` exposes `runFiber<T>(name, fn)` and backs it with the `cf_agents_runs` table, but `node_modules/` is gitignored, so quote that dependency in the brief rather than expecting a fresh clone to verify it. This step has no offline test: `src/agent.ts` cannot be imported by Node, so the proof is the live check in Step 5.
 
 - [ ] **Step 5: Run tests, typecheck, commit**
 
@@ -468,19 +500,19 @@ git commit -m "P1: sessions get model-written titles off the hot path"
 
 - [ ] **Step 1: Replace the cosmetic session array**
 
-`const TH=[["Main chat","idle",""]]` becomes a list rendered from `GET /api/sessions` with each row using the existing `.card` markup and a `.pill` for the relative time. `pick(i)` calls `openSession(id)` which fetches `/api/sessions/:id/messages` and rebuilds `LOG` from the transcript instead of wiping it. Delete the `localStorage` cache of chat text: the server transcript is now the only copy, and a second cached copy is how a stale reply comes back after a rename or a delete.
+`const TH=[["Main chat","idle",""]]` becomes a list rendered from `GET /api/sessions`. Each row keeps the existing `.th2` thread-row markup, which is the component that already gives a row its title, its `small` subtext line and its `aria-current` selected state. Do not reuse `.card` or `.pill` here: `.card` is the rounded panel behind the approval card and `.pill` is the chat speaker bubble scoped under `.who`, and neither is a sidebar row (verified against `ui/index.html:64,80,42`). `pick(i)` calls `openSession(id)` which fetches `/api/sessions/:id/messages` and rebuilds `LOG` from the transcript instead of wiping it. The row's subtext is the relative `updated_at` only: the per-thread mascot state the old array carried has no `SessionRow` field and no backend that could fill one in Phase 1, so the colored dot and the "Waiting for you" text come out rather than being faked, and they return in Phase 3 with the live frames that make them true. There is no `localStorage` cache of chat text to delete (verified: the only six uses are the key reads at `ui/index.html:384-388`), so this step simply must not add one: the server transcript is the only copy, and a second cached copy is how a stale reply comes back after a rename or a delete.
 
 - [ ] **Step 2: Add the key gate**
 
-`loadTasks()` and `loadPlan()` are called only when `localStorage.getItem("blip.key")` is non-empty. The two 401s on load go away. Note that `/api/plan` is deleted in Task 17, so gate the call that still exists and leave a `TODO(P2)` line naming the task; do not leave a silent dead call.
+`loadTasks()` and `loadPlan()` are called only when `localStorage.getItem("blip_key")` is non-empty. The key is `blip_key`, underscore: all five existing call sites read that name, and a gate on `blip.key` would never fire, silently killing the Tasks tab and the approval card (R44). The two 401s on load go away. Note that `/api/plan` is deleted in Task 15, so gate the call that still exists and leave a `TODO(P2)` line naming the task; do not leave a silent dead call.
 
 - [ ] **Step 3: New session, rename, delete**
 
-New uses the existing `.acts` button row. Rename is a `prompt()` on the row. Delete confirms with a `confirm()` and, on ok, removes the registry row; the R2 workspace is kept until Phase 4's explicit delete, because deleting the user's files without asking is the wrong default.
+New stays in the sidebar footer, the existing `.sf` row with its `.ib` icon button and `newChat()` handler; `.acts` is the approval card's button row and is not the right component (R44). Rename is a `prompt()` on the row, and a user rename always wins over the background title fiber (Task 9's rule). Delete confirms with a `confirm()` and, on ok, removes the registry row; the session workspace files are kept until Phase 4's explicit delete, because deleting the user's files without asking is the wrong default.
 
 - [ ] **Step 4: Verify in a browser**
 
-Run `npx wrangler dev` from the deploy tree, open the page with Playwright or the browser tools, and check: two sessions created side by side keep separate transcripts; the title becomes model-written within a few seconds; a reload restores both the list and the selected transcript; no 401 appears in the console when a key is unset. Report what you saw, not what you expect.
+Sync `ui/index.html` to the deploy tree first (R48: `ui/` is now inside the mirror rule, and `wrangler dev` serves the deploy tree's copy, so verifying without the sync would test a stale console and prove nothing). Then run `npx wrangler dev` from the deploy tree, open the page with Playwright or the browser tools, and check: two sessions created side by side keep separate transcripts, using `POST /api/sessions/:id/message`; the title becomes model-written within a few seconds; a reload restores both the list and the selected transcript; and `main` appears in the list on first load with its history intact (Task 6's seed). With no key set, the console must show the key prompt and no 401 flood. Report what you saw, not what you expect.
 
 ```bash
 git add ui/index.html
@@ -1002,9 +1034,32 @@ git commit -m "P3: single message path; buffered alias removed"
 
 ## Phase 4: Persistent per-session workspace
 
-**Prerequisite owned by the user:** an R2 bucket must exist, and both `agent-federation` and `zay-sandbox` must be authorized to bind it. If `npx wrangler r2 bucket list` shows no suitable bucket, stop and tell the user; creating it and its bindings is their action.
+**Phase 4 rescope, ruled 2026-10-18 (R26) and researched 2026-10-20 in
+`.superpowers/sdd/2026-10-18-agent-loop-upgrade/phase4-kv-rescope.md`.** The store is **the free KV
+namespace `zay-sandbox` already binds as `SESSIONS`**, not R2. R2 requires a verification card this
+project does not have, and no Backblaze. **Every "R2" below means KV, and no task in this phase edits
+`wrangler.jsonc` to add a binding**: the root worker has no KV binding today and should not gain one,
+because the sandbox worker is the only code that touches the namespace. Where a step below still names
+an R2 detail, the rescope file is the authority, and it lists the 30 lines to change.
 
-### Task 26: Bind R2 and name the keys
+The numbers that shape the design, measured rather than assumed: a KV value caps at 25 MiB on both
+plans, so the gate is **24 MiB compressed**; the free tier walls that bite first are 1 GB per namespace
+and per account, 1,000 writes/deletes/lists per day, one write per second per key, and KV's "up to 60
+seconds or more" global visibility. Anchor from this very repo: a 113-file app minus `node_modules` tars
+to 450,828 gz bytes, which is 1.7% of a single entry, while the same tree *with* `node_modules` is
+92,563,800 bytes, 3.5x over the cap. So: measure with `stat` inside the sandbox **before** any transfer,
+and exclude `node_modules`. One raw gzip tar per session under `ws:tar:<id>`, its manifest under
+`ws:man:<id>`, and the last-good pointer (bytes, file count, sha256) mirrored into the registry DO's
+SQLite, because that DO is the strongly consistent half of "does my workspace still exist" and KV is not.
+
+Two prerequisites the research surfaced, both owed before Task 27 can be honest: `e2b` is declared in
+`package.json` but installed in **neither** tree, so pinning the sandbox file API against typings that are
+not present is a setup step and not a step inside the task; and the 300 s E2B boot lease against the 600 s
+`POOL_TTL` reuse window is a live mismatch that this rescope does not touch and that needs its own ruling.
+
+**Prerequisite owned by the user:** none. This phase needs no bucket, no card, and no console click.
+
+### Task 26: Name the workspace keys
 
 **Files:**
 - Modify: `src/types.ts`, `wrangler.jsonc` (both trees, hand-edited), `deploy/sandbox-worker/wrangler.jsonc`
@@ -1035,7 +1090,7 @@ git add src/types.ts src/workspace-keys.ts tests/workspace-keys.test.mjs wrangle
 git commit -m "P4: R2 bucket bound to both workers with a traversal-safe key scheme"
 ```
 
-### Task 27: Snapshot and restore through R2
+### Task 27: Snapshot and restore through KV
 
 **Files:**
 - Modify: `deploy/sandbox-worker/src/index.ts`
@@ -1402,7 +1457,7 @@ git commit -m "P6: per-turn traces keyed by session and operation"
 
 ## Review gates
 
-Run `npm test`, `npm run typecheck`, and `node tests/live-stream.mjs` at the end of every phase, and deploy between phases, not only at the end. The three gates that decide whether a phase is actually done:
+Run `npm test` and `npm run typecheck` at the end of every phase, and deploy between phases, not only at the end. `node tests/live-stream.mjs` joins the every-phase gate only from Phase 6, the phase whose Task 37 creates that file (R47): a gate that names a command which does not exist yet is a step an executor skips and then reports as passed. The three gates that decide whether a phase is actually done:
 
 - **After Phase 2:** a 15-plus tool-call build finishes in one turn with no round-limit string, and `rm -rf` holds for approval then resumes.
 - **After Phase 3:** tokens arrive live, each tool has a widget that fills in while it runs, and a mid-turn reload resumes the stream.
