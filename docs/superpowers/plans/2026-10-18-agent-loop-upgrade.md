@@ -709,7 +709,7 @@ Four things this step changes that the old cosmetic array never had to:
 - **Drop the hardcoded production host.** `const AGENT="https://agent-federation.agent-federation.workers.dev"`
   at `:325` means every call from a local `wrangler dev` page leaves the build under test and hits
   production, so a local check proves nothing about local code. The worker serves the console itself
-  (`env.ASSETS.fetch(request)` at `src/index.ts:276-277`), so use `location.origin` and delete the
+  (`env.ASSETS.fetch(request)` at `src/index.ts:278`), so use `location.origin` and delete the
   constant: identical behaviour in production, and dev finally tests dev.
 - **One fetch helper, not six bearer expressions.** Add `api(path, init)` which attaches
   `authorization: "Bearer " + (localStorage.getItem("blip_key") || "").trim()`, and migrate the five
@@ -732,7 +732,7 @@ New stays in the sidebar footer, the existing `.sf` row with its `.ib` icon butt
 
 - [ ] **Step 4: Verify in a browser**
 
-Sync `ui/index.html` to the deploy tree first (R48: `ui/` is now inside the mirror rule, and `wrangler dev` serves the deploy tree's copy, so verifying without the sync would test a stale console and prove nothing). Then run `npx wrangler dev` from the deploy tree, open the page with Playwright or the browser tools, and check: two sessions created side by side keep separate transcripts - send into each with the console's own input, which now hits `POST /api/sessions/:id/message`, and confirm in the Network panel that no request went to `/api/message` and none went to `agent-federation.workers.dev` (Step 1's host deletion is what makes this a local test at all); the title becomes model-written within a few seconds; a reload restores both the list and the selected transcript; and `main` appears in the list on first load with its history intact (Task 6's seed). With no key set, the console must show the key prompt and no 401 flood. Report what you saw, not what you expect.
+Sync `ui/index.html` to the deploy tree first (R48: `ui/` is now inside the mirror rule, and `wrangler dev` serves the deploy tree's copy, so verifying without the sync would test a stale console and prove nothing). The deploy tree's `wrangler.jsonc` already binds `REGISTRY` and declares the `v2` migration tag - hand-added by the controller, never edited or copied by this task (R56, R80). Then run `npx wrangler dev` from the deploy tree, open the page with Playwright or the browser tools, and check: two sessions created side by side keep separate transcripts - send into each with the console's own input, which now hits `POST /api/sessions/:id/message`, and confirm in the Network panel that no request went to `/api/message` and none went to `agent-federation.workers.dev` (Step 1's host deletion is what makes this a local test at all); the title becomes model-written within a few seconds; a reload restores both the list and the selected transcript; and `main` appears in the list on first load with its history intact (Task 6's seed). With no key set, the console must show the key prompt and no 401 flood. Report what you saw, not what you expect.
 
 ```bash
 git add ui/index.html
