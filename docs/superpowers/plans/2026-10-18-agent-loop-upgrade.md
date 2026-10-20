@@ -311,6 +311,23 @@ wins**:
 - Only the main DO arms the scheduler tick (R46).
 - The every-phase gate runs `npm test` + `npm run typecheck`; `node tests/live-stream.mjs` joins it
   only from Phase 6, when Task 37 creates the file (R47). `ui/` joins the mirror list (R48).
+- Task 7's Files list GAINS `src/agent.ts`, for exactly one addition: an RPC
+  `messages(limit?: number): Promise<ChatMessage[]>` on `FederationAgent` that wraps the existing
+  `recentMessages(sql, n)` read, with the matching line in the exported `AgentStub`. The bullet above
+  says the transcript route "reads the existing `messages` table", and that is true, but only the DO
+  can read its own local SQLite: a worker route cannot, so without the RPC the route has a store and
+  no producer (R59).
+- R45 (memory stays global) and R46 (only the main DO arms the tick) are IMPLEMENTED IN TASK 8, not in
+  Task 7, whose Step 3 states them. Task 7's whole reason to exist as a separate dependency-free file
+  is that Node can import it offline; pulling `src/agent.ts` into its commit set destroys that, and
+  Task 8 already has `src/agent.ts` open and already widens `chat`. R45 needs an RPC on
+  `FederationAgent` that a session DO calls against `idFromName("main")`, so it belongs next to the
+  signature change. Nothing deploys between the two commits (R60).
+- Phase 2 flag, not a Phase 1 task: `agents@0.28.1` ships a `Session` store with `history()`,
+  `historyBatches()`, `getHistory()` and `getRecentHistory()` (`node_modules/agents/dist/handle-*.d.ts`,
+  quoted here because `node_modules/` is gitignored), and it is a DIFFERENT store from the `messages`
+  table Phase 1 reads. Task 11 onward must either adopt it and make `messages` a thin adapter over it,
+  or the console will show one transcript while the model sees another (R61).
 
 ### Task 5: The session index store
 
@@ -389,11 +406,14 @@ git commit -m "P1: registry DO holds the session index"
 
 **Files:**
 - Create: `src/routes.ts`, `src/auth.ts`, `tests/routes.test.mjs`
-- Modify: `src/index.ts`, `src/types.ts`
+- Modify: `src/index.ts`, `src/types.ts`, `src/agent.ts` (one RPC only, `messages(limit?)`, per R59 in
+  the amendments block; R45 and R46 are NOT this task's, they land in Task 8 per R60)
 
 **Interfaces:**
 - Consumes: `RegistryAgent` RPC, `FederationAgent` stub RPC.
-- Produces: `src/auth.ts` with `safeEq(a: string, b: string): boolean` and `authed(request: Request, env: Env): boolean`, moved out of `src/index.ts` (Task 22 later adds `tokenOk` to this same file; Task 35 adds `vaultAuthed`). `src/routes.ts` with `handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and `agentStubFor(env: Env, sessionId: string): AgentStub`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message`. Route responses: list `{ok: true, sessions: SessionRow[], truncated: boolean}` and takes `?limit=`, default 50, hard max 200, `truncated` true when the store returned exactly the limit; create `{ok: true, session: SessionRow}`, filling `created_at`/`updated_at` from `Date.now()`, `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0`, `workspace_ref: null`; rename and delete `{ok: true}`; messages `{ok: true, messages: UIMessage[]}`; send returns the agent's `AgentReply`. Every one of them 401s when `authed()` fails and 400s on a malformed body. **`src/routes.ts` owns the `/api/sessions*` family only** (R42): `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six `/internal/vault/*` handlers keep their existing addressing in `src/index.ts`, and `/api/plan` is still deleted by Task 15, not here.
+- Produces: `src/auth.ts` with `safeEq(a: string, b: string): boolean` and `authed(request: Request, env: Env): boolean`, moved out of `src/index.ts` (Task 22 later adds `tokenOk` to this same file; Task 35 adds `vaultAuthed`). `src/routes.ts` with `handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and `agentStubFor(env: Env, sessionId: string): AgentStub`, and the routes `GET /api/sessions`, `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`, `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message`. Route responses: list `{ok: true, sessions: SessionRow[], truncated: boolean}` and takes `?limit=`, default 50, hard max 200, `truncated` true when the store returned exactly the limit; create `{ok: true, session: SessionRow}`, filling `created_at`/`updated_at` from `Date.now()`, `title: PLACEHOLDER_TITLE`, `unread: 0`, `pinned: 0`, `workspace_ref: null`; rename and delete `{ok: true}`; messages `{ok: true, messages: {role: string, content: string}[]}`, the
+shape `recentMessages` actually returns, not `UIMessage` (which carries `parts` and belongs to the
+harness transcript, R59); send returns the agent's `AgentReply`. Every one of them 401s when `authed()` fails and 400s on a malformed body. **`src/routes.ts` owns the `/api/sessions*` family only** (R42): `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and the six `/internal/vault/*` handlers keep their existing addressing in `src/index.ts`, and `/api/plan` is still deleted by Task 15, not here.
 
 **Why `src/routes.ts` is its own file.** `src/index.ts:1` value-imports `./agent`, and `src/agent.ts` value-imports `agents`, which pulls in `cloudflare:workers`. Node cannot resolve that, so no offline test can import `src/index.ts` or anything under `src/agent.ts`. `src/routes.ts` must therefore import nothing but types (`import type { Env } from "./types"`) plus `./auth`, and take the DO namespaces from the `env` argument rather than importing the classes.
 
@@ -409,8 +429,9 @@ git commit -m "P1: registry DO holds the session index"
 
 Extract the body of the worker's `fetch` into `export async function handleFetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response>` and make the default export call it. Session ids come from `crypto.randomUUID().replace(/-/g, "").slice(0, 26)`, the Cloudflare id length. Routing is `env.FEDERATION_AGENT.get(env.FEDERATION_AGENT.idFromName(sessionId))`: the id **is** the DO name, with no prefix (R38), so the legacy `idFromName("main")` stays reachable as session `main` and keeps every existing memory, task, and vault chunk alive. Two consequences of sharding, both ruled and both required here:
 
-- Memory stays global (R45). `remember`/`recall` continue to read and write the **main** DO's SQLite from whatever session DO is running, by stubbing `idFromName("main")`, because every memory the user has already accumulated lives in that one DO. Transcripts shard per session; memory does not. If this is later "simplified" to per-DO memory, the persona prose at `src/agent.ts:49,57,589` becomes false and existing memories go invisible, so state the rule in the code where the call happens.
-- Only the main DO arms the scheduler tick (R46). `onStart()` returns before `armTick()` for any session id that is not `main`: one alarm per DO is the platform's budget, `armTick` re-arms unconditionally today, and `/api/tasks` only ever reads main, so a per-session alarm is pure burn. Task 33 owns the real scheduling fix.
+- Memory stays global (R45). **Implemented in Task 8, not here (R60).** `remember`/`recall` continue to read and write the **main** DO's SQLite from whatever session DO is running, by stubbing `idFromName("main")`, because every memory the user has already accumulated lives in that one DO. Transcripts shard per session; memory does not. If this is later "simplified" to per-DO memory, the persona prose at `src/agent.ts:49,57,589` becomes false and existing memories go invisible, so state the rule in the code where the call happens.
+- Only the main DO arms the scheduler tick (R46). **Implemented in Task 8, not here (R60).**
+  `onStart()` returns before `armTick()` for any session id that is not `main`: one alarm per DO is the platform's budget, `armTick` re-arms unconditionally today, and `/api/tasks` only ever reads main, so a per-session alarm is pure burn. Task 33 owns the real scheduling fix.
 
 - [ ] **Step 4: Run the test to make sure it passes**
 
