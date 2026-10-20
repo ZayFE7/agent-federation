@@ -578,14 +578,20 @@ passes `"main"` explicitly. Task 28 names the same sites and only verifies them.
 
 `node tests/session-scope.test.mjs`, `node tests/routes.test.mjs` and `npm test`, exit 0. Add to
 `tests/routes.test.mjs`: a `POST /api/sessions/abc/message` whose stub reply carries
-`code: "invalid_session"` answers 403, and `POST /api/sessions/../etc/message` answers 400 without
-calling `idFromName` at all. **This closes Review Focus line 1** for the HTTP path; the WebSocket path
-closes in Task 22.
+`code: "invalid_session"` answers 403, and the traversal case per amendment 1 below. **This closes Review Focus line 1** for the HTTP path; the WebSocket path closes in Task 22.
 
 ```bash
 git add src/session-scope.ts tests/session-scope.test.mjs src/agent.ts src/types.ts src/routes.ts src/index.ts tests/routes.test.mjs
 git commit -m "P1: the agent DO refuses work outside its own session; memory and the tick stay on main"
 ```
+
+**AMENDED (R71): three items settled by Task 7 shipping (`7435b66`), all of them corrections to what this task may assume about code that now exists.**
+
+1. **The traversal assertion above cannot be written that way.** `new URL(path, origin)` normalizes `/api/sessions/../etc/message` to `/api/etc/message` **before** `src/routes.ts` sees it, so the string never matches the `/api/sessions/` prefix and never reaches the id check. Replace the assertion with the two facts that are true: a path whose normalized form leaves the prefix is answered by the fall-through (404), not by a 400; and a **percent-encoded** traversal (`/api/sessions/%2e%2e/message`) does stay inside the prefix, because `URL` does not decode `%2e`, so the segment reaches the id check and `SESSION_ID_RE` rejects it with 400 without calling `idFromName`. That encoded case is the one that actually proves the guard, so test it.
+2. **A refused reply is not activity.** Task 7's `src/routes.ts` calls the registry `touch` on every reply path. When this task introduces `code: "invalid_session"`, the 403 branch must skip the `touch`: a request the DO refused must not reorder or re-date the session list.
+3. **`recentMessages` is oldest-first.** `src/memory.ts:149` orders ascending, and Task 7 routed it unmodified, so `MessageRow[]` from `messages(limit?)` arrives oldest-first. State that in `src/types.ts`' comment on the method and in `src/routes.ts`'s response, because the console day-groups the list and a later task that assumes newest-first will silently reverse the transcript. Do not "fix" the order here: `recall`'s and `listTasks`' ordering is Task 33's problem, and a sort added now is a second definition of transcript order.
+
+
 
 ### Task 9: Model-written session titles
 
@@ -723,12 +729,18 @@ git commit -m "P1: console sidebar drives real sessions"
 - Create: `tests/provider.test.mjs`
 
 **Interfaces:**
-- Consumes: `routerUrl` from Task 3, `Env`.
+- Consumes: `routerUrl` and `routerRequest` from Task 3, `Env`.
 - Produces: `routerFetch(env: Env): typeof fetch`, `createRouterModel(env: Env, modelId: string): LanguageModel`, `createPrimaryModel(env: Env): LanguageModel`, `createCheapModel(env: Env): LanguageModel`.
+
+**AMENDED after the Phase 2 pre-flight scan (`ledger R70`; every citation below was measured against the installed packages, and `node_modules/` is gitignored so a fresh clone cannot re-derive them — re-run the scan if the pins move):**
+
+- `.chatModel(modelId)` returns `LanguageModelV4` (`@ai-sdk/openai-compatible/dist/index.d.ts:331`), which IS a member of the `LanguageModel` union (`ai/dist/index.d.ts:115`), so it is a legal `ThinkHarnessOptions.model`. Keep the return type in this plan's signature as `LanguageModel`.
+- `createOpenAICompatible` requires `name` and `baseURL` as plain strings and takes `fetch?: FetchFunction` where `FetchFunction = typeof globalThis.fetch` (`@ai-sdk/openai-compatible/dist/index.d.ts:340-371`; `@ai-sdk/provider-utils/dist/index.d.ts:823`). The provider does `new URL(baseURL + path)` (`@ai-sdk/openai-compatible/dist/index.js:1477-1480`), so **`baseURL` must be absolute and must already end in `/v1`**: use `routerUrl(env, "/v1")`.
+- The provider sets `authorization` only when `apiKey` is truthy (`index.js:1471`), so `routerFetch` MUST forward the `init.headers` it was given rather than rebuilding the header list. A `routerFetch` that drops `init.headers` produces a 401 from the router with no clue why.
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/provider.test.mjs` asserts `routerFetch(env)("/v1/chat/completions", {method:"POST", body:"{}"})` returns the fake binding's `Response`, that the `Request` handed to `env.ROUTER.fetch` has url `routerUrl(env, "/v1/chat/completions")` and an `authorization` header, and that with `env.ROUTER` undefined it falls through to the injected global `fetch` rather than throwing.
+`tests/provider.test.mjs` asserts: `routerFetch(env)(routerUrl(env, "/v1/chat/completions"), {method:"POST", body:"{}"})` returns the fake binding's `Response` (an ABSOLUTE url — the SDK never passes a bare path, so testing only the bare path would bless a `routerFetch` the provider cannot use); that with `env.ROUTER_URL = "https://r.example.com/v1/chat/completions"` the `Request` handed to `env.ROUTER.fetch` carries that same string unchanged, which is the idempotence `src/router.ts:45-48` already guarantees; that the `Request` carries the `authorization` header **preserved from `init.headers`**; and that with `env.ROUTER` undefined it falls through to the injected global `fetch` rather than throwing.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -736,7 +748,9 @@ git commit -m "P1: console sidebar drives real sessions"
 
 - [ ] **Step 3: Implement `src/provider.ts`**
 
-`createOpenAICompatible({ name: "zay-router", baseURL, apiKey: env.ROUTER_KEY, fetch: routerFetch(env) })` then `.chatModel(modelId)`. Read `node_modules/@ai-sdk/openai-compatible/dist/index.d.ts` for the exact factory and model-method names before writing: the package's own types are the authority, not this plan's recollection.
+`createOpenAICompatible({ name: "zay-router", baseURL: routerUrl(env, "/v1"), apiKey: env.ROUTER_KEY, fetch: routerFetch(env), includeUsage: true })` then `.chatModel(modelId)`. Read `node_modules/@ai-sdk/openai-compatible/dist/index.d.ts` for the exact factory and model-method names before writing: the package's own types are the authority, not this plan's recollection.
+
+`createCheapModel` is for NON-TOOL uses only (titles, self-critique, `/api/decide`). Per ledger R25/R29 the pinned CHEAP id fails a tool round trip at the deployed lane, and no fresh probe of this layer is on this plan's critical path, so nothing in Phase 2 may hand it to a session that runs tools. State that limit in the doc comment, not in a test: the property is about a live router, and offline code cannot see it.
 
 - [ ] **Step 4: Run the test and typecheck**
 
@@ -752,7 +766,9 @@ git commit -m "P2: AI SDK language model served by the router service binding"
 **Files:**
 - Create: `src/tools.ts`
 - Create: `tests/tools.test.mjs`
-- Modify: `src/agent.ts` (the hand-written JSON-schema array and its dispatch)
+- Modify: `src/agent.ts` (the hand-written JSON-schema array and its dispatch), `src/capabilities.ts`
+
+**AMENDED after the Phase 2 pre-flight scan (R70):** `src/capabilities.ts` joins this task's Files list because `EXPECTED_TOOLS` is SIX names today (`src/capabilities.ts:11-18`: exec, web_search, schedule_task, save_workspace, plan, plan_done) and `ToolDeps` has no `plan`/`plan_done` dependency, so a `buildTools` that defaults to the current list builds two tools that cannot execute. This task is the one the spec's item 6 ("delete `plan`/`plan_done`") lands in; narrowing the frozen list here is what makes the drift test mean something. `tests/paths.test.mjs` reads `EXPECTED_TOOLS` as the six names today, so it moves with this change, and it is the offline test that will fail if the two lists are narrowed in one file but not the other.
 
 **Interfaces:**
 - Consumes: the agent's `execSandbox`, `webSearch`, `enqueueTask`, and snapshot helpers.
@@ -760,7 +776,7 @@ git commit -m "P2: AI SDK language model served by the router service binding"
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/tools.test.mjs` asserts: `Object.keys(buildTools(fakeDeps))` is exactly `["exec","web_search","schedule_task","save_workspace"]` before Phase 5 and gains `delegate` then (the test reads a `EXPECTED_TOOLS` list from `src/capabilities.ts` so the two cannot drift); `exec` has no `recovery` field; `web_search.recovery === "rerun"`; every tool's `description` is non-empty, longer than 40 chars, and contains no em dash; and `web_search`'s description states the default result cap and says what to do when results are truncated.
+`tests/tools.test.mjs` asserts: `Object.keys(buildTools(fakeDeps))` equals `EXPECTED_TOOLS` after this task narrows it to exactly `["exec","web_search","schedule_task","save_workspace"]`, and that `EXPECTED_TOOLS` itself is frozen (`Object.isFrozen`) — the test compares against the constant rather than retyping it, so the two cannot drift, and Phase 5's `delegate` is added by editing the constant in one place; `exec` has no `recovery` property (`!("recovery" in exec)`); `web_search.recovery === "rerun"`; every tool's `description` is non-empty, longer than 40 chars, and contains no em dash; and `web_search`'s description states the default result cap and says what to do when results are truncated.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -768,7 +784,9 @@ git commit -m "P2: AI SDK language model served by the router service binding"
 
 - [ ] **Step 3: Implement `src/tools.ts`**
 
-Carry the hardened descriptions over from `src/agent.ts` verbatim, then apply the tool-design checklist once: the description answers what, when, and how; every zod field has `.describe()` with format and example; the result includes metadata the model can reason about (for `web_search`, the count and the cap; for `exec`, exit code plus a truncation notice when the output was cut). `recovery: "rerun"` on read-only tools only.
+Carry the hardened descriptions over from `src/agent.ts` verbatim, then apply the tool-design checklist once: the description answers what, when, and how; every zod field has `.describe()` with format and example; the result includes metadata the model can reason about (for `web_search`, the count and the cap; for `exec`, exit code plus a truncation notice when the output was cut).
+
+`recovery: "rerun"` on read-only tools only — and write it in the one form that typechecks. `recovery` appears NOWHERE in `ai@7.0.143` or `@ai-sdk/provider-utils@5.0.62`, `BaseFunctionTool` closes the object shape with `id?: never; isProviderExecuted?: never; args?: never; supportsDeferredResults?: never` (`@ai-sdk/provider-utils/dist/index.d.ts:2201-2243`), and `tool()` takes and returns `Tool<...>` (`:2324-2330`), so a fresh literal carrying `recovery` fails excess-property checking and `npm run typecheck`. The legal form is `Object.assign(tool({ description, inputSchema, execute }), { recovery: "rerun" as const })`, typed `Tool<...> & RecoverableTool` with `RecoverableTool` imported from `agents/harness/think` (`harness/think/index.d.ts:235-237`, exported `:780`). Two facts to keep in the doc comment because they explain the design: the harness reads it as `"recovery" in tool && tool.recovery === "rerun"` (`harness/think/index.js:2101-2103`) and STRIPS it before sending tools to the model (`:510`), and an absent field means `"report"` (`:233`, `:2101`).
 
 - [ ] **Step 4: Run the test to make sure it passes**
 
@@ -779,7 +797,7 @@ Carry the hardened descriptions over from `src/agent.ts` verbatim, then apply th
 Remove the JSON-schema literal and the `switch (fnName)` dispatch block it fed. Keep `execSandbox` itself: it is the dependency the new tools call.
 
 ```bash
-git add src/tools.ts tests/tools.test.mjs src/agent.ts
+git add src/tools.ts tests/tools.test.mjs src/agent.ts src/capabilities.ts tests/paths.test.mjs
 git commit -m "P2: tools are AI SDK tool definitions with recovery policy"
 ```
 
@@ -791,8 +809,15 @@ git commit -m "P2: tools are AI SDK tool definitions with recovery policy"
 - Modify: `src/agent.ts` (delete the inline `isRisky` hold), `src/index.ts` (`/api/approve`), `src/memory.ts` (`pending_actions` and `holdAction` go away)
 
 **Interfaces:**
-- Consumes: `isRisky` from `src/guardrails.ts`; `awaitsInput(message)` and `answerToolCall(messages, event)` exported from `agents/harness/ai-sdk`.
+- Consumes: `isRisky` from `src/guardrails.ts`; `awaitsInput(message)` exported from `agents/harness/ai-sdk` (`index.d.ts:129`) as a read-only guard.
 - Produces: `needsApproval(toolName: string, input: unknown): boolean`, `approvalPromptFor(toolName: string, input: unknown): string`, and the DO RPC `approveToolCall(sessionId: string, toolCallId: string, approved: boolean, reason?: string): Promise<{ ok: boolean; reply: string; state: string }>`, which answers a parked call through the transcript and lets the turn continue.
+
+**AMENDED after the Phase 2 pre-flight scan (R70). Read this before writing the answer path; the four bullets below each refute what this task used to say.**
+
+1. **Do not call `answerToolCall`.** The harness applies it itself on the answer path (`harness/think/index.js:1340-1372`, mapping at `:757-768`), and its return type is a `UIMessage | undefined` (`agents/harness/ai-sdk/index.d.ts:155-158`) whose `event` argument is a `ToolCallAnswer` of `type:"approval-response"`, while `submit()` takes a `ToolAnswer` of `type:"approval"` (`harness-B6B9S3rb.d.ts:75-94`). The two shapes are NOT the same object, and passing one where the other belongs is a silent no-continue, not a type error, because this crosses an RPC boundary. Submit through the session instead: `harness.session(id).submit({ type: "approval", approvalId, approved, reason }, { autoContinue: true })`.
+2. **`approvalId` is derived, never guessed.** The park stamps `approval: { id: \`approval:${toolCallId}\` }` (`harness/think/index.js:1701-1702`) and the resume matches on `part.state === "approval-requested" && part.approval.id === event.approvalId` (`turns-DCV3ycDl.js:309-313`). Keep the `toolCallId` parameter (that is what the console's card knows) and read the pending part's `approval.id` back off `harness.session(id).messages()` rather than hardcoding the `approval:` prefix. Note the parked part's state string is `approval-requested`, NOT `input-available`; Task 15's projection reads the same field and must agree.
+3. **A parked turn ENDS; the answer is a NEW operation.** `nextAction` maps `approval-requested` → `await-input` (`harness/think/index.js:619-625`), `_steps` settles an `await-input` as `{status:"done", text: textOf(message)}` (`:1281-1290`), and the answer arrives with `steps: 0` via `newMeta` (`:150-160`). So `wait()` on the first receipt resolves AT THE PARK, and the resumed work is a second operation over one transcript. The continuation is real (`continuation: true`, `index.d.ts:46-49, 179-187`, same assistant message, step budget reset) but it is not the same operation, and the auto-continue only fires when the parked message is the LAST one in the transcript (`index.js:1358-1364`); otherwise the answer is recorded and the turn waits for `session.continue()` (`index.d.ts:156-160`).
+4. **`ok` comes from a status, never from a throw.** If nothing is waiting, the operation settles `unanswered` with reason `"not_waiting"` (`index.js:1353-1356`). Return `state` as one of `"queued" | "placed" | "done" | "unanswered" | "not_waiting"` (the `ThinkOperationStatus` tagged union, `index.d.ts:189-195`; `Receipt` is `{operationId, session, accepted}`, `harness-B6B9S3rb.d.ts:99-103`) and take `reply` from `ThinkOperationResult.text`/`messageId` (`index.d.ts:165-167`). And because this is a DO RPC: return a plain object with a string `code`/`state`, never a class instance, for exactly the reason R65 F1 gives (`instanceof` cannot survive the boundary; the SDK itself tags `SteerNotSupportedError` with a `_tag` "for matching without `instanceof`", `index.d.ts:472-474`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -808,15 +833,19 @@ git commit -m "P2: tools are AI SDK tool definitions with recovery policy"
 
 - [ ] **Step 4: Scope the offline test honestly**
 
-`tests/approval.test.mjs` covers `needsApproval` only. Do not assert `awaitsInput` or `answerToolCall` behavior from an offline test: those live in `agents/harness/ai-sdk`, which is reached through modules that bind to Durable Object types, and the import itself can fail under plain Node. The parked-call round trip is proven live in step 7, which is where it can actually be seen.
+`tests/approval.test.mjs` covers `needsApproval` only. Do not assert `awaitsInput` behavior from an offline test: the parked-call round trip needs a transcript, which needs a DO, and the live step 7 is where it can actually be seen. CORRECTED reason (R70): the old text claimed the import itself would fail under plain Node. Measured on this PC with Node v26.11.1 and `agents@0.28.1`: `await import("agents/harness/ai-sdk")` and `await import("agents/harness/think")` BOTH load (9 exports including `awaitsInput`; `ThinkHarness`, `classifyContextOverflow`, `ThinkChat`), as do `agents/streams` and `agents/sessions`. Only the `agents` root and `agents/lifecycle` fail, because they reach `cloudflare:workers`. Keep the dependency-free seam anyway (it keeps `Env` and zod out of the test and keeps the assertion about OUR decision, not the SDK's), but do not restate the false reason, or the next reader will conclude the seam is load-bearing for the wrong thing. Rule to carry into every Phase 2/3 brief: never `import` from `agents` or `agents/lifecycle` inside a `src/*.ts` that a `tests/*.test.mjs` loads.
 
 - [ ] **Step 5: Implement the answer path and repoint the route**
 
-`src/approval.ts` stays dependency-free; put the transcript work in the DO RPC, which reads `harness.session(id).messages()`, calls `awaitsInput`, resolves the parked `toolCallId` with `answerToolCall`, and submits the resulting `ToolAnswer` with `autoContinue: true`. `/api/approve` becomes a thin wrapper over that RPC: same request shape `{id, approve}` is no longer accepted, it takes `{toolCallId, approved, reason?}`, so update the console's existing approval card in this task rather than leaving it pointed at a dead id scheme.
+`src/approval.ts` stays dependency-free; put the transcript work in the DO RPC, which reads `harness.session(id).messages()`, uses `awaitsInput` only as a guard, finds the pending part's real `approval.id`, and submits the `ToolAnswer` with `autoContinue: true` — then reports what actually happened using the four bullets above. `/api/approve` becomes a thin wrapper over that RPC: the old request shape `{id, approve}` is no longer accepted, it takes `{toolCallId, approved, reason?}`, so update the console's existing approval card in this task rather than leaving it pointed at a dead id scheme. The card's own stored value is the reason this task touches `ui/index.html`: it currently holds the `pending_actions` row id, and after this change nothing on the console is a row id.
+
+- [ ] **Step 6: Mirror and deploy before proving anything**
+
+Copy every file this task changed into `project/agent-federation` and verify each byte-equal with `diff -q` (never `wrangler.jsonc`, which the deploy tree edits by hand), then deploy. Skipping this is how Task 5 shipped to one tree only; the live proof below is worthless if it runs a build that is not the one under review.
 
 - [ ] **Step 7: Run the tests, then prove the round trip live**
 
-`node tests/approval.test.mjs` and `npm test` exit 0. Deploy, submit `run: rm -rf /tmp/holdcheck`, approve from the card, and confirm the command then runs **inside the same turn** instead of the turn having ended. This is the behaviour the spec's ruling 6 asks for, and it is the difference between a durable gate and an interruption.
+`node tests/approval.test.mjs` and `npm test` exit 0. Deploy, submit `run: rm -rf /tmp/holdcheck`, approve from the card, and confirm the approved `exec` runs and the SAME assistant message continues (`continuation: true`, step budget reset) rather than the model being re-asked from the user message as today. Be honest in the report about the shape of it: the parked operation settles `done`, and the resume is a second operation on one transcript, so what you watch for is one continuing message, not one continuing request. This is the behaviour the spec's ruling 6 asks for, and it is the difference between a durable gate and an interruption.
 
 ```bash
 git add src/approval.ts tests/approval.test.mjs src/agent.ts src/index.ts src/memory.ts ui/index.html
@@ -837,21 +866,29 @@ git commit -m "P2: guardrails move into the harness gate and approvals resume th
 export interface HarnessConfigDeps {
   env: Env;
   tools: ToolSet;
+  maxSteps: number;                                  // RULING R70: a plain number, see Step 3
   classifyError: (e: unknown) => ThinkErrorClass;
-  onEvent: (ev: ThinkSessionEvent) => void;
+  onEvent: (ev: ThinkSessionEvent) => void;          // consumed by harness.observe(), NOT by hooks
   onTurnEnd: (ctx: ThinkTurnEndContext) => Promise<void>;
   summarize: (text: string) => Promise<string>;
 }
-export const MAX_STEPS_CHAT = 10;
-export const MAX_STEPS_DEEP = 45;
+export const MAX_STEPS_CHAT = 12;                    // the one budget this build ships with
+export const MAX_STEPS_DEEP = 45;                    // DECLARED, NOT WIRED: see the ruling in Step 3
 export function harnessConfig(deps: HarnessConfigDeps): ThinkHarnessOptions<ToolSet>;
 // src/harness.ts: the only place that constructs the class
 export function buildHarness(deps: HarnessConfigDeps): ThinkHarness<ToolSet>;
 ```
 
+**AMENDED after the Phase 2 pre-flight scan (R70). Three of the spec's Phase 2 assumptions do not survive contact with `agents@0.28.1`; the exact `ThinkHarnessHooks` field list is quoted so nobody invents one.**
+
+- `ThinkHarnessHooks` (`harness/think/index.d.ts:367-409`, exported `:788`) is EXACTLY: `beforeTurn`, `beforeToolCall`, `afterToolCall`, `onStepFinish`, `onChunk`, `onTurnEnd`, `onError`, `classifyError`, `onRecovery`. There is **no `onEvent`**. `ThinkSessionEvent`s are delivered by `subscribe(session, listener)` (`:565`, `:688`) or `observe(listener)` (`:577`, type `ThinkHarnessListener` at `:81`).
+- `ThinkHarnessOptions.maxSteps?: number` (`:440`, default 10, read from the frozen options per operation at `index.js:1247`). It is NOT `PerSession` — contrast `model` (`:427`), `system` (`:428`), `tools` (`:434`) — and `ThinkTurnConfig` (`:276-285`) carries no `maxSteps`, so `beforeTurn` cannot raise it either.
+- `toolApproval` takes `{ session, toolName, toolCallId, input }` (`:445-450`) and the harness always passes all four (`index.js:1676-1681`). It is OR-ed with a tool's own deprecated `needsApproval` field (`index.js:1682-1686`; `@ai-sdk/provider-utils/dist/index.d.ts:2151-2155`) and it is re-asked after every eviction, so it must stay pure (`index.d.ts:368-372`).
+- `configureSession?: (session: Session, id: string) => void` (`:458`) is SYNCHRONOUS and returns void: nothing may be awaited inside it.
+
 - [ ] **Step 1: Write the failing test**
 
-`tests/harness.test.mjs` imports **`../src/harness-config.ts`**, not `harness.ts`: `src/harness.ts` pulls `agents/harness/think`, whose transitive Durable Object bindings make it unloadable under plain Node, which is the whole reason the config is a separate module. Assert `MAX_STEPS_CHAT === 10`, `MAX_STEPS_DEEP === 45`, `typeof harnessConfig(fakeDeps).tools === "function"` (a `PerSession`, so `deep` can raise the step budget per session), `harnessConfig(fakeDeps).toolApproval({toolName:"exec", input:{cmd:"rm -rf /"}}) === true`, and `harnessConfig(fakeDeps).hooks.classifyError` is exactly the injected function, proving the seam rather than the SDK.
+`tests/harness.test.mjs` imports **`../src/harness-config.ts`**, not `harness.ts` — the seam is kept so the assertion is about OUR options object and not about the SDK, and because `Env` and zod stay out of the offline path. (The original reason given for this seam, "`src/harness.ts` pulls `agents/harness/think` which is unloadable under plain Node", is FALSE and refuted in Task 13's Step 4; do not repeat it here.) Assert: `MAX_STEPS_CHAT === 12`; `harnessConfig(fakeDeps).maxSteps === 12` and `typeof harnessConfig(fakeDeps).maxSteps === "number"` (a `PerSession` here is the bug this ruling bans); `typeof harnessConfig(fakeDeps).tools === "function"` (legal, `PerSession<TOOLS>` at `:434`); `harnessConfig(fakeDeps).toolApproval({session:"", toolName:"exec", toolCallId:"tc1", input:{cmd:"rm -rf /"}}) === true`, all four keys present; `harnessConfig(fakeDeps).hooks.classifyError` is exactly the injected function; `hooks.onEvent` is `undefined` (the guard against inventing a field — an unknown key on a hand-built options object is a runtime no-op, never a compile error); and `recovery` carries the three explicit numbers named in Step 3, because the SDK's defaults are a cost amplifier rather than a safety net.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -859,15 +896,26 @@ export function buildHarness(deps: HarnessConfigDeps): ThinkHarness<ToolSet>;
 
 - [ ] **Step 3: Implement `src/harness-config.ts`**
 
-Return the options object: `model` and `system` as `PerSession` functions of session, `tools` as one, `maxSteps` as one that reads the session's lane, `toolApproval` calling `needsApproval`, `recovery` from the spec's `ThinkRecoveryOptions`, `configureSession` registering compaction through `deps.summarize`, and `hooks` carrying `deps.onEvent`, `deps.onTurnEnd`, and `deps.classifyError`. Types for `ThinkHarnessOptions` come in as `import type` so nothing is loaded at runtime. Read `node_modules/agents/dist/harness/think/index.d.ts:421-500` for the exact `ThinkHarnessOptions` and `ThinkHooks` field names and use only those: this is the task where an invented field name would fail at runtime, not at compile time.
+Return the options object: `model` and `system` as `PerSession` functions of session, `tools` as one, `toolApproval` calling `needsApproval`, `recovery` with explicit values, `configureSession` registering compaction, and `hooks` carrying `deps.onTurnEnd` and `deps.classifyError` only. Types for `ThinkHarnessOptions` come in as `import type` so nothing is loaded at runtime. Read `node_modules/agents/dist/harness/think/index.d.ts:367-460` for the exact `ThinkHarnessHooks` (that is its real name; `ThinkHooks` does not exist) and `ThinkHarnessOptions` field names, and `:777-820` for the export list; use only fields that appear there. `ThinkHarnessOptions` is generic over `TOOLS extends ToolSet` (`:421`), so `ThinkHarnessOptions<ToolSet>` is right.
 
-Note for the implementer, because it is a deliberate departure from the spec: the spec's Phase 1.3 says `this.lifecycle.use(new Sessions())`. Do not do that. `ThinkHarness` constructs and binds its own `Sessions` internally (`harness/think/index.d.ts:500-510`, `onStart` creates its tables and ensures the root session), so installing a second one gives two writers over one transcript. The spec's requirement, "replace the 6-row truncation with durable sessions plus compaction", is met by the harness's instance plus `configureSession`. The only capability we install ourselves is `Streams`, in Task 19, because we need a stream the console can read and the harness's is internal.
+**`maxSteps`: RULING R70.** The spec's "set it per session, 10 for chat and 40-60 for a build, as a request field" (spec:190-191) cannot be built: `maxSteps` is a single construction-time number, and the only way to have two budgets is two harness instances — which is BANNED, for the reason in Step 4's note (two `Sessions` cores over one `cf_agents_session_messages` table, silently). So `harnessConfig(deps)` takes `deps.maxSteps` and passes it through, `FederationAgent` builds ONE harness for every lane, and the value is `MAX_STEPS_CHAT = 12`: enough for search → read → edit → test → report, bounded enough not to burn a lane on a bad night. Cost of this ruling, stated plainly: a long "build me an app" turn can stop at 12 model calls with its tools run and no final reply (that is what `:436-438` documents), and the user re-asks in the same session; the transcript and the sandbox both survive, so the work is not lost, only the tail. `MAX_STEPS_DEEP` stays exported as the value a future task would use IF a supported per-session budget appears; nothing may claim it is wired. Do not write `maxSteps: ({session}) => ...`, and do not assert `typeof .maxSteps === "function"`.
+
+**`recovery`: name the three numbers.** `ThinkRecoveryOptions` (`index.d.ts:239-256`) defaults to `maxAttempts 10`, `backoffMs 1000`, `stallTimeoutMs 120000` (`index.js:676-679`). A 120 s stall timeout treats a silent model stream as an interruption and RE-RUNS the call, and 10 attempts on a slow tunnel multiplies cost instead of bounding it. Set them explicitly (`stallTimeoutMs` at or above the slowest real first-token latency you can measure, `maxAttempts` low enough that a stuck session settles `unanswered` with reason `"interrupted"` rather than looping) and record the chosen pair in the task report; the honest number comes from a live call, and Task 37 is where the matrix re-measures it.
+
+**`configureSession`: the sync shape.**
+`configureSession: (s) => { s.onCompaction(createCompactFunction({ summarize: deps.summarize })).compactAfter(THRESHOLD); }` — `createCompactFunction` comes from `agents/sessions` (`handle-zAzh0UW2.d.ts:66-68`, re-exported at `sessions/index.d.ts:70`) and its `CompactOptions.summarize` is `(prompt: string) => Promise<string>` (`:33-41`); the hook itself never awaits. Registration persists: session handles are cached (`sessions-_vN5BEZX.js:2251-2259`) and `configureSession` runs once per session (`index.js:846` `_configured`). Pick `THRESHOLD` from the deployed lane's real context window, not from a guess: the router's window numbers live in `docs/explorations/router-models.md`, and this PC's Claude-Code-side proxy window figure is in user memory, not in this repo.
+
+**`onEvent` wiring:** `deps.onEvent` is attached AFTER construction, in `src/harness.ts`, as `harness.observe((session, ev) => deps.onEvent(ev))` (`index.d.ts:577`). If all a later task needs is streamed text chunks, `hooks.onChunk` (`:391-393`) is synchronous and pairs directly with the synchronous `StreamWriter.append` (`streams-vrCtbUIn.d.ts:72-73`) — that is the seam Task 19 feeds from, and it is why this task must NOT try to build the stream itself.
 
 - [ ] **Step 4: Install it**
 
-In the `FederationAgent` constructor body, after `super(env)`: `this.harness = buildHarness({...}); this.lifecycle.use(this.harness);`. `Lifecycle.use` throws only after startup and refuses a duplicate capability id, both of which are safe here because the constructor runs before the lifecycle starts.
+In the `FederationAgent` constructor body, after `super(env)`: `this.harness = buildHarness({...}); this.harness.observe(...); this.lifecycle.use(this.harness);`. `Lifecycle.use` throws only after startup and refuses a duplicate capability id, both safe here because the constructor runs before the lifecycle starts (`lifecycle-DGorpAmA.js:950-953`, lock set at `:1276-1279` inside `_runStartup`; `Agent` creates `lifecycle` at `src-CQxJFv4l.js:1849` and registers `scheduler/queue/mcp/state/websockets/tasks/dynamic-agents` at `:1957`). The harness's own id is `"think-harness"` (`index.js:837`), which collides with none of them. Install the harness before any `use()` of your own; if a `ThinkChat`-style capability ever joins, the order is harness → webSockets → chat (`index.d.ts:751-757`).
+
+Note for the implementer, because it is a deliberate departure from the spec: the spec's Phase 1.3 says `this.lifecycle.use(new Sessions())`. Do not do that, and understand why the SDK will not stop you. `ThinkHarness` constructs and binds its own `Sessions` internally (`index.d.ts:485-489`; `index.js:845, 853, 1893-1896`), and `use()`'s duplicate check scans only REGISTERED capabilities (`lifecycle-DGorpAmA.js:951-953`) — the harness's instance is BOUND, not registered, so `use(new Sessions())` does not throw. Both would run `CREATE TABLE IF NOT EXISTS cf_agents_session_messages` over the same rows (`sessions-_vN5BEZX.js:830`) while keeping separate `SessionsCore` caches and separate change feeds (`handle-zAzh0UW2.d.ts:114-119`; `sessions-_vN5BEZX.js:2222-2233`): a SILENT double writer, the worst class of bug this plan has met. Never install a `Sessions` capability. The spec's requirement "replace the 6-row truncation with durable sessions plus compaction" is met by the harness's instance plus `configureSession`. The only capability we install ourselves is `Streams`, in Task 19, because we need a stream the console can read and the harness's is private (`index.d.ts:504`), is discarded in the same transaction that persists its message (`index.js:1979-1998`), and cannot be live-tailed by a second `Streams` (reader wakeups are per-instance, `streams-lsHMJhRW.js:483-504`).
 
 - [ ] **Step 5: Run the test and typecheck, then commit**
+
+`node tests/harness.test.mjs`, `npm test` and `npm run typecheck` exit 0 — plus the check that no `src/*.ts` reachable from a `tests/*.test.mjs` imports `agents` or `agents/lifecycle` (grep both strings; the sub-path imports `agents/harness/think`, `agents/harness/ai-sdk`, `agents/streams`, `agents/sessions` are all Node-loadable and legal).
 
 ```bash
 git add src/harness-config.ts src/harness.ts tests/harness.test.mjs src/agent.ts
@@ -877,20 +925,30 @@ git commit -m "P2: ThinkHarness installed on the agent lifecycle"
 ### Task 15: Cut over the compatibility path
 
 **Files:**
-- Modify: `src/agent.ts` (delete the loop), `src/index.ts`
+- Modify: `src/agent.ts` (delete the loop), `src/index.ts`, `src/types.ts`, `src/memory.ts`, `ui/index.html`
+- Delete: `tests/live-deep.mjs`, `tests/live-tools2.mjs`
 - Create: `src/reply.ts`, `tests/reply.test.mjs`
 
 **Interfaces:**
 - Consumes: `this.harness.session(id)`.
-- Produces: `async chat(content: string, opts?: { deep?: boolean; sessionId?: string }): Promise<AgentReply>` implemented as `const s = this.harness.session(sessionId); const r = await s.prompt(content, { source: "server" });`, then a `replyFrom(r)` projection that keeps the current `AgentReply` shape (`reply`, `state`, `verb`, `tools`, `pending`) so `/api/message` and the un-migrated UI keep working until Task 26.
+- Produces: `chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply>` — the SAME positional signature Task 8 rules and `src/types.ts`' `AgentStub` declares (id last, optional; R65), implemented as `const s = this.harness.session(sessionId ?? "main"); const r = await s.prompt(content, { source: "server" });`, then a `replyFrom(r)` projection that keeps the current `AgentReply` shape (`reply`, `state`, `verb`, `tools`, `pending`) so `/api/message` and the un-migrated UI keep working until Task 25.
+
+**AMENDED (R70): this task previously restated `chat` as `chat(content, opts?: { deep?: boolean; sessionId?: string })`, which contradicts Task 8's ruling and would break every call site Task 8 pins (`/api/message`, `onScheduledTask`, the session routes). `tier` is the lane and `"deep"` is a `ChatTier`; there is no options object.** If Task 15 changes the signature anyway, `tests/session-scope.test.mjs`, `tests/routes.test.mjs` and `src/types.ts` all fail, and the failure is correct.
+
+**AMENDED (R70) — four blast-radius items this task owned and did not list.** All of them are in the deletion scope of Step 1; leaving them out is what makes `npm test` green and the deployed console red.
+
+1. `AgentReply.pending` is `{ id: number; cmd: string }` (`src/types.ts:42`, re-verified) because it carried the `pending_actions` autoincrement row id (`holdAction` returns a number, `src/memory.ts:239`). A parked harness approval has no numeric id: its identity is a **string** `toolCallId` handed to `toolApproval` (`harness/think/index.d.ts:448`). Change the field to `{ toolCallId: string; name: string; cmd: string }`, and in the same commit repoint the console's approve POST: `ui/index.html` `decide(approve)` (the function that reads `PENDING.id`) must send `{ toolCallId, approved, reason }`, matching Task 13's `/api/approve` body. Do not solve this by stringifying the number — Task 13 deletes the row that produced it.
+2. `AgentReply.plan` (`src/types.ts:44`) is **deleted**, not left always-empty. Nothing can fill it once `plan`/`plan_done` are gone, and the field's presence is why `ui/index.html` still calls `loadPlan()`. So this task also removes: the `plan:` reply fields in `src/agent.ts` (anchor `plan: heldPlan.length ?`), `const plan = listPlan(sql)` (anchor `listPlan(sql)`), the `/api/plan` route in `src/index.ts`, and in `src/memory.ts` the whole plan half of the store — `ensurePlanSchema` and its `plan_steps` table, `setPlan`, `listPlan`, `markPlanStep` (find them by name, not by line). The `plan_steps` table may remain as an orphan in already-open DO SQLite; no migration and no `DROP`, because nothing reads it. `src/memory.ts` was in no Phase 2 `git add` line before this note, which is why the plan-table code had no owning commit.
+3. `tests/live-deep.mjs` and `tests/live-tools2.mjs` **are deleted** (the `Delete:` entry above), not rewritten: both drive `/api/plan`, POST `/api/approve` with `{id, approve}`, and prompt the model to call `plan_done`. They are outside `npm test` so nothing offline notices. Phase 6 owns a live matrix that matches the harness.
+4. The `"Unknown tool "` fall-through string in `src/agent.ts` (anchor `Unknown tool "`) enumerates the six tools literally. Derive it from `Object.keys(tools)` so it cannot drift again; this is the second time this list went stale on its own file.
 
 - [ ] **Step 1: Delete what must die**
 
-Remove the `for (let round = 0; round < 4; round++)` block, the 25s `AbortSignal.timeout`, the `timedOut` early return that discards `toolRuns`, the `"(hit the tool round limit; try a simpler ask)"` string, the blocking self-critique call, and the `plan` / `plan_done` tools with their `/api/plan` route and `plan_steps` writes. `run:` and `search:` stay.
+Remove the `for (let round = 0; round < 4; round++)` block, the 25s `AbortSignal.timeout`, the `timedOut` early return that discards `toolRuns`, the `"(hit the tool round limit; try a simpler ask)"` string, the blocking self-critique call, and the `plan` / `plan_done` tools with their `/api/plan` route and `plan_steps` writes. `run:` and `search:` stay. Two offline tests read `src/agent.ts` as TEXT and reference the round limit and the tool list (`tests/paths.test.mjs`, and Task 12's narrowed `EXPECTED_TOOLS`); grep both before deleting so a text-matching test is not left blessing a string that no longer exists.
 
 - [ ] **Step 2: Project the result honestly**
 
-`replyFrom(r)` reads `r.messages` for the last assistant message's text parts, maps `tool-*` parts into the existing `ToolRun[]` shape (`name`, `cmd`, `output`, `ok`), and sets `pending` from any part in `input-available` state that the approval gate parked. `state` and `verb` keep the existing regex ladder, fed by the tool names actually run rather than by the reply text.
+`replyFrom(r)` reads `r.messages` for the last assistant message's text parts, maps `tool-*` parts into the existing `ToolRun[]` shape (`name`, `cmd`, `output`, `ok`), and sets `pending` from any part in `approval-requested` state — NOT `input-available`, which is a different AI SDK part state and the wrong test (measured: `nextAction` keys off `approval-requested`, `harness/think/index.js:619-625`, and the resume matcher requires it, `turns-DCV3ycDl.js:309-313`). `state` and `verb` keep the existing regex ladder, fed by the tool names actually run rather than by the reply text.
 
 - [ ] **Step 3: Write the test for the projection**
 
@@ -901,7 +959,8 @@ Remove the `for (let round = 0; round < 4; round++)` block, the 25s `AbortSignal
 `npm test` and `npm run typecheck` exit 0. Deploy, then POST `/api/message` with `"build me a one page habit tracker, write the files, then run ls -la and show me the output"` and assert: no round-limit string in the reply, `tools.length >= 5`, and the reply names real files. Report the actual counts. **This is the phase-defining acceptance check.**
 
 ```bash
-git add src/agent.ts src/index.ts src/reply.ts tests/reply.test.mjs
+git add src/agent.ts src/index.ts src/types.ts src/memory.ts src/reply.ts ui/index.html tests/reply.test.mjs
+git rm tests/live-deep.mjs tests/live-tools2.mjs
 git commit -m "P2: the four-round loop is gone; turns run on the harness"
 ```
 
@@ -913,7 +972,13 @@ git commit -m "P2: the four-round loop is gone; turns run on the harness"
 
 **Interfaces:**
 - Consumes: `hooks.beforeTurn` from Task 14, `remember`, `recall` from `src/memory.ts`, `EXPECTED_TOOLS` and `SANDBOX_HOME` from Task 4.
-- Produces: `type Capability = { id: string; label: string; detail: string; wired: boolean }`, `capabilityList(tools: readonly string[]): Capability[]`, and `capabilitiesText(tools: readonly string[]): string` in `src/capabilities.ts`, the only source of capability claims anywhere; plus `buildSystemPrompt(memories: MemoryRow[], capabilities: string, home: string): string` exported from `src/memory.ts`.
+- Produces: `type Capability = { id: string; label: string; detail: string; wired: boolean }`, `capabilityList(tools: readonly string[]): Capability[]`, and `capabilitiesText(tools: readonly string[]): string` in `src/capabilities.ts`, the only source of capability claims anywhere; plus `buildSystemPrompt(memories: MemoryRow[], capabilities: string, home: string): string` exported from `src/capabilities.ts` (see amendment 1 below).
+
+**AMENDED (R70) — three corrections, one of which changes what this task deletes.**
+
+1. `buildSystemPrompt` moves to `src/capabilities.ts`, **not** `src/memory.ts` as this task's Interfaces originally said. Measured reason: it is exported from `src/agent.ts:148` today in the 2-arity form `(memories: MemoryRow[], persona: string)`, its only caller is `src/agent.ts` (grep: two hits, the export and `buildSystemPrompt(memories, DEFAULT_PERSONA)`), and no test asserts the 2-arg form, so the 3-arity change is safe. `src/memory.ts` cannot be its home: `tests/memory.test.mjs` compiles that module with esbuild instead of importing it, while `src/capabilities.ts` **is** imported directly by `tests/paths.test.mjs:10` under plain Node, which is the loadability `tests/context.test.mjs` needs. `MemoryRow` arrives as `import type`.
+2. **This task does not own `EXPECTED_TOOLS`.** Task 12 narrows it to four names and updates `tests/paths.test.mjs`; if Task 16 touches either, it is redoing an already-committed change.
+3. **`logMessage` stays, and its meaning changes.** Step 3 told you to delete it along with the 6-message window. Delete the window (`recentMessages(sql, 6)` feeding the model) and the `recall()` call at the prompt build site: the harness transcript is the model's history and compaction replaces truncation. Do **not** delete the `logMessage` writes. Measured reason: `UIMessage` is `{ id, role, metadata?, parts }` (`node_modules/ai/dist/index.d.ts:1831-1845`) — there is no per-message timestamp on the harness transcript, while `created_at` is the console's only day-grouping key and Task 7's `messages(limit?)` RPC returns `MessageRow[]` built on it. Deleting the write without repointing the read makes `GET /api/sessions/:id/messages` return rows that never grow. So BLIP's `messages` table becomes a **display projection**, not a second source of truth: write it from `hooks.onTurnEnd` (Task 14 already carries `deps.onTurnEnd`), one row per user message and one per assistant message, text only, and keep `recentMessages` as the read path for the routes and the console. The harness owns the model's context; `messages` owns what a person sees on reload. Cost if wrong: the two can drift when `onTurnEnd` throws, which is a visible reload gap rather than a corrupted turn, and it is the cheaper of the two available failures.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -925,7 +990,9 @@ git commit -m "P2: the four-round loop is gone; turns run on the harness"
 
 - [ ] **Step 3: Implement both halves**
 
-One table and one renderer in `src/capabilities.ts`, keyed off the tool names actually wired, so the system prompt, the `what can you do` reply, and later `GET /api/capabilities` in Task 29 cannot disagree: this is the mechanism that makes the drift recorded in `tests/README.md` structurally impossible. `beforeTurn` reads `recall(sql, ...)` for the incoming user text and returns `ThinkTurnConfig.system` composed by `buildSystemPrompt`. Delete `logMessage` calls and `recentMessages(sql, 6)`: the harness transcript is now the history, and compaction replaces truncation.
+One table and one renderer in `src/capabilities.ts`, keyed off the tool names actually wired, so the system prompt, the `what can you do` reply, and later `GET /api/capabilities` in Task 29 cannot disagree: this is the mechanism that makes the drift recorded in `tests/README.md` structurally impossible. `beforeTurn` reads `recall(...)` for the incoming user text and returns `ThinkTurnConfig.system` composed by `buildSystemPrompt`. Then, per amendment 3: delete the `recentMessages(sql, 6)` window read and the prompt-site `recall()`, move `logMessage` out of the request path into `hooks.onTurnEnd`, and leave the `messages` table itself and its read path alone.
+
+`beforeTurn` is not once-per-turn. Verbatim from `harness/think/index.d.ts:369-372`: "Before every model call. A turn makes several, and after an eviction the harness has no memory of what an earlier call returned, so it asks again each time." So `recall()` runs per **step**, not per turn: keep it the same cheap read it is today (`slice(0, 120)` of the incoming text, limit 8), never write inside this hook, and note that `ThinkTurnContext` (`:263-268`: `session`, `operationId`, `step`, `continuation`, `messages`, `system`, `tools`) carries no `sql` handle, so the hook re-derives `this.db()` itself.
 
 - [ ] **Step 4: Run the test to make sure it passes, then commit**
 
@@ -944,25 +1011,33 @@ git commit -m "P2: one capability table; memories injected per turn; the 6-messa
 - Consumes: nothing.
 - Produces: `parseDirective(text: string): { kind: "exec" | "search"; arg: string } | null`, dependency-free in its own module because `src/agent.ts` imports the SDK and cannot be loaded by an offline Node test. The `run:` and `search:` branches return `AgentReply` with a one-entry `tools` array whose `cmd` is the command and whose `output` is the result.
 
+**AMENDED (R70) — this task tightens a live hole, it does not relocate a regex.**
+
+Measured with `node` against the shipped literals: `"run:  "` **matches** `DIRECT_RUN_RE = /^(run|exec|execute):\s*(.+)$/is` (`src/agent.ts:86`) with `arg = " "`, because `.` matches the space and `$` then anchors. The branch goes on to `const cmd = (directRun[2] || "").trim()` → `""` → `await this.execSandbox("")` (`src/agent.ts:545-546`), and then records a meaningless exec row via `logMessage`/`remember` (`:547-548`). So Step 4 is a **behaviour change**, and the same hole is in `DIRECT_SEARCH_RE = /^search:\s*(.+)$/is` (`src/agent.ts:94`), which this task's Steps never named.
+
 - [ ] **Step 1: Fix the known live failure**
 
-`tests/README.md` records that `live-matrix.mjs` probe 2 asserts `tools[0].cmd` while the `run:` path returns no `tools` array. Change the path, not the probe.
+`tests/README.md` records that `live-matrix.mjs` probe 2 asserts `tools[0].cmd` while the `run:` path returns no `tools` array. Change the path, not the probe. Confirmed by measurement, and only this branch is broken: `search:` already builds the card (`const runs: ToolRun[] = [{ name: "web_search", cmd: query, output: r.out.slice(0, 4000), ok: r.ok }]`, `src/agent.ts:559-561`) while `run:` returns `{ reply: r.out, state: r.ok ? "idle" : "error", verb: "Ran" }` with no `tools` (`:549`). Use the `search:` branch as the template, and while you are in that comment block fix `src/agent.ts:538`, which says `execute <cmd>` with no colon while the regex requires the colon; the comment over-promises a form that does not parse.
 
 - [ ] **Step 2: Write the test**
 
-`tests/prefix.test.mjs` asserts `parseDirective("run: echo hi")` yields `{kind: "exec", arg: "echo hi"}`, `search: cats` yields `{kind: "search", arg: "cats"}`, `RUN: ls` matches case-insensitively, `"run:  "` yields no match, and a message that merely contains the word `run:` mid-sentence does not match, which is the false-positive class fixed in the last commit series.
+`tests/prefix.test.mjs` asserts `parseDirective("run: echo hi")` yields `{kind: "exec", arg: "echo hi"}`, `search: cats` yields `{kind: "search", arg: "cats"}`, `RUN: ls` matches case-insensitively, **both** `"run:  "` and `"search:  "` yield no match, `exec: ls` and `execute: ls` both match as `kind: "exec"`, `"search:  "` does not match the exec arm and `"run:  "` does not match the search arm (the two regexes need separate no-match cases: measured, `"search: cats"` does not match `DIRECT_RUN_RE`), and a message that merely contains the word `run:` mid-sentence does not match, which is the false-positive class fixed in the last commit series. Add one assertion that is not about the regex: `parseDirective` is never handed to `execSandbox` with an empty `arg` — assert that the dispatch site returns before calling when `arg` is empty, by text-matching the guard in `src/agent.ts` the way `tests/paths.test.mjs` text-matches the sandbox calls.
 
 - [ ] **Step 3: Run it to make sure it fails**
 
 `node tests/prefix.test.mjs`. Expected: module not found.
 
-- [ ] **Step 4: Move the regexes into `src/directives.ts`**
+- [ ] **Step 4: Move and tighten both regexes in `src/directives.ts`**
 
-`src/agent.ts` imports `parseDirective` and drops its own `DIRECT_RUN_RE` and search-prefix literals, so there is one definition of what a directive is.
+`src/agent.ts` imports `parseDirective` and drops its own `DIRECT_RUN_RE` and `DIRECT_SEARCH_RE` literals, so there is one definition of what a directive is. Both arms require non-space content: `/^(run|exec|execute):\s*(\S.*)$/is` and `/^search:\s*(\S.*)$/is`. Then re-run the probe set you wrote in Step 2 against the literals before wiring anything. Also put `if (!arg) return null` in `parseDirective` as a second gate: the regex is the fix, the guard is the belt, and the empty-command dispatch is the defect (P2-14).
 
 - [ ] **Step 5: Emit the tool card on both branches**
 
 Each branch returns `tools: [{ name, cmd, output, ok }]` built from the same `ToolRun` shape the model path uses, so the console renders one card for both.
+
+- [ ] **Step 6: Rule on where a directive turn is remembered**
+
+The harness has **no** input kind that appends an assistant message containing a `tool-*` part without a model call: `ThinkInput` (`harness/think/index.d.ts:121-126`) is `string | UIMessage | readonly UIMessage[] | HarnessInput | ToolAnswer`, and the `OperationInput` kinds (`:85-100`) are `"messages"` ("Place these user messages, then answer them"), `"answer"`, `"regenerate"`, `"continue"`. `ToolAnswer` with `autoContinue: false` records a tool *result* against an existing tool-call part; it cannot originate one. So `run:` / `search:` must stay BLIP-owned early returns inside `chat()` **before** `harness.session().prompt()`, exactly as `src/agent.ts:543` and `:554` do today, and their cards are not in the durable harness transcript. **Ruling:** accept that, and make the display projection cover it — each directive branch writes its `logMessage` pair (the user's directive line and the tool output as the assistant line) on the path Task 16 established, so a reload still shows what ran. State in `tests/README.md` that directive turns are out of the model's transcript: the model never sees a `run:` it answered, which is a real and accepted limitation of Phase 2, not an oversight.
 
 - [ ] **Step 6: Run the tests, deploy, and run the live matrix**
 
@@ -1145,11 +1220,13 @@ git commit -m "P3: SSE served from the owning DO with fail-closed query-token au
 - Modify: `src/index.ts`, `src/agent.ts`
 
 **Interfaces:**
-- Produces: `POST /api/sessions/:id/message` with body `{content, deep?, source?}` returning `{ok: true, streamId, operationId}` in well under a second, via `session.submit(content, { source: "server", operationId })`; `POST /api/sessions/:id/abort` with `{operationId?}`.
+- Produces: `POST /api/sessions/:id/message` with body `{content, tier?, source?}` returning `{ok: true, streamId, operationId}` in well under a second, via `session.submit(content, { source: "server", operationId })`; `POST /api/sessions/:id/abort` with `{operationId?}`.
+
+**AMENDED (R72, was F22).** The body field is `tier`, a `ChatTier` (`src/types.ts`, Task 8's ruling), not `deep`. This task previously produced `{content, deep?}` and claimed "`deep: true` selects `MAX_STEPS_DEEP` for that session"; R70 proved no per-session step budget can be built (`maxSteps` is a construction-time scalar and a second harness instance is banned), so there is no `deep` selector to thread. `tier` still travels, because it selects the **model** lane, which is a different thing and is wired. Delete "45-step build" from the rationale below too: the shipped budget is `MAX_STEPS_CHAT = 12` for every lane.
 
 - [ ] **Step 1: Implement submit-and-return**
 
-The DO method returns the receipt's `operationId` and the `streamIdFor(sessionId, operationId)`. Nothing in this path awaits the model, which is what lets a 45-step build outlive the Worker wall clock. `deep: true` selects `MAX_STEPS_DEEP` for that session.
+The DO method returns the receipt's `operationId` and the `streamIdFor(sessionId, operationId)`. Nothing in this path awaits the model, which is what lets a long multi-step build outlive the Worker wall clock: the turn continues in the harness's job queue, and the console watches it on the stream.
 
 - [ ] **Step 2: Keep the old alias alive**
 
