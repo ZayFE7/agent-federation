@@ -585,16 +585,23 @@ export class FederationAgent extends Agent<Env> {
       }
       // ONE poll row, never one per arming. A one-shot schedule deduplicates only
       // when `idempotent: true`, and the SDK matches a reusable row on callback plus
-      // payload and never on its time, so this option is load-bearing, not
-      // decorative: `wakeAt` legitimately moves on every call, and the option is
-      // what lets the same row be retimed instead of a new one inserted. Without it
-      // every arming event left a permanent cf_agents_jobs row behind: onStart, each
-      // schedule_task, each tick that re-arms. The fired row is deleted, the extra
-      // rows are not, so main ends up waking and running this handler once per
-      // leftover row, every period, forever. This is the SDK's own dedup idiom for
-      // a self-rescheduling alarm: list by callback, cancel them all, arm once.
-      // Cancelling the row that is currently running is safe: the queue deletes on
-      // outcome only `WHERE running = 1`, so a cleared row simply defers.
+      // payload and never on its time. On a dedup hit it keeps the EXISTING row and
+      // discards the new time (`_insert` returns `existing.job` and only re-arms), so
+      // the option is a duplicate guard for two arms that interleave, not a retimer:
+      // the cancel loop below is what actually moves a wake earlier, which is why it
+      // runs FIRST. Arming first and cancelling the other rows by id cannot retime,
+      // because the arm would dedup onto the stale row and drop `wakeAt`. The
+      // residual cost of cancel-first is one narrow window: if `schedule()` throws
+      // after the cancels land, zero rows remain and the tick waits until main is
+      // next instantiated (`onStart` re-arms) or the next insert re-arms. Bounded and
+      // self-healing, and the alternative is the amplification below. Without the
+      // option every arming event left a permanent cf_agents_jobs row behind:
+      // onStart, each schedule_task, each tick that re-arms. The fired row is
+      // deleted, the extra rows are not, so main ends up waking and running this
+      // handler once per leftover row, every period, forever. This is the SDK's own
+      // dedup idiom for a self-rescheduling alarm: list by callback, cancel them
+      // all, arm once. Cancelling the row that is currently running is safe: the
+      // queue deletes on outcome only `WHERE running = 1`, so a cleared row defers.
       for (const armed of (await this.listSchedules()).filter(
         (s) => s.callback === "onScheduledTask"
       )) {

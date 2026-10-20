@@ -534,13 +534,12 @@ check("src/agent.ts schedules jobs where the alarm that fires them can see them 
   assert.ok(hop, "src/agent.ts declares no enqueueGlobal");
   assert.ok(/if\s*\(this\.isMainInstance\(\)\)/.test(hop), "main writes locally, exactly as rememberGlobal does");
   assert.ok(/Promise<boolean>/.test(hop), "the hop must report whether the row landed, or the tool lies again");
-  // Fix-round 3 (reviewer N4): the RPC arm re-arms, and the main branch used to be
-  // unpinned (mutation i, exit 0). A row inserted while sitting in main re-arms the
-  // same way, or the most common path - the user scheduling from the main chat -
-  // waits the full 60s poll for a job due in seconds.
+  // Fix-round 4 (reviewer D3): a window of any chars accepted an `armTick()` placed
+  // after `return true`, i.e. dead code. The pin now requires the call to sit inside
+  // the block BEFORE the return, so moving it past the return fails.
   assert.ok(
-    /if\s*\(this\.isMainInstance\(\)\)\s*\{[\s\S]{0,140}?await this\.armTick\(\)/.test(hop),
-    "main's own insert must re-arm too, not only the taskEnqueue RPC that serves a session DO"
+    /if\s*\(this\.isMainInstance\(\)\)\s*\{[^}]*await this\.armTick\(\);\s*return true;/.test(hop),
+    "main's own insert must re-arm too, and before it returns, not only the taskEnqueue RPC that serves a session DO"
   );
   // Fix-round 2 (reviewer section C, the hole the first version of this pin left):
   // `this.taskEnqueue(...)` satisfied the loose `taskEnqueue(` test here and
@@ -584,6 +583,13 @@ check("src/agent.ts keeps exactly one alarm row for its own tick (R46, fix-round
   assert.ok(
     /"onScheduledTask",\s*undefined,\s*\{\s*idempotent:\s*true\s*\}/.test(tick),
     "the arm must pass idempotent:true in the schedule() call itself; without it every re-arm inserts another permanent row"
+  );
+  // Fix-round 4 (reviewer D2): the first argument was unpinned, so reverting the
+  // 3cdcd8c unit fix to `this.schedule(wakeAt, ...)` kept the suite green even though
+  // the SDK reads a numeric delay as SECONDS and every wake lands ~1000x late.
+  assert.ok(
+    /this\.schedule\(\s*new Date\(/.test(tick),
+    "the arm must pass a Date, not a numeric delay; the SDK reads a number as seconds, which is the ~1000x-late bug"
   );
   assert.equal((tick.match(/this\.schedule\(/g) ?? []).length, 1, "one arm per tick, or the amplification returns");
   assert.equal(
