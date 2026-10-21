@@ -1,5 +1,6 @@
 // zay-sandbox: E2B microVM command runner on the official SDK
-// (edge-compatible, HTTP envd data plane). Warm session pool via KV.
+// (edge-compatible, HTTP envd data plane). Warm session pool via KV, capped and
+// idle-collected by the policy in ../pool.ts.
 //
 // Workspace snapshots live here too: one measured gzip tar per session in the
 // SESSIONS namespace, the logic in ../workspace.ts, which this file adapts to the
@@ -9,6 +10,15 @@
 
 import { Sandbox } from "e2b";
 import { authed } from "../auth";
+import {
+  LEASE_MS,
+  POOL_APP_KEY,
+  POOL_APP_VALUE,
+  POOL_SESSION_KEY,
+  POOL_TTL_SECONDS,
+  pickEviction,
+  toLive,
+} from "../pool";
 import {
   dropWorkspace,
   readArchive,
@@ -26,8 +36,8 @@ interface Env {
   SESSIONS: KVNamespace;
 }
 
-const BOOT_TIMEOUT_MS = 300_000; // 5 min lease
-const POOL_TTL = 600; // reuse window seconds
+// The lease and the pool row's lifetime come from ../pool.ts, because the eviction
+// policy reads recency out of the lease and the two must not drift apart here.
 // Mirrors src/capabilities.ts: this worker builds separately and cannot import
 // from the brain's src/. tests/paths.test.mjs pins that both say /home/user.
 const SANDBOX_HOME = "/home/user";
@@ -76,18 +86,81 @@ function sandboxPort(sbx: Sandbox): SandboxPort {
   };
 }
 
-async function createSandbox(key: string): Promise<Sandbox> {
+async function createSandbox(key: string, sessionId: string): Promise<Sandbox> {
   return Sandbox.create({
     apiKey: key,
     template: "base",
-    timeoutMs: BOOT_TIMEOUT_MS,
+    timeoutMs: LEASE_MS,
+    // The tag is how a later request, possibly in another isolate, finds this VM
+    // again and knows which session to blame for it. An untagged VM is never
+    // evicted, so a typo here disables the cap quietly rather than loudly.
+    metadata: { [POOL_APP_KEY]: POOL_APP_VALUE, [POOL_SESSION_KEY]: sessionId },
   });
 }
 
 async function keepWarm(env: Env, sessionId: string, sandboxId: string): Promise<void> {
   await env.SESSIONS.put(sessionId, JSON.stringify({ id: sandboxId }), {
-    expirationTtl: POOL_TTL,
+    expirationTtl: POOL_TTL_SECONDS,
   });
+}
+
+export type Eviction = { sessionId: string; sandboxId: string; saved: boolean };
+
+/**
+ * Stay inside MAX_LIVE_SANDBOXES before a new VM is created.
+ *
+ * The victim is snapshotted before it is killed. Task 27 made a session's files
+ * survive the death of its VM, and a cap that destroyed work would be worse than no
+ * cap, so an eviction costs two KV writes and says so. If the save fails the kill
+ * still happens, because the quota bound is the whole point, and the result carries
+ * `saved: false` rather than letting the caller infer success from a 200.
+ *
+ * A failed `list` returns null and lets the request create its VM uncapped. The cap
+ * is worth less than turning a user's command into a 502 because a management API
+ * had a bad second.
+ */
+async function makeRoom(env: Env, requested: string): Promise<Eviction | null> {
+  let rows: Awaited<ReturnType<typeof Sandbox.list>>;
+  try {
+    rows = await Sandbox.list({
+      apiKey: env.E2B_API_KEY,
+      query: { metadata: { [POOL_APP_KEY]: POOL_APP_VALUE } },
+    });
+  } catch (e) {
+    console.warn(`pool: list failed, creating uncapped: ${String(e)}`);
+    return null;
+  }
+
+  const victim = pickEviction(toLive(rows), requested);
+  if (!victim) return null;
+
+  const ids = new Map<string, string>();
+  for (const r of rows) {
+    const owner = r.metadata?.[POOL_SESSION_KEY];
+    if (owner && r.sandboxId) ids.set(owner, r.sandboxId);
+  }
+  const sandboxId = ids.get(victim);
+  if (!sandboxId) return null;
+
+  let saved = false;
+  try {
+    const sbx = await Sandbox.connect(sandboxId, { apiKey: env.E2B_API_KEY });
+    const r = await snapshot(sandboxPort(sbx), kvPort(env.SESSIONS), victim, {
+      home: SANDBOX_HOME,
+    });
+    saved = r.ok;
+  } catch (e) {
+    console.warn(`pool: evicting ${victim} without a save: ${String(e)}`);
+  }
+  try {
+    await Sandbox.kill(sandboxId, { apiKey: env.E2B_API_KEY });
+  } catch (e) {
+    // The VM is the thing being reclaimed. If the kill throws the quota is not
+    // reclaimed, so this must be visible in the tail rather than swallowed.
+    console.warn(`pool: kill failed for ${victim} (${sandboxId}): ${String(e)}`);
+  }
+  await env.SESSIONS.delete(victim);
+  return { sessionId: victim, sandboxId, saved };
 }
 
 /**
@@ -100,16 +173,26 @@ async function keepWarm(env: Env, sessionId: string, sandboxId: string): Promise
 async function boot(
   env: Env,
   sessionId: string
-): Promise<{ sbx: Sandbox; restored: RestoreResult | null }> {
+): Promise<{ sbx: Sandbox; restored: RestoreResult | null; evicted: Eviction | null }> {
   const hit = (await env.SESSIONS.get(sessionId, "json")) as { id: string } | null;
   if (hit?.id) {
     try {
-      return { sbx: await Sandbox.connect(hit.id, { apiKey: env.E2B_API_KEY }), restored: null };
+      const sbx = await Sandbox.connect(hit.id, { apiKey: env.E2B_API_KEY });
+      // Extending the lease on every reuse is what makes the lease double as the
+      // idle collector: a busy session keeps its VM, an abandoned one expires in
+      // LEASE_MS with no GC to run. If the extension itself fails the VM simply
+      // dies on the lease it already has, and the next request cold-boots and
+      // restores, so this is not allowed to fail the run.
+      await sbx.setTimeout(LEASE_MS).catch((e: unknown) =>
+        console.warn(`pool: lease extension failed for ${sessionId}: ${String(e)}`)
+      );
+      return { sbx, restored: null, evicted: null };
     } catch {
       await env.SESSIONS.delete(sessionId);
     }
   }
-  const sbx = await createSandbox(env.E2B_API_KEY);
+  const evicted = await makeRoom(env, sessionId);
+  const sbx = await createSandbox(env.E2B_API_KEY, sessionId);
   // E2B "base" ships python3 but no `python` alias; the model reaches for
   // `python` and gets exit 127. Create the alias once per fresh boot.
   try {
@@ -133,7 +216,7 @@ async function boot(
     { home: SANDBOX_HOME }
   );
   await keepWarm(env, sessionId, sbx.sandboxId);
-  return { sbx, restored };
+  return { sbx, restored, evicted };
 }
 
 function snapshotStatus(r: { ok: boolean; reason?: string }): number {
@@ -183,7 +266,7 @@ export default {
 
     if (url.pathname === "/workspace/snapshot" && request.method === "POST") {
       const body = (await request.json()) as { sessionId?: string; priorSha256?: string };
-      const sid = body.sessionId || "agent";
+      const sid = body.sessionId || "default";
       let sbx: Sandbox;
       try {
         sbx = (await boot(env, sid)).sbx;
@@ -200,7 +283,7 @@ export default {
 
     if (url.pathname === "/workspace/restore" && request.method === "POST") {
       const body = (await request.json()) as { sessionId?: string; expectedBytes?: number };
-      const sid = body.sessionId || "agent";
+      const sid = body.sessionId || "default";
       const kv = kvPort(env.SESSIONS);
       let sbx: Sandbox;
       let r: RestoreResult;
@@ -227,7 +310,7 @@ export default {
     }
 
     if (url.pathname === "/workspace/manifest") {
-      const sid = url.searchParams.get("sessionId") || "agent";
+      const sid = url.searchParams.get("sessionId") || "default";
       const record = await readManifestRecord(kvPort(env.SESSIONS), sid);
       if (!record) {
         return json(404, { ok: false, reason: "no_snapshot", sessionId: sid });
@@ -246,7 +329,7 @@ export default {
     }
 
     if (url.pathname === "/workspace/archive") {
-      const sid = url.searchParams.get("sessionId") || "agent";
+      const sid = url.searchParams.get("sessionId") || "default";
       const archive = await readArchive(kvPort(env.SESSIONS), sid);
       if (!archive) {
         return json(409, { ok: false, reason: "no_snapshot", sessionId: sid });
@@ -262,7 +345,7 @@ export default {
 
     if (url.pathname === "/workspace/forget" && request.method === "POST") {
       const body = (await request.json()) as { sessionId?: string };
-      const sid = body.sessionId || "agent";
+      const sid = body.sessionId || "default";
       const r = await dropWorkspace(kvPort(env.SESSIONS), sid);
       return json(200, { ok: true, sessionId: sid, deleted: r.deleted });
     }
@@ -273,8 +356,9 @@ export default {
       const sid = body.sessionId || "default";
       let sbx: Sandbox;
       let restored: RestoreResult | null;
+      let evicted: Eviction | null;
       try {
-        ({ sbx, restored } = await boot(env, sid));
+        ({ sbx, restored, evicted } = await boot(env, sid));
       } catch (e) {
         return json(502, { error: "boot: " + String(e) });
       }
@@ -294,6 +378,7 @@ export default {
           sessionId: sid,
           sandboxId: sbx.sandboxId,
           restore: restored,
+          evict: evicted,
         });
       } catch (e) {
         const err = e as { exitCode?: number; stdout?: string; stderr?: string };
@@ -310,6 +395,7 @@ export default {
             sessionId: sid,
             sandboxId: sbx.sandboxId,
             restore: restored,
+            evict: evicted,
           });
         }
         return json(502, {
@@ -317,6 +403,7 @@ export default {
           sessionId: sid,
           sandboxId: sbx.sandboxId,
           restore: restored,
+          evict: evicted,
         });
       }
     }

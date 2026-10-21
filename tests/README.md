@@ -1,6 +1,6 @@
 # tests/
 
-Thirty-two entries live here, this README included. Twenty-six are offline, framework-free, and run by
+Thirty-three entries live here, this README included. Twenty-seven are offline, framework-free, and run by
 `npm test`:
 `approval.test.mjs` (a test that only `exec` is gated by shell risk and a malformed input fails
 closed), `context.test.mjs` (a test that every capability claim renders from one table and that
@@ -48,7 +48,11 @@ names `ws:tar:<id>` and `ws:man:<id>`, the guard that runs before any key is bui
 one MiB under the 25 MiB KV entry ceiling, and the exact number the console's card prints),
 `workspace.test.mjs` (a test of `deploy/sandbox-worker/workspace.ts` through injected fake ports: the
 pack/measure/store order, the listing shapes `tar tzvf` really prints, the four restore states, and
-the rule that a refused turn leaves the previous snapshot untouched), and
+the rule that a refused turn leaves the previous snapshot untouched), `sandbox-scope.test.mjs` (a test
+of `deploy/sandbox-worker/pool.ts`: that the cap counts distinct sessions, that an eviction never takes
+the session that just asked, that recency is read off the lease rather than counted in a table, and the
+worker's wiring as source text, since the entry module value-imports `e2b` and cannot be loaded
+offline), and
 `fake-sql.test.mjs` (a contract test for the
 shared fixture). The harness is
 `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
@@ -147,9 +151,10 @@ i.e. dead code. That was wrong; the code wins.)
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the harness approval round trip needs a Durable
   Object and is only exercised live.
-- `npm test` runs twenty-six offline files (`approval`, `context`, `fake-sql`, `frames`,
+- `npm test` runs twenty-seven offline files (`approval`, `context`, `fake-sql`, `frames`,
   `guardrails`, `harness`, `markdown`, `memory`, `paths`, `prefix`, `provider`, `registry`,
-  `registry-input`, `registry-store`, `reply`, `router`, `routes`, `session-scope`, `sql-handle`,
+  `registry-input`, `registry-store`, `reply`, `router`, `routes`, `sandbox-scope`, `session-scope`,
+  `sql-handle`,
   `sse-auth`, `stream-hub`, `submit`, `titles`, `tools`, `workspace`, `workspace-keys`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.

@@ -105,7 +105,9 @@ check("the worker hands its own SANDBOX_HOME to both snapshot and restore", () =
   // parameter. The one source of truth still has to be this worker's constant,
   // not workspace.ts's default, or the two deploys can drift apart silently.
   const homes = sandboxSrc.match(/home: SANDBOX_HOME/g) || [];
-  assert.equal(homes.length, 3, `expected snapshot, restore, and the boot restore to pass it, saw ${homes.length}`);
+  // Four sites since Task 28: the snapshot route, the restore route, the cold-boot
+  // restore, and the save an eviction makes before it kills another session's VM.
+  assert.equal(homes.length, 4, `expected snapshot, restore, boot restore, and the pre-eviction save to pass it, saw ${homes.length}`);
   assert.equal(sandboxSrc.includes("home: DEFAULT_HOME"), false);
 });
 
