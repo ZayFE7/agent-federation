@@ -241,9 +241,10 @@ The first offline test that reaches the worker's HTTP surface. It imports the re
 order, and a fake `FEDERATION_AGENT` namespace whose stub answers `chat` and `messages` from a
 fixture table, answers `fetch` with a recorded `text/event-stream` response, and records the exact
 arity each call used. No browser, no dev server and no
-Durable Object. The checks cover the seven routes: the `{ ok, sessions, truncated }` list and its
+Durable Object. The checks cover the eight routes: the `{ ok, sessions, truncated }` list and its
 `limit` clamp, the created row, the rename title rule, the delete, the transcript read from the
-addressed session, the reply passthrough with `touch(id)` and no opts, and the stream proxy
+addressed session, the reply passthrough with `touch(id)` and no opts, the abort forward that
+carries an `operationId` and the no-body abort-everything form, and the stream proxy
 (query-token auth on the GET stream shape only, the owning DO addressed, `token` and
 `authorization` stripped on the internal hop, `from`/`Last-Event-ID` preserved), plus the 401, 400
 and
