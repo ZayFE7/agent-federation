@@ -156,6 +156,67 @@ export function framesFromEvent(ev: ThinkSessionEvent): StreamFrame[] {
   return [];
 }
 
+/**
+ * Retarget one child event onto the parent's delegate card (Task 31).
+ *
+ * A sub-agent's own frames are addressed to tool-call ids that exist only inside
+ * the child, and its stream lives in the child's storage where the console cannot
+ * read it. So the child's events are folded into `tool-progress` frames carrying
+ * the parent's `delegate` call id and the `delegating` phase, which is the one
+ * pose the mascot already has for this.
+ *
+ * What is dropped is the point of the function, not an accident:
+ * `text` and `reasoning` are the child's token stream, and forwarding it would put
+ * a second full conversation on a card that has one line; `state` and `done`
+ * belong to the parent's own turn; an `approval` cannot arrive here at all,
+ * because a child never parks a call (src/harness-config.ts, `approve`).
+ */
+export function childEventToParentFrames(
+  ev: ThinkSessionEvent,
+  call: { id: string; name: string }
+): StreamFrame[] {
+  if (!call.id) return [];
+  const out: StreamFrame[] = [];
+  for (const f of framesFromEvent(ev)) {
+    if (f.t === "tool-start") {
+      out.push(
+        childProgress(call, `sub-agent ${call.name} ran ${f.label}`, f.input || undefined)
+      );
+    } else if (f.t === "tool-result") {
+      out.push(
+        childProgress(
+          call,
+          `sub-agent ${call.name} ${f.ok ? "got a result" : "failed"}`,
+          f.output || undefined
+        )
+      );
+    } else if (f.t === "error") {
+      out.push(childProgress(call, `sub-agent ${call.name} stopped: ${f.message}`));
+    }
+  }
+  return out;
+}
+
+function childProgress(
+  call: { id: string; name: string },
+  message: string,
+  tail?: string
+): StreamFrame {
+  return {
+    t: "tool-progress",
+    id: call.id,
+    phase: "delegating",
+    message: clipText(message, 300),
+    fraction: null,
+    ...(tail ? { tail: clipText(tail, 240) } : {}),
+  };
+}
+
+/** Cut to n chars and say so, so a folded child line cannot push the card open forever. */
+function clipText(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)} [truncated ${s.length - n} chars]` : s;
+}
+
 /** One SSE `data:` frame. JSON.stringify escapes newlines inside strings. */
 export function encodeFrame(f: StreamFrame): string {
   return `data: ${JSON.stringify(f)}\n\n`;

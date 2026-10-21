@@ -30,6 +30,21 @@ export interface HarnessConfigDeps {
   summarize: (text: string) => Promise<string>;
   /** Task 16: memory injection and the honest system prompt. */
   beforeTurn?: ThinkHarnessHooks["beforeTurn"];
+  /**
+   * Override the persona. The main agent leaves this unset and gets
+   * DEFAULT_PERSONA, and its real prompt is assembled per turn in `beforeTurn`;
+   * a child has no memory injection, so the persona it is built with is the
+   * persona it runs with.
+   */
+  system?: string;
+  /**
+   * Override the approval gate. The main agent leaves this unset and a held call
+   * reaches the console's approve card; a child has no reader that can answer one
+   * (the approve RPC is addressed to a session DO, not a facet), so it passes a
+   * function that never holds and blocks the risky call in its own tool instead.
+   * Parking a call nobody can answer is how a sub-agent hangs.
+   */
+  approve?: (toolName: string, input: unknown) => boolean;
 }
 
 /**
@@ -39,6 +54,12 @@ export interface HarnessConfigDeps {
  * silent double-writer this plan bans.
  */
 export const MAX_STEPS_CHAT = 12;
+/**
+ * A child's budget (Task 31). Higher than the chat lane's because a research task
+ * is search, then read, then search again, and it is bounded by the fact that a
+ * child has two tools and no way to spawn another child.
+ */
+export const MAX_STEPS_CHILD = 15;
 /** Declared, NOT wired: the value a future supporting API would use for a deep lane. */
 export const MAX_STEPS_DEEP = 45;
 
@@ -73,10 +94,11 @@ export function harnessConfig(
     typeof deps.tools === "function" ? deps.tools : () => deps.tools as ToolSet;
   return {
     model: () => model,
-    system: () => DEFAULT_PERSONA,
+    system: () => deps.system ?? DEFAULT_PERSONA,
     tools: ({ session }) => toolsFor(session),
     maxSteps: deps.maxSteps,
-    toolApproval: ({ toolName, input }) => needsApproval(toolName, input),
+    toolApproval: ({ toolName, input }) =>
+      deps.approve ? deps.approve(toolName, input) : needsApproval(toolName, input),
     recovery: { ...RECOVERY },
     configureSession: (session) => {
       session

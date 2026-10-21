@@ -34,6 +34,14 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["RegistryAgent"]
+    },
+    // Researcher is a dynamic-agent facet (Task 31): the SDK instantiates it from
+    // the exported class and an id taken from the ROOT namespace, so it has its
+    // own SQLite and no binding of its own. An applied migration is never edited,
+    // so this is a new tag (same rule as v2 above).
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["Researcher"]
     }
   ],
   // Keep-alive cron: pings RENDER_URL/health every 10 minutes so the free

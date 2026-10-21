@@ -1,5 +1,6 @@
 import { FederationAgent } from "./agent";
 import { RegistryAgent } from "./registry";
+import { Researcher } from "./child";
 import { fetchRouter } from "./router";
 import { authed, safeEq } from "./auth";
 import { MAIN_DO_NAME, isSessionId } from "./session-scope";
@@ -10,7 +11,10 @@ import type { AgentStub, Env } from "./types";
 
 // Wrangler discovers Durable Object classes from the entry module's exports, so
 // every class a binding names has to be exported here (plan Task 6 Step 1).
-export { FederationAgent, RegistryAgent };
+// Researcher is exported for the same reason and under its own class name: the
+// SDK resolves a dynamic-agent facet through `ctx.exports[className]`, so a
+// re-export under an alias would not be found at runtime.
+export { FederationAgent, RegistryAgent, Researcher };
 
 function mainAgentId(env: Env): DurableObjectId {
   return env.FEDERATION_AGENT.idFromName(MAIN_DO_NAME);

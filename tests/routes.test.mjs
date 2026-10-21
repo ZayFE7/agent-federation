@@ -599,7 +599,10 @@ check("src/agent.ts threads a real session id to the sandbox instead of the lite
     'a hardcoded sessionId: "agent" still names one shared sandbox session (Step 3d)'
   );
   assert.ok(
-    /private\s+async\s+runSandbox\(\s*cmd:\s*string,\s*sessionId:\s*string,\s*onProgress\?:\s*ToolProgressSink\s*\)/.test(
+    // Task 31: runSandbox is now a thin delegation to src/sandbox-client.ts, which
+    // returns the client's promise instead of awaiting it, so `async` is gone. The
+    // pin is the parameter list: the session id arrives from the caller.
+    /private\s+runSandbox\(\s*cmd:\s*string,\s*sessionId:\s*string,\s*onProgress\?:\s*ToolProgressSink\s*\)/.test(
       AGENT_SOURCE.replace(/\s+/g, " ")
     ),
     "runSandbox must take the sessionId rather than invent one"

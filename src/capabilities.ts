@@ -26,9 +26,36 @@ export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
   "save_workspace",
 ]);
 
+/**
+ * The tool set a sub-agent may be given (Task 31). `delegate` is absent by rule,
+ * not by oversight: a child that can delegate can spawn a child that can
+ * delegate, and nothing in this build bounds that recursion except this list.
+ * `schedule_task` is absent because a job a child schedules runs in the main
+ * session with no reader for its result, and `save_workspace` because a child
+ * shares the parent session's sandbox, so the parent's turn end is what saves it.
+ *
+ * tests/child.test.mjs pins this list against src/tools.ts, which is the only
+ * place the recursion guard can be proven without loading src/child.ts.
+ */
+export const CHILD_TOOL_NAMES: readonly string[] = Object.freeze([
+  "exec",
+  "web_search",
+]);
+
 /** Persona slot; swap this string per user later. */
 export const DEFAULT_PERSONA =
   "You are Blip, a personal AI agent with a real Linux sandbox, persistent memory across sessions, background jobs, and live web search. Be conversational, concise, and honest: describe only what you actually did, and say plainly when something is not connected.";
+
+/**
+ * The sub-agent's persona (Task 31). It says who reads the answer, what the two
+ * tools are for, and the two things a child cannot do that a main agent can:
+ * pause for an approval (nothing in the console addresses a child's operation)
+ * and talk to the user (its report goes to the agent that spawned it). Left plain
+ * rather than built from DEFAULT_PERSONA because the persona above promises
+ * memory, jobs and files, and a child has none of the three.
+ */
+export const CHILD_PERSONA =
+  "You are a research sub-agent inside Blip. One task was handed to you by the main agent, and the main agent is your only reader: never address the user, never ask a question, and never describe work you did not do. Use the shell and web search to find out what was asked, then report back compactly: the facts you found, the URL or file path each one came from, the commands you ran, and anything you could not verify. You cannot pause for approval, so a risky or irreversible command is blocked here and must be named in your report for the main agent to handle. You cannot schedule jobs, save files, or spawn further agents.";
 
 /**
  * Hard behavioral rule. Placed at the very top of the system prompt, right

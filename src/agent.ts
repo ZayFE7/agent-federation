@@ -55,22 +55,22 @@ import {
   vaultPutChunk,
 } from "./vault";
 import { fetchRouter } from "./router";
+import { summarizeConversation } from "./compact";
+import { runInSandbox } from "./sandbox-client";
+import { searchParallel as searchParallelWeb } from "./search-client";
 import { parseDirective } from "./directives";
 import { buildHarness } from "./harness";
 import { MAX_STEPS_CHAT } from "./harness-config";
-import { framesFromEvent, TOOL_WIDGET } from "./frames";
+import { framesFromEvent, TOOL_WIDGET, type StreamFrame } from "./frames";
 import { StreamHub, streamIdFor } from "./stream-hub";
 import { messageText, replyFrom } from "./reply";
 import {
   buildTools,
   formatExecResult,
-  formatRestoreReply,
   formatSearchResults,
   formatSnapshotReply,
-  RESTORING_NOTICE,
   snapshotPointer,
   type ExecResult,
-  type RestoreReply,
   type ScheduleInput,
   type SearchResult,
   type SnapshotReply,
@@ -209,7 +209,7 @@ export class FederationAgent extends Agent<Env> {
       classifyError: classifyContextOverflow,
       onEvent: (session, ev) => this.mirrorEvent(session, ev),
       onTurnEnd: (turn) => this.onHarnessTurnEnd(turn),
-      summarize: (text) => this.summarize(text),
+      summarize: (text) => summarizeConversation(env, text),
       beforeTurn: (turn) => this.beforeTurn(turn),
     });
     this.lifecycle.use(this.harness);
@@ -257,6 +257,36 @@ export class FederationAgent extends Agent<Env> {
         ...(p.tail === undefined ? {} : { tail: p.tail }),
       },
     ]);
+  }
+
+  /**
+   * Task 31: one sub-agent's progress, landed on the parent's operation stream.
+   *
+   * A facet child owns its own `Streams` and its own SQLite, so a frame it writes
+   * there is unreadable by the console: the console only ever opens the session
+   * DO's stream, which is the one this instance holds. So the child sends its
+   * frames over this RPC and this DO feeds its own hub.
+   *
+   * Both arguments are validated rather than trusted. A child is spawned by a
+   * prompt the model wrote, so the session id it names has to be the one this DO
+   * owns, and the stream id has to be that session's stream as `streamIdFor`
+   * builds it. Anything else is dropped: appending another session's frames to
+   * this turn, or appending to an id no reader will ever close, is worse than
+   * saying nothing. The frame list is not capped, because the child's mapper only
+   * turns tool events into frames, so one bounded child run produces a bounded
+   * count.
+   */
+  async ingestChildFrames(
+    sessionId: string,
+    streamId: string,
+    frames: StreamFrame[]
+  ): Promise<void> {
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return;
+    const prefix = `s:${sessionId}:`;
+    const operationId = streamId.startsWith(prefix) ? streamId.slice(prefix.length) : "";
+    if (!operationId || operationId.includes(":")) return;
+    if (frames.length === 0) return;
+    this.hub.feed(streamId, sessionId, frames);
   }
 
   /**
@@ -839,35 +869,6 @@ export class FederationAgent extends Agent<Env> {
     }
   }
 
-  /** One compaction summary through the non-tool cheap lane. */
-  private async summarize(text: string): Promise<string> {
-    const res = await fetchRouter(
-      this.env,
-      "/v1/chat/completions",
-      {
-        model: this.env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP,
-        messages: [
-          {
-            role: "system",
-            content:
-              "Summarize this conversation for an AI agent's own memory. Keep facts, decisions, file paths, commands that worked, and open tasks. Be compact and concrete.",
-          },
-          { role: "user", content: text },
-        ],
-        max_tokens: 800,
-      },
-      false,
-      AbortSignal.timeout(30_000)
-    );
-    if (!res.ok) throw new Error(`router ${res.status}`);
-    const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const summary = (data.choices?.[0]?.message?.content ?? "").trim();
-    if (!summary) throw new Error("empty compaction summary");
-    return summary;
-  }
-
   /**
    * Task 9: name a session from its first turn, off the reply path.
    *
@@ -1225,134 +1226,32 @@ export class FederationAgent extends Agent<Env> {
   }
 
   /**
-   * One shell command in the E2B sandbox. The session id keys the sandbox lease
-   * (R40), so two chats never share one lease. Never throws: every failure comes
-   * back as an ExecResult the formatter can report honestly.
-   *
-   * A cold sandbox is not free: the worker rebuilds it and unpacks the session's
-   * saved tree, which takes seconds the user would otherwise experience as a
-   * hang. So the wait gets a name before the call and its numbers after, and the
-   * exec card that carries them is the tool's own, not a floating notice.
+   * One shell command in the E2B sandbox, through the shared client in
+   * src/sandbox-client.ts. The two pieces of state the client cannot see, the
+   * pointer row and this isolate's warm-lease set, are supplied here: a cold
+   * sandbox is not free, so the wait gets a name before the call and its numbers
+   * after.
    */
-  private async runSandbox(
+  private runSandbox(
     cmd: string,
     sessionId: string,
     onProgress?: ToolProgressSink
   ): Promise<ExecResult> {
-    if (!this.env.SANDBOX) {
-      return {
-        ok: false,
-        exitCode: null,
-        stdout: "",
-        stderr: "",
-        error: "sandbox not configured",
-      };
-    }
     // The only signal the brain has that a rebuild is possible is its own pointer
     // row plus the fact that this isolate has not talked to this session's sandbox
     // yet. Guessing wrong costs one progress line, never a wrong file.
     const mayRebuild =
       !this.sandboxSeen.has(sessionId) && Boolean(getWorkspace(this.db(), sessionId)?.key);
-    if (mayRebuild) {
-      onProgress?.({ phase: "restoring", message: RESTORING_NOTICE, fraction: null });
-    }
-    try {
-      const res = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.env.SBOX_TOKEN}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ cmd, sessionId }),
-      });
-      const data = (await res.json()) as {
-        stdout?: string;
-        stderr?: string;
-        exitCode?: number;
-        error?: string;
-        restore?: RestoreReply | null;
-      };
-      if (res.ok) this.sandboxSeen.add(sessionId);
-      if (data.restore) {
-        const line = formatRestoreReply(data.restore);
-        if (line) {
-          onProgress?.({ phase: "restoring", message: line, fraction: 1 });
-        }
-      } else if (mayRebuild) {
-        // The sandbox was still running, so nothing had to be rebuilt. Say so
-        // rather than leaving "Rebuilding your workspace" as the last word.
-        onProgress?.({
-          phase: "restoring",
-          message: "Sandbox was still running",
-          fraction: 1,
-        });
-      }
-      if (!res.ok) {
-        return {
-          ok: false,
-          exitCode: null,
-          stdout: "",
-          stderr: "",
-          error: `sandbox HTTP ${res.status}: ${(
-            data.error || JSON.stringify(data)
-          ).slice(0, 600)}`,
-        };
-      }
-      const exitCode = typeof data.exitCode === "number" ? data.exitCode : null;
-      return {
-        ok: exitCode === 0,
-        exitCode,
-        stdout: typeof data.stdout === "string" ? data.stdout : "",
-        stderr: typeof data.stderr === "string" ? data.stderr : "",
-        ...(exitCode === null
-          ? { error: data.error || "sandbox returned no exit code" }
-          : {}),
-      };
-    } catch (err) {
-      return { ok: false, exitCode: null, stdout: "", stderr: "", error: String(err) };
-    }
+    return runInSandbox(this.env, cmd, sessionId, {
+      onProgress,
+      mayRebuild,
+      onWarm: () => this.sandboxSeen.add(sessionId),
+    });
   }
 
-  /**
-   * One Parallel Web Search call. Throws with actionable text on every failure
-   * mode so the harness records an error the model can read; the caller that
-   * needs a text reply (the "search:" directive) catches it itself.
-   */
-  private async searchParallel(query: string): Promise<SearchResult[]> {
-    const q = (query || "").trim();
-    if (!this.env.PARALLEL_API_KEY) {
-      throw new Error(
-        "web search is not configured on this worker (no PARALLEL_API_KEY). Tell the user search is unavailable."
-      );
-    }
-    if (!q) {
-      throw new Error(
-        "web_search needs a non-empty query. Retry with what you want to find."
-      );
-    }
-    let res: Response;
-    try {
-      res = await fetch("https://api.parallel.ai/v1/search", {
-        method: "POST",
-        headers: {
-          "x-api-key": this.env.PARALLEL_API_KEY,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ objective: q, search_queries: [q] }),
-        // Search must fail fast, not hang the tool loop or the UI.
-        signal: AbortSignal.timeout(20_000),
-      });
-    } catch (err) {
-      throw new Error(`web search request failed: ${String(err)}`);
-    }
-    if (!res.ok) {
-      const errText = (await res.text()).slice(0, 300);
-      throw new Error(
-        `web search failed (HTTP ${res.status}): ${errText}. The Parallel key may lack the Search product; tell the user.`
-      );
-    }
-    const data = (await res.json()) as { results?: SearchResult[] };
-    return data.results || [];
+  /** One Parallel Web Search call, through the shared client. */
+  private searchParallel(query: string): Promise<SearchResult[]> {
+    return searchParallelWeb(this.env, query);
   }
 
   /**

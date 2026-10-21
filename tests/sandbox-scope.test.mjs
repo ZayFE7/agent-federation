@@ -44,6 +44,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const poolSrc = readFileSync(join(root, "deploy", "sandbox-worker", "pool.ts"), "utf8");
 const workerSrc = readFileSync(join(root, "deploy", "sandbox-worker", "src", "index.ts"), "utf8");
 const agentSrc = readFileSync(join(root, "src", "agent.ts"), "utf8");
+const sandboxClientSrc = readFileSync(join(root, "src", "sandbox-client.ts"), "utf8");
 
 const failures = [];
 
@@ -212,8 +213,11 @@ check("the bearer gate is still the fail-closed helper, not a plain comparison",
 check("the agent passes its own session id to the sandbox, never a fixed one", () => {
   assert.doesNotMatch(agentSrc, /sessionId:\s*"agent"/);
   assert.doesNotMatch(agentSrc, /\bsessionId:\s*"main"/);
-  const run = agentSrc.slice(agentSrc.indexOf('https://zay-sandbox/run'));
-  assert.match(run.slice(0, 700), /body:\s*JSON\.stringify\(\{\s*cmd,\s*sessionId\s*\}\)/);
+  // The POST itself moved to src/sandbox-client.ts, which the sub-agent had to
+  // share rather than duplicate (Task 31). The pin follows it: the body's id is
+  // the caller's parameter, and the caller passes its own session variable down.
+  assert.match(sandboxClientSrc, /body:\s*JSON\.stringify\(\{\s*cmd,\s*sessionId\s*\}\)/);
+  assert.match(agentSrc, /runInSandbox\(this\.env, cmd, sessionId,/);
   const snap = agentSrc.slice(agentSrc.indexOf("/workspace/snapshot"));
   // Task 29 appends `priorSha256` after the id, so this pins only that the id is
   // the caller's `session` variable and never a literal.
