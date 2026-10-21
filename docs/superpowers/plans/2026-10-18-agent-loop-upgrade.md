@@ -6,9 +6,9 @@
 
 **Goal:** Replace BLIP's hand-rolled 4-round chat loop with a durable, streamed, multi-session agent built on the `agents` SDK's `ThinkHarness`, `Sessions`, and `Streams` capabilities, and give it sub-agents and a persistent per-session workspace.
 
-**Architecture:** One `FederationAgent` Durable Object class serves many sessions: the worker resolves `sessionId -> idFromName(sessionId)` (the id is the DO name, no prefix, so the legacy `main` DO stays reachable as session `main`) and the DO verifies that the session it was handed belongs to its own DO id. Each instance installs a `ThinkHarness` (its own durable loop and transcript store) plus a `Streams` capability we own, which mirrors harness turn events into a small frame protocol served as Server-Sent Events by `sseResponse`. A separate registry DO holds the session index so the sidebar can list sessions transactionally. Sandboxes become per-session with workspace tarballs in the existing free KV namespace (R26; R2 needs a verification card this project does not have). Sub-agents are dynamic-agent facets of the same class, and their progress frames are forwarded into the parent's stream.
+**Architecture:** One `FederationAgent` Durable Object class serves many sessions: the worker resolves `sessionId -> idFromName(sessionId)` (the id is the DO name, no prefix, so the legacy `main` DO stays reachable as session `main`) and the DO verifies that the session it was handed belongs to its own DO id. Each instance installs a `ThinkHarness` (its own durable loop and transcript store) plus a `Streams` capability we own, which mirrors harness turn events into a small frame protocol served as Server-Sent Events by `sseResponse`. A separate registry DO holds the session index so the sidebar can list sessions transactionally. Sandboxes become per-session with one gzip tar per session in the KV namespace already bound to `zay-sandbox` (R26), gated by a size measured inside the sandbox, and a strongly consistent pointer row in the registry DO, instead of base64 in KV and instead of R2, which needs a card this project does not have. Sub-agents are dynamic-agent facets of the same class, and their progress frames are forwarded into the parent's stream.
 
-**Tech Stack:** Cloudflare Workers, Durable Objects with SQLite, `agents@0.28.1` (`ThinkHarness`, `Sessions`, `Streams`, `DynamicAgents`), `ai` v6/v7 plus `@ai-sdk/openai-compatible`, `zod`, a Cloudflare Worker LLM router (`zay-router`) reached by service binding, E2B sandboxes reached by service binding (`zay-sandbox`), R2, and one vanilla-JS console in `ui/index.html` whose visual design is unchanged.
+**Tech Stack:** Cloudflare Workers, Durable Objects with SQLite, `agents@0.28.1` (`ThinkHarness`, `Sessions`, `Streams`, `DynamicAgents`), `ai` v6/v7 plus `@ai-sdk/openai-compatible`, `zod`, a Cloudflare Worker LLM router (`zay-router`) reached by service binding, E2B sandboxes reached by service binding (`zay-sandbox`), Workers KV (the existing `SESSIONS` binding), and one vanilla-JS console in `ui/index.html` whose visual design is unchanged.
 
 **Spec:** `docs/superpowers/specs/2026-10-18-agent-loop-upgrade-design.md` (repo-relative; read it with this plan, it holds the evidence and the rulings this plan argues from).
 
@@ -61,14 +61,14 @@ New files (all under `repo-clone/`):
 | `src/harness.ts` | `buildHarness(options)`: one `ThinkHarness` wired with model, tools, hooks, approval, compaction, `maxSteps`. |
 | `src/stream-hub.ts` | `class StreamHub`: writes `StreamFrame`s to an injected `StreamPort`, one terminal frame per stream. Task 19. |
 | `src/session-scope.ts` | Pure: `assertSessionScope(ctx, idFromName, sessionId)`, the DO's own check that a session belongs to it. Task 8. |
-| `src/workspace-keys.ts` | Pure R2 key naming for per-session workspaces, with the traversal guard. Task 26. |
+| `src/workspace-keys.ts` | Pure KV key naming for per-session workspaces, the traversal guard, and the size gate. Task 26. |
 | `src/child.ts` | `class Researcher extends Agent<Env>`: a dynamic-agent facet with a bounded tool set and no `delegate`. Task 31. |
 | `tests/run-all.mjs` | Spawns every `tests/*.test.mjs`, reports the count, exits non-zero on any failure. |
 | `tests/fake-sql.mjs` | In-memory `SqlHandle` fake for the pure-store tests. |
 | `tests/router-probe.mjs` | Live probe that decides which router model ids are usable for tool calling and streaming. |
 | `tests/live-stream.mjs` | Live check that a turn streams: first-token latency, frame types seen. |
 | `tests/no-drift.test.mjs` | Fails if `ui/index.html` carries capability prose that `src/capabilities.ts` does not back. Task 29. |
-| `deploy/sandbox-worker/workspace.ts` | R2-backed snapshot and restore behind injected `SandboxPort`/`R2Port`. Task 27. |
+| `deploy/sandbox-worker/workspace.ts` | KV-backed snapshot and restore behind injected `SandboxPort`/`KvPort`. Task 27. |
 | `deploy/sandbox-worker/pool.ts` | `MAX_LIVE_SANDBOXES` and `pickEviction`. Task 28. |
 | `docs/explorations/router-capability-probe.md` | The probe's findings, committed with the model ids it chose. Task 2. |
 
@@ -77,13 +77,13 @@ Modified files:
 | File | Change |
 |---|---|
 | `package.json` | Pin `agents`, add `ai` + `@ai-sdk/openai-compatible`, add `test` script. |
-| `src/types.ts` | `WORKSPACE_R2`, `REGISTRY` DO namespace, model-id fields, remove the dead `ChatTier` tier claim. |
+| `src/types.ts` | `REGISTRY` DO namespace, model-id fields, remove the dead `ChatTier` tier claim. No KV binding here. |
 | `src/agent.ts` | Loses the 4-round loop, `plan`/`plan_done`, the blocking self-critique call, `recentMessages(sql, 6)`, and the `sessionId: "agent"` hardcode. Gains the harness install and the session-scoped methods. |
 | `src/index.ts` | Thin, but not empty: it authenticates, delegates the `/api/sessions*` family to `src/routes.ts`, and keeps `/api/message`, `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade and `/internal/vault/*` until a named task moves them (R42). `/api/plan` is removed by Task 15, not Phase 1. `/api/message` stays as an alias until Task 25. |
 | `src/memory.ts` | Keeps `memories` and `tasks`; `messages` table reads/writes deleted. |
 | `ui/index.html` | Session list, `EventSource` client, incremental append, live tool widgets, stop button. Design untouched. |
-| `deploy/sandbox-worker/src/index.ts` | `/home/user` cwd, R2 snapshot/restore, per-session sandboxes, idle GC. |
-| `wrangler.jsonc` (both trees, hand-edited) | Model ids, `REGISTRY` class, `WORKSPACE_R2` bindings, sandbox R2 binding. |
+| `deploy/sandbox-worker/src/index.ts` | `/home/user` cwd, KV snapshot/restore/manifest/archive/forget, per-session sandboxes, idle GC. |
+| `wrangler.jsonc` (both trees, hand-edited) | Model ids and the `REGISTRY` class only. Phase 4 adds no binding to either tree. |
 | `tests/live-matrix.mjs` | Fixed key parsing, `BLIP_URL` env, new probes. |
 | `tests/README.md` | Rewritten to describe what exists. |
 | `docs/explorations/README.md` | Roadmap updated to the shipped state. |
@@ -728,7 +728,7 @@ Four things this step changes that the old cosmetic array never had to:
 
 - [ ] **Step 3: New session, rename, delete**
 
-New stays in the sidebar footer, the existing `.sf` row with its `.ib` icon button and `newChat()` handler; `.acts` is the approval card's button row and is not the right component (R44). Rename is a `prompt()` on the row, and a user rename always wins over the background title fiber (Task 9's rule). Delete confirms with a `confirm()` and, on ok, removes the registry row; the session workspace files are kept until Phase 4's explicit delete, because deleting the user's files without asking is the wrong default.
+New stays in the sidebar footer, the existing `.sf` row with its `.ib` icon button and `newChat()` handler; `.acts` is the approval card's button row and is not the right component (R44). Rename is a `prompt()` on the row, and a user rename always wins over the background title fiber (Task 9's rule). Delete confirms with a `confirm()` and, on ok, removes the registry row; the saved KV workspace is kept until Phase 4's explicit delete, because deleting the user's files without asking is the wrong default.
 
 - [ ] **Step 4: Verify in a browser**
 
@@ -1328,10 +1328,11 @@ git commit -m "P3: single message path; buffered alias removed"
 **Phase 4 rescope, ruled 2026-10-18 (R26) and researched 2026-10-20 in
 `.superpowers/sdd/2026-10-18-agent-loop-upgrade/phase4-kv-rescope.md`.** The store is **the free KV
 namespace `zay-sandbox` already binds as `SESSIONS`**, not R2. R2 requires a verification card this
-project does not have, and no Backblaze. **Every "R2" below means KV, and no task in this phase edits
-`wrangler.jsonc` to add a binding**: the root worker has no KV binding today and should not gain one,
-because the sandbox worker is the only code that touches the namespace. Where a step below still names
-an R2 detail, the rescope file is the authority, and it lists the 30 lines to change.
+project does not have, and no Backblaze. **The 30 rescope edits were applied into this phase on
+2026-10-21; no "R2" below is a store instruction, and no task in this phase edits `wrangler.jsonc`
+to add a binding**: the root worker has no KV binding today and should not gain one, because the
+sandbox worker is the only code that touches the namespace. If a step here still contradicts the
+rescope file, the rescope file is the authority.
 
 The numbers that shape the design, measured rather than assumed: a KV value caps at 25 MiB on both
 plans, so the gate is **24 MiB compressed**; the free tier walls that bite first are 1 GB per namespace
@@ -1348,40 +1349,51 @@ Two prerequisites the research surfaced, both owed before Task 27 can be honest:
 not present is a setup step and not a step inside the task; and the 300 s E2B boot lease against the 600 s
 `POOL_TTL` reuse window is a live mismatch that this rescope does not touch and that needs its own ruling.
 
-**Prerequisite owned by the user:** none. This phase needs no bucket, no card, and no console click.
+**Prerequisite owned by the user:** none. R2 is out: it needs a card this account does not have.
+Snapshots use the KV namespace already bound to `zay-sandbox` as `SESSIONS`
+(`deploy/sandbox-worker/wrangler.jsonc`), which is the namespace that already holds `ws:tar:<sid>`.
+No new bucket, no new namespace, no `wrangler.jsonc` edit. Verify only that `GET /health` on the
+deployed sandbox answers, and stop and say so out loud if it does not.
 
-### Task 26: Name the workspace keys
+### Task 26: Name the KV keys and gate on the measured size
 
 **Files:**
-- Modify: `src/types.ts`, `wrangler.jsonc` (both trees, hand-edited), `deploy/sandbox-worker/wrangler.jsonc`
 - Create: `src/workspace-keys.ts`
 - Create: `tests/workspace-keys.test.mjs`
+- Modify: none. `src/workspace-keys.ts` is the only new naming file; do NOT add a `kv_namespaces`
+  binding to the root `wrangler.jsonc` or to `deploy/sandbox-worker/wrangler.jsonc`. The store lives
+  behind `SESSIONS` in `zay-sandbox`; the agent reaches it through the existing `SANDBOX` service
+  binding.
 
 **Interfaces:**
-- Produces: `tarKey(sessionId: string): string` = `workspaces/<id>/latest.tar.gz`, `manifestKey(sessionId: string): string` = `workspaces/<id>/manifest.json`, `workspacePrefix(sessionId: string): string`. `Env.WORKSPACE_R2?: R2Bucket`.
+- Produces: `tarKey(sessionId) = "ws:tar:<id>"`, `manifestKey(sessionId) = "ws:man:<id>"`,
+  `workspacePrefix(sessionId)`, `assertSafeSessionId(sessionId)`, `KV_ENTRY_BYTES = 25 * 1024 * 1024`,
+  `SNAPSHOT_LIMIT_BYTES = 24 * 1024 * 1024`, `MAX_MANIFEST_ENTRIES = 1000`,
+  `isOverSnapshotLimit(bytes)`, `formatLimit(bytes)`. No `Env.WORKSPACE_R2` and no new `Env` field: KV
+  is not bound to the agent worker.
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/workspace-keys.test.mjs` asserts the two exact key strings, that a `sessionId` with `/` or `..` throws rather than producing a traversable key, and that `workspacePrefix` always ends in exactly one `/`.
+`tests/workspace-keys.test.mjs` asserts the two exact key strings, that a `sessionId` with `/` or `..` throws rather than producing a traversable key, and that `workspacePrefix` always ends in exactly one `/`. And that the file's strings are byte-identical to the ones `deploy/sandbox-worker/workspace.ts` builds (import both and compare), that `KV_ENTRY_BYTES` is 25 MiB and `SNAPSHOT_LIMIT_BYTES` is strictly smaller than it, and that a session id needing more than 512 bytes throws rather than producing a key KV will reject.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
 `node tests/workspace-keys.test.mjs`. Expected: module not found.
 
-- [ ] **Step 3: Implement, then add the bindings**
+- [ ] **Step 3: Implement**
 
-Hand-edit `durable_objects`-adjacent `r2_buckets` entries in both trees' `wrangler.jsonc` for the agent, and the sandbox worker's own `wrangler.jsonc` for `WORKSPACE_R2`. Never copy one tree's file over the other.
+Do not edit either `wrangler.jsonc`. The namespace is already bound in `zay-sandbox` only, on purpose: the bytes are created next to that worker and a Free-plan Worker gets 10 ms of CPU, so nothing megabyte-sized should cross the agent worker. Record in the commit body that the binding name is `SESSIONS` and that no namespace id appears in this repo.
 
-- [ ] **Step 4: Deploy and verify the binding actually resolves**
+- [ ] **Step 4: Verify nothing regressed**
 
-`GET /health` stays 200 and a `run: ls -la /home/user` still works, which proves neither worker failed to boot on a bad binding. Then commit.
+`GET /health` stays 200 on both workers and `run: ls -la /home/user` still works, which proves neither worker failed to boot on a changed config. The `too_large` gate probe belongs to Task 27 Step 4, because the snapshot route does not exist yet at this task. Then commit.
 
 ```bash
-git add src/types.ts src/workspace-keys.ts tests/workspace-keys.test.mjs wrangler.jsonc deploy/sandbox-worker/wrangler.jsonc
-git commit -m "P4: R2 bucket bound to both workers with a traversal-safe key scheme"
+git add src/workspace-keys.ts tests/workspace-keys.test.mjs
+git commit -m "P4: KV key scheme with a measured size gate, no new bindings"
 ```
 
-### Task 27: Snapshot and restore through KV
+### Task 27: Snapshot and restore as one gzip tar in KV
 
 **Files:**
 - Modify: `deploy/sandbox-worker/src/index.ts`
@@ -1389,12 +1401,12 @@ git commit -m "P4: R2 bucket bound to both workers with a traversal-safe key sch
 - Create: `tests/workspace.test.mjs`
 
 **Interfaces:**
-- Consumes: the E2B file-read API pinned in step 1, reached through an injected port rather than imported: `deploy/sandbox-worker/workspace.ts` must not `import e2b`, because `e2b` is not installed in this checkout (`deploy/sandbox-worker/package.json` lists it as a dependency that never resolved), and an offline test that pulls it would fail for the wrong reason. Ports: `SandboxPort { write(path: string, data: Uint8Array): Promise<void>; readFile(path: string): Promise<Uint8Array>; commands: { run(cmd: string, opts?: Record<string, unknown>): Promise<{ stdout: string; exitCode?: number }> } }` and `R2Port { put(key: string, body: Uint8Array): Promise<void>; get(key: string): Promise<{ body(): Promise<Uint8Array> } | null>; delete(key: string): Promise<void>; list(prefix: string): Promise<{ keys: { key: string }[] }> }`. Adjust these three names to whatever the pinned E2B signature really is, and keep them as ports, not imports.
-- Produces: `POST /snapshot {sessionId}` returning `{ok, bytes, files, ms, key}`, `POST /restore {sessionId}` returning `{ok, restored: boolean, bytes, files, ms}`, `GET /manifest?sessionId=` returning `{files: [{path, bytes, mtime}], truncated: boolean}`. KV `ws:tar:*` is gone. `snapshot(sandbox: SandboxPort, r2: R2Port, sessionId: string): Promise<SnapshotResult>` and `restore(sandbox: SandboxPort, r2: R2Port, sessionId: string): Promise<RestoreResult>` are the testable cores.
+- Consumes: the E2B file API pinned in step 1, reached through an injected port rather than imported: `deploy/sandbox-worker/workspace.ts` must not `import e2b`, because `e2b` is not installed in this checkout (`deploy/sandbox-worker/package.json` lists it as a dependency that never resolved), and an offline test that pulls it would fail for the wrong reason. Ports: `SandboxPort { commands: { run(cmd: string, opts?: Record<string, unknown>): Promise<{ stdout: string; stderr?: string; exitCode?: number }> }; readFile(path: string): Promise<Uint8Array>; writeFile(path: string, data: Uint8Array): Promise<void> }`, with `readFile` pinned to `sandbox.files.read(path, {format:"bytes"})` and `writeFile` pinned to `sandbox.files.write(path, data)`; and `KvPort { put(key: string, value: ArrayBuffer, metadata?: Record<string, string>): Promise<void>; get(key: string): Promise<ArrayBuffer | null>; delete(key: string): Promise<void> }`. Adjust the two E2B names to whatever the pinned signature really is, and keep them as ports, not imports. `list(prefix)` is deleted from the port entirely: the names are derived, never discovered, and `list` is one of the three operations the Free plan caps at 1,000 per day.
+- Produces: `POST /workspace/snapshot {sessionId, priorSha256?}` returning `{ok, reason?, bytes, rawBytes, files, limit, biggest, sha256, key, ms, unchanged}`, `POST /workspace/restore {sessionId, expectedBytes?}` returning `{ok, restored, reason?, bytes, files, attempts, ms}`, `GET /workspace/manifest?sessionId=` returning `{ok, files, truncated, bytes, updatedAt}`, `GET /workspace/archive` and `POST /workspace/forget`. KV `ws:tar:*` stays, now as a raw `ArrayBuffer` instead of base64, plus the new `ws:man:*`. `snapshot(sandbox, kv, sessionId)` and `restore(sandbox, kv, sessionId, expected?)` are the testable cores.
 
 - [ ] **Step 1: Pin the E2B file API first, then write the test**
 
-Read `deploy/sandbox-worker/node_modules/e2b/`'s TypeScript definitions for the method that reads a sandbox file as bytes or a stream (`dist/index.d.ts`, grep `class Filesystem` and `download`). Record the exact name and signature in the commit body. `tests/workspace.test.mjs` then asserts, against fakes: snapshot writes the tar object and the manifest object, returns honest counts, and reports `bytes > 25 * 1024 * 1024` with a `too_large` reason instead of attempting KV; restore with no object returns `{restored: false}` and does not fail the call; and a manifest with 5000 files is truncated to 1000 entries with `truncated: true`, because the UI list is bounded.
+`e2b` is declared in `deploy/sandbox-worker/package.json` and installed in neither tree, so installing it is a setup step for this task, not a step inside it: run `npm install` in `deploy/sandbox-worker` and record the resolved version in the commit body. Read that version's TypeScript definitions for the method that reads a sandbox file as bytes (`dist/index.d.ts`, grep `class Filesystem` and `download`). Record the exact name and signature in the commit body. `tests/workspace.test.mjs` then asserts, against fakes: that snapshot measures the tar with `stat` inside the sandbox and returns `reason: "too_large"` plus `bytes`, `limit`, and `biggest` for a payload over `SNAPSHOT_LIMIT_BYTES` (24 MiB) WITHOUT calling `put` and without removing the old key; that a payload over the 25 MiB entry ceiling is therefore unreachable by construction; that `unchanged: true` writes nothing when `priorSha256` matches; that restore with no object returns `{restored: false, reason: "no_snapshot"}`; that restore with a pointer that claims 1200 bytes against a KV read of null or 800 bytes returns `reason: "not_visible_yet"` or `"size_mismatch"` after at most 3 attempts, and never boots an empty workspace while reporting success; and that a manifest of 5000 entries truncates to 1000 with `truncated: true`; and that the sandbox worker's bearer gate fails CLOSED. With `SBOX_TOKEN` unset every route must answer 401 and never compare equal to the literal `Bearer undefined`: `deploy/sandbox-worker/src/index.ts` compares `authorization !== \`Bearer ${env.SBOX_TOKEN}\`` today, which is a fail-open comparison against an unset secret in a worker that runs arbitrary shell (prescan F21), and it is not constant-time. `deploy/sandbox-worker` is a separate deploy and cannot import `src/auth.ts`, so the check is necessarily a second copy; assert the same two properties here that `src/auth.ts`'s `safeEq` and `authed` provide, so the copies cannot drift apart.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -1402,15 +1414,15 @@ Read `deploy/sandbox-worker/node_modules/e2b/`'s TypeScript definitions for the 
 
 - [ ] **Step 3: Implement**
 
-Tar to a file inside the sandbox (`/tmp/ws.tar.gz`), read it with the pinned E2B API, `put` the stream to R2, then write a manifest built from `tar tzvf` output parsed into path, size, and mtime. Restore is `get` then upload into the sandbox and extract. Base64 through `stdout` is gone, so the `ARG_MAX` class of failure is gone with it.
+Tar inside the sandbox to `/tmp/ws.tar.gz` with `--sort=name --mtime=@0 --numeric-owner --warning=no-file-changed` and excludes for `node_modules`, `.git`, `dist`, `build`, `.next`, `.cache`, `__pycache__`; `stat -c %s`, `tar tzvf | wc -l`, `sha256sum`, and the three largest members all come from the sandbox, never from the Worker, because a Free-plan Worker has 10 ms of CPU. Then read the file through the pinned E2B file API and `kv.put` it as an `ArrayBuffer`. Restore is `kv.get`, `sandbox.files.write`, then `tar xzf`. There is no base64 on either side: it inflated the payload by 4/3 and inlining it into a shell argument is what made restore die around 1-2 MB at `MAX_ARG_STRLEN`.
 
 - [ ] **Step 4: Run the test, deploy, and roundtrip live**
 
-Write a file in one session, snapshot, `POST /session/kill` for that session, then in a fresh sandbox list `/home/user` and confirm the file is back. Report bytes, file count, and duration.
+Write a file in one session, snapshot, `POST /session/kill` for that session, then in a fresh sandbox list `/home/user` and confirm the file is back. Report the measured gzip bytes, the raw byte total, the file count, the sha256, and the duration; then make a file larger than `SNAPSHOT_LIMIT_BYTES` if you can (a big generated file is enough) and show the `too_large` response with its number in it, which also proves the Task 26 gate runs before the write. Paste both outputs.
 
 ```bash
 git add deploy/sandbox-worker/ tests/workspace.test.mjs
-git commit -m "P4: workspace snapshots and restores move from base64-in-KV to R2"
+git commit -m "P4: workspace snapshots and restores become one measured gzip tar in KV"
 ```
 
 ### Task 28: One sandbox per session, with a cap and an idle GC
@@ -1433,7 +1445,7 @@ git commit -m "P4: workspace snapshots and restores move from base64-in-KV to R2
 
 - [ ] **Step 3: Implement, then verify isolation live**
 
-Deploy, build a file in session A, and in session B run `ls -la /home/user`: B must not see A's file. Then confirm session A still sees it after its sandbox was idle past the lease, i.e. restore fired. Report both results.
+Deploy, build a file in session A, and in session B run `ls -la /home/user`: B must not see A's file. Then confirm session A still sees it after its sandbox was idle past the lease, i.e. restore fired. If it reports `not_visible_yet`, say so with the attempt count instead of retrying silently: the up-to-60-second global visibility window is KV's real cost, and an eviction that kills a VM seconds after its snapshot is exactly when it shows. Report both results. The fail-closed bearer gate is Task 27's; this task edits the same file, so do not reintroduce the plain `!==`.
 
 ```bash
 git add src/agent.ts deploy/sandbox-worker/src/index.ts deploy/sandbox-worker/pool.ts tests/sandbox-scope.test.mjs
@@ -1444,11 +1456,11 @@ git commit -m "P4: sandboxes are per session, capped, and idle-collected"
 
 **Files:**
 - Modify: `src/harness.ts` (`onTurnEnd`), `src/agent.ts`, `src/index.ts` (`GET /api/capabilities`), `ui/index.html` (the Tools tab reads the route)
-- Create: `tests/no-drift.test.mjs`
+- Create: `tests/no-drift.test.mjs`, `src/workspace-store.ts`, `tests/workspace-store.test.mjs`
 
 **Interfaces:**
-- Consumes: `capabilityList` and `capabilitiesText` from Task 16, `StreamHub.write`, the snapshot dependency from `src/tools.ts`.
-- Produces: `GET /api/capabilities` returning `{ ok: true, tools: string[], capabilities: Capability[] }` straight from `src/capabilities.ts`, and a `restoring` progress frame emitted before the first tool of a session runs on a fresh sandbox.
+- Consumes: `capabilityList` and `capabilitiesText` from Task 16, `StreamHub.write`, the snapshot dependency from `src/tools.ts`, `tarKey`/`manifestKey`/`SNAPSHOT_LIMIT_BYTES` from Task 26.
+- Produces: `GET /api/capabilities` returning `{ ok: true, tools: string[], capabilities: Capability[] }` straight from `src/capabilities.ts`, a `restoring` progress frame emitted before the first tool of a session runs on a fresh sandbox, and the pointer store `src/workspace-store.ts`: `WorkspaceRow {session_id, key, bytes, files, sha256, updated_at, over_limit_bytes}`, `ensureWorkspaceSchema(sql)`, `recordSnapshot(sql, row)`, `getWorkspace(sql, sessionId)`, `recordTooLarge(sql, sessionId, bytes, at)`, `clearWorkspace(sql, sessionId)`, pure SQL over `SqlHandle` in the `src/vault.ts` idiom with `?` bindings. Payload bytes live in KV (25 MiB per entry, up to 60 s stale); this row is the strongly consistent truth about what the last good snapshot was, and Task 30 reads it.
 
 - [ ] **Step 1: Write the failing drift test**
 
@@ -1468,14 +1480,14 @@ Add the route, then replace the Tools tab's literal copy with a fetch of it, reu
 
 - [ ] **Step 5: Auto-snapshot**
 
-`hooks.onTurnEnd` calls the snapshot when the turn ran `exec` or `save_workspace`, so a crash loses at most the current turn. `save_workspace` remains for the model's explicit use, and its description now says snapshotting also happens automatically, which Task 4 made premature and this task makes true.
+`hooks.onTurnEnd` calls the snapshot when the turn ran `exec` or `save_workspace`, passing the pointer row's `sha256` as `priorSha256` so an unchanged tree costs zero KV writes: the free plan allows 1,000 writes and 1,000 deletes per day, and two writes per turn against that ceiling is a real failure mode, not a theoretical one. A crash loses at most the current turn. `save_workspace` remains for the model's explicit use and its description now names the 24 MiB limit and says snapshotting also happens automatically, which Task 4 made premature and this task makes true.
 
 - [ ] **Step 6: Restore as a widget, then verify and commit**
 
-A restore that takes seconds must emit `{t:"tool-progress", phase:"restoring", message:"Rebuilding your workspace"}` and then a frame carrying byte and file counts when it lands, so the wait the user accepted is visible rather than a silent hang. Verify in the console: kill the session's sandbox, ask for a `run: ls -la`, and watch the restore widget appear with real numbers. Report what it showed.
+A restore that takes seconds must emit `{t:"tool-progress", phase:"restoring", message:"Rebuilding your workspace"}` and then a frame carrying byte and file counts when it lands, so the wait the user accepted is visible rather than a silent hang. The landing frame carries bytes, file count, and duration against the 24 MiB limit (`Workspace saved: 242 KiB, 40 files, in 1.9 s (24 MiB limit)`), and a `too_large` or `not_visible_yet` outcome renders as a `.bad` card with the exact rescope section 5.6 sentence, including the largest members. Verify in the console: kill the session's sandbox, ask for a `run: ls -la`, and watch the restore widget appear with real numbers. Report what it showed.
 
 ```bash
-git add src/harness.ts src/agent.ts src/index.ts src/tools.ts ui/index.html tests/no-drift.test.mjs
+git add src/harness.ts src/agent.ts src/index.ts src/tools.ts src/workspace-store.ts ui/index.html tests/no-drift.test.mjs tests/workspace-store.test.mjs
 git commit -m "P4: snapshots on turn end, restore shows progress, capability copy has one source"
 ```
 
@@ -1485,11 +1497,11 @@ git commit -m "P4: snapshots on turn end, restore shows progress, capability cop
 - Modify: `src/index.ts`, `src/agent.ts`, `ui/index.html`
 
 **Interfaces:**
-- Produces: `GET /api/sessions/:id/files`, `GET /api/sessions/:id/files/:path` (download), `DELETE /api/sessions/:id/files/:path`, and `DELETE /api/sessions/:id` which also deletes the R2 prefix.
+- Produces: `GET /api/sessions/:id/workspace` (the pointer row: saved, bytes, files, updatedAt, overLimit), `GET /api/sessions/:id/workspace/files` (from `ws:man:<id>`), `GET /api/sessions/:id/workspace/archive` (the tar.gz itself, which works with no sandbox running), and `DELETE /api/sessions/:id`, which calls `POST /workspace/forget` for `ws:tar:<id>` and `ws:man:<id>` by name, clears the pointer row, and removes the registry row. No prefix listing.
 
 - [ ] **Step 1: Write the route test**
 
-Extend `tests/routes.test.mjs`: `files/:path` rejects a path containing `..` with 400 before any R2 call; `DELETE .../files/:path` also rewrites the manifest so a deleted file does not reappear on restore; and `DELETE /api/sessions/:id` removes the registry row and lists the R2 prefix for deletion, but only after an explicit `confirm_body: true` in the request, because "delete the session" must not silently destroy the build inside it.
+Extend `tests/routes.test.mjs`: `files/:path` and `archive` reject a path containing `..` with 400 before any KV call; a session id that `assertSafeSessionId` rejects is a 400, not a key; `DELETE .../files/:path` returns 409 with the restore copy when no sandbox is live, because one tar cannot lose one member without rewriting it, and when a sandbox IS live it deletes in the sandbox and snapshots immediately so the file does not reappear on restore; and `DELETE /api/sessions/:id` removes the registry row, clears the pointer row, and deletes both named keys, but only after an explicit `confirm_body: true`, because "delete the session" must not silently destroy the build inside it.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -1497,7 +1509,7 @@ Extend `tests/routes.test.mjs`: `files/:path` rejects a path containing `..` wit
 
 - [ ] **Step 3: Implement and render in the existing grid**
 
-Mount the list in the console's existing `.docs` grid, reusing its row markup. Download uses the token query param, since `Location`-driven downloads cannot set headers.
+Mount the list in the console's existing `.docs` grid, reusing its row markup, and put the pointer row's numbers (bytes, files, updatedAt, and the 24 MiB limit) in the card's `<small>` line so the ceiling is visible before a save fails. Download uses the token query param, since `Location`-driven downloads cannot set headers. Per-file download of a saved-only workspace is the archive; a single file is fetched from a live sandbox, and the route says so rather than 404ing.
 
 - [ ] **Step 4: Verify in the browser and commit**
 
