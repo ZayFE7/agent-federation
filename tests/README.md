@@ -1,6 +1,6 @@
 # tests/
 
-Thirty entries live here, this README included. Twenty-four are offline, framework-free, and run by
+Thirty-one entries live here, this README included. Twenty-five are offline, framework-free, and run by
 `npm test`:
 `approval.test.mjs` (a test that only `exec` is gated by shell risk and a malformed input fails
 closed), `context.test.mjs` (a test that every capability claim renders from one table and that
@@ -43,7 +43,10 @@ the turn and refuses a hostile id before any DO or registry call), `titles.test.
 title parser that cuts at 40 codepoints rather than UTF-16 units, strips wrapping quotes,
 accepts the JSON object form the cheap model often returns, and falls back deterministically),
 `tools.test.mjs` (a test of the AI SDK tool set: the four frozen names, recovery policy and
-descriptions), and `fake-sql.test.mjs` (a contract test for the
+descriptions), `workspace-keys.test.mjs` (a test of `src/workspace-keys.ts`: the two derived key
+names `ws:tar:<id>` and `ws:man:<id>`, the guard that runs before any key is built, the 24 MiB gate
+one MiB under the 25 MiB KV entry ceiling, and the exact number the console's card prints), and
+`fake-sql.test.mjs` (a contract test for the
 shared fixture). The harness is
 `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
 pure-store tests, contract-tested by `fake-sql.test.mjs`). Live-only, never run by
@@ -141,10 +144,10 @@ i.e. dead code. That was wrong; the code wins.)
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the harness approval round trip needs a Durable
   Object and is only exercised live.
-- `npm test` runs twenty-four offline files (`approval`, `context`, `fake-sql`, `frames`,
+- `npm test` runs twenty-five offline files (`approval`, `context`, `fake-sql`, `frames`,
   `guardrails`, `harness`, `markdown`, `memory`, `paths`, `prefix`, `provider`, `registry`,
   `registry-input`, `registry-store`, `reply`, `router`, `routes`, `session-scope`, `sql-handle`,
-  `sse-auth`, `stream-hub`, `submit`, `titles`, `tools`). No offline
+  `sse-auth`, `stream-hub`, `submit`, `titles`, `tools`, `workspace-keys`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
 - `routes.test.mjs` covers the eight worker-side session routes: `GET /api/sessions?limit=N`,
