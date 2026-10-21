@@ -13,7 +13,12 @@
 import { tool } from "ai";
 import type { ToolSet } from "ai";
 import { z } from "zod";
-import { EXPECTED_TOOLS, SANDBOX_HOME } from "./capabilities.ts";
+import {
+  EXPECTED_TOOLS,
+  SANDBOX_HOME,
+  SNAPSHOT_LIMIT_LABEL,
+} from "./capabilities.ts";
+import { formatLimit } from "./workspace-keys.ts";
 
 /** One Parallel Web Search result, narrowed to the fields we surface to the model. */
 export interface SearchResult {
@@ -35,6 +40,125 @@ export interface ExecResult {
 export interface SnapshotResult {
   ok: boolean;
   output: string;
+}
+
+/**
+ * The sandbox worker's snapshot reply (deploy/sandbox-worker/workspace.ts,
+ * `SnapshotResult`), narrowed to the fields a report needs. Kept as data so the
+ * sentence the model and the widget show carries the numbers that were actually
+ * measured rather than a dump of the JSON body.
+ */
+export interface SnapshotReply {
+  ok: boolean;
+  reason?: string;
+  bytes?: number;
+  files?: number;
+  biggest?: string[];
+  sha256?: string | null;
+  key?: string | null;
+  ms?: number;
+  unchanged?: boolean;
+}
+
+/** The archive a reply points at. Null unless a usable archive exists. */
+export interface SnapshotPointer {
+  key: string;
+  bytes: number;
+  files: number;
+  sha256: string;
+}
+
+/**
+ * An archive is usable when the worker names the key it wrote and the digest it
+ * stored. `unchanged` counts: the key names the copy already in storage, which is
+ * the current truth even though no write happened.
+ */
+export function snapshotPointer(r: SnapshotReply): SnapshotPointer | null {
+  if (!r.ok || typeof r.key !== "string" || !r.key) return null;
+  if (typeof r.sha256 !== "string" || !r.sha256) return null;
+  return { key: r.key, bytes: r.bytes ?? 0, files: r.files ?? 0, sha256: r.sha256 };
+}
+
+/**
+ * One place the outcome becomes a sentence. A snapshot that silently did nothing
+ * is the failure mode this exists to avoid, so each branch says what happened to
+ * the bytes and, for an over-limit tree, which files to look at.
+ */
+export function formatSnapshotReply(r: SnapshotReply): string {
+  const seconds = `${((r.ms ?? 0) / 1000).toFixed(1)} s`;
+  const size = formatLimit(r.bytes ?? 0);
+  const files = `${r.files ?? 0} file${r.files === 1 ? "" : "s"}`;
+  if (r.reason === "too_large") {
+    const names = (r.biggest ?? []).slice(0, 3).join(", ");
+    return (
+      `Not saved: the workspace is ${size} compressed, over the ${SNAPSHOT_LIMIT_LABEL} limit. ` +
+      (names
+        ? `Biggest files: ${names}. `
+        : "") +
+      `Delete or move what you do not need under ${SANDBOX_HOME}, then try again. ` +
+      `Nothing was overwritten: the last snapshot that did fit is still in place.`
+    );
+  }
+  if (r.unchanged) {
+    return `Workspace unchanged since the last snapshot: ${files}, ${size}. Nothing was written.`;
+  }
+  if (r.reason === "empty") {
+    return `Nothing to save: ${SANDBOX_HOME} has no files. The last snapshot, if any, is untouched.`;
+  }
+  if (!r.ok) {
+    return `Snapshot failed${r.reason ? ` (${r.reason})` : ""}. Nothing was overwritten.`;
+  }
+  return `Workspace saved: ${size}, ${files}, in ${seconds} (${SNAPSHOT_LIMIT_LABEL} limit)`;
+}
+
+/**
+ * The sandbox worker's restore reply (`RestoreResult`), narrowed to the fields a
+ * progress frame reports.
+ */
+export interface RestoreReply {
+  ok: boolean;
+  restored: boolean;
+  reason?: string;
+  bytes?: number;
+  files?: number;
+  expectedBytes?: number;
+  attempts?: number;
+  ms?: number;
+  legacy?: boolean;
+}
+
+/** Shown before a call that may have to rebuild a workspace, so the wait has a name. */
+export const RESTORING_NOTICE = "Rebuilding your workspace";
+
+/**
+ * What a restore said when it landed. A session that was never saved has nothing
+ * to report and returns the empty string, so a first-ever command does not show a
+ * workspace card; every other outcome is named with its numbers, because "your
+ * files are not here" needs a reason a person can act on.
+ */
+export function formatRestoreReply(r: RestoreReply): string {
+  const seconds = `${((r.ms ?? 0) / 1000).toFixed(1)} s`;
+  if (r.restored) {
+    return `Workspace restored: ${formatLimit(r.bytes ?? 0)}, ${r.files ?? 0} file${
+      r.files === 1 ? "" : "s"
+    }, in ${seconds}`;
+  }
+  if (r.reason === "no_snapshot") return "";
+  const tried = r.attempts && r.attempts > 1 ? ` after ${r.attempts} tries` : "";
+  if (r.reason === "not_visible_yet") {
+    return `The snapshot was not readable yet${tried}. The sandbox starts empty this time; the files arrive as soon as the copy replicates.`;
+  }
+  if (r.reason === "size_mismatch") {
+    return `The snapshot read short: ${formatLimit(r.bytes ?? 0)} of the ${formatLimit(
+      r.expectedBytes ?? 0
+    )} recorded${tried}. It was not installed rather than half-installed.`;
+  }
+  if (r.reason === "extract_failed") {
+    return `The snapshot would not unpack${
+      r.bytes ? ` (${formatLimit(r.bytes)})` : ""
+    }. The sandbox starts empty, and the saved copy is untouched.`;
+  }
+  return `Workspace not restored${r.reason ? ` (${r.reason})` : ""}. The sandbox starts empty.`;
 }
 
 export interface ScheduleInput {
@@ -153,7 +277,7 @@ export function formatSearchResults(
 function execTool(deps: ToolDeps) {
   return tool({
     description:
-      `Run one shell command in the agent's persistent Linux sandbox: files, Python, downloads, data work, installs, anything that needs a real machine. Internet works. The working directory is ${SANDBOX_HOME}, and files there survive until the sandbox lease expires unless you snapshot them with save_workspace. Always gets back the exit code, stdout, and stderr; on a non-zero exit read stderr before retrying, and never report success for a command that failed. Prefer python3 for Python; write multi-line scripts to a file and run the file rather than inlining them. Long output is clipped with an explicit truncation notice.`,
+      `Run one shell command in the agent's persistent Linux sandbox: files, Python, downloads, data work, installs, anything that needs a real machine. Internet works. The working directory is ${SANDBOX_HOME}. Each chat session has its own sandbox, so another session's files are not reachable from here. Files you leave in ${SANDBOX_HOME} are snapshotted automatically at the end of a turn that used the sandbox and restored when the sandbox is next needed, so they survive the machine going away; you do not have to save them by hand. Always gets back the exit code, stdout, and stderr; on a non-zero exit read stderr before retrying, and never report success for a command that failed. Prefer python3 for Python; write multi-line scripts to a file and run the file rather than inlining them. Long output is clipped with an explicit truncation notice.`,
     inputSchema: z.object({
       cmd: z
         .string()
@@ -255,7 +379,7 @@ function scheduleTool(deps: ToolDeps) {
 function saveWorkspaceTool(deps: ToolDeps) {
   return tool({
     description:
-      `Snapshot the sandbox ${SANDBOX_HOME} directory into persistent storage so files survive a sandbox restart. Nothing is snapshotted automatically: call this yourself after creating important files.`,
+      `Snapshot the sandbox ${SANDBOX_HOME} directory into persistent storage now, so the files survive the sandbox going away. The saved tree is capped at ${SNAPSHOT_LIMIT_LABEL} compressed: anything larger is not saved, and the output names the size and the biggest files so you can delete or move something and try again. A snapshot is also taken automatically when a turn that used the sandbox ends, so calling this is not how work gets kept: call it when you want a checkpoint at a specific moment, for instance right after building something the user asked for.`,
     inputSchema: z.object({}),
     execute: async (_input, options) => {
       const onProgress = progressSink(deps, options);

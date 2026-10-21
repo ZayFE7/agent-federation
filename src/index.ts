@@ -3,6 +3,7 @@ import { RegistryAgent } from "./registry";
 import { fetchRouter } from "./router";
 import { authed, safeEq } from "./auth";
 import { MAIN_DO_NAME, isSessionId } from "./session-scope";
+import { EXPECTED_TOOLS, capabilityList } from "./capabilities";
 import { handleFetch } from "./routes";
 import { DEFAULT_MODEL_CHEAP } from "./types";
 import type { AgentStub, Env } from "./types";
@@ -63,6 +64,21 @@ export default {
 
     if (url.pathname === "/health") {
       return Response.json({ ok: true });
+    }
+
+    // The capability list the console's Tools tab renders. It comes from the same
+    // table the system prompt is assembled from, so the promise on screen cannot
+    // lead or lag the promise made to the model (plan Task 29). Bearer-gated like
+    // every other handover route: it names what this agent can reach.
+    if (url.pathname === "/api/capabilities" && request.method === "GET") {
+      if (!authed(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      return Response.json({
+        ok: true,
+        tools: [...EXPECTED_TOOLS],
+        capabilities: capabilityList(EXPECTED_TOOLS),
+      });
     }
 
     if (url.pathname === "/api/tasks" && request.method === "GET") {

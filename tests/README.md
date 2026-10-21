@@ -1,6 +1,6 @@
 # tests/
 
-Thirty-three entries live here, this README included. Twenty-seven are offline, framework-free, and run by
+Thirty-five entries live here, this README included. Twenty-nine are offline, framework-free, and run by
 `npm test`:
 `approval.test.mjs` (a test that only `exec` is gated by shell risk and a malformed input fails
 closed), `context.test.mjs` (a test that every capability claim renders from one table and that
@@ -52,7 +52,13 @@ the rule that a refused turn leaves the previous snapshot untouched), `sandbox-s
 of `deploy/sandbox-worker/pool.ts`: that the cap counts distinct sessions, that an eviction never takes
 the session that just asked, that recency is read off the lease rather than counted in a table, and the
 worker's wiring as source text, since the entry module value-imports `e2b` and cannot be loaded
-offline), and
+offline), `workspace-store.test.mjs` (a test of `src/workspace-store.ts`, the snapshot pointer row,
+against a real `node:sqlite` database: a landed snapshot clears the over-limit warning, an attempt that
+did not fit keeps the last good pointer and adds only the warning, a session that never saved reports
+null rather than a zero-byte lie, and an injection-shaped session id is stored as data),
+`no-drift.test.mjs` (a test that the words a user reads about what BLIP can do exist in exactly one
+place: the capability table, the tool descriptions, the generated "Right now I can:" answer and the
+console's fetch of `/api/capabilities`, with no em dash in any of them), and
 `fake-sql.test.mjs` (a contract test for the
 shared fixture). The harness is
 `run-all.mjs`. Shared fixtures: `fake-sql.mjs` (an in-memory `SqlHandle` fake for the
@@ -151,11 +157,12 @@ i.e. dead code. That was wrong; the code wins.)
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the harness approval round trip needs a Durable
   Object and is only exercised live.
-- `npm test` runs twenty-seven offline files (`approval`, `context`, `fake-sql`, `frames`,
-  `guardrails`, `harness`, `markdown`, `memory`, `paths`, `prefix`, `provider`, `registry`,
+- `npm test` runs twenty-nine offline files (`approval`, `context`, `fake-sql`, `frames`,
+  `guardrails`, `harness`, `markdown`, `memory`, `no-drift`, `paths`, `prefix`, `provider`, `registry`,
   `registry-input`, `registry-store`, `reply`, `router`, `routes`, `sandbox-scope`, `session-scope`,
   `sql-handle`,
-  `sse-auth`, `stream-hub`, `submit`, `titles`, `tools`, `workspace`, `workspace-keys`). No offline
+  `sse-auth`, `stream-hub`, `submit`, `titles`, `tools`, `workspace`, `workspace-keys`,
+  `workspace-store`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
 - `routes.test.mjs` covers the eight worker-side session routes: `GET /api/sessions?limit=N`,

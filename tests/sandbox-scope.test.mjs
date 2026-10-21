@@ -215,7 +215,9 @@ check("the agent passes its own session id to the sandbox, never a fixed one", (
   const run = agentSrc.slice(agentSrc.indexOf('https://zay-sandbox/run'));
   assert.match(run.slice(0, 700), /body:\s*JSON\.stringify\(\{\s*cmd,\s*sessionId\s*\}\)/);
   const snap = agentSrc.slice(agentSrc.indexOf("/workspace/snapshot"));
-  assert.match(snap.slice(0, 700), /body:\s*JSON\.stringify\(\{\s*sessionId:\s*session\s*\}\)/);
+  // Task 29 appends `priorSha256` after the id, so this pins only that the id is
+  // the caller's `session` variable and never a literal.
+  assert.match(snap.slice(0, 700), /body:\s*JSON\.stringify\(\{\s*sessionId:\s*session\b/);
 });
 
 if (failures.length) {

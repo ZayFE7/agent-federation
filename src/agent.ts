@@ -23,7 +23,7 @@ import {
   EXPECTED_TOOLS,
   SANDBOX_HOME,
   buildSystemPrompt,
-  capabilityList,
+  capabilityAnswer,
   capabilitiesText,
 } from "./capabilities";
 import {
@@ -62,14 +62,27 @@ import { messageText, replyFrom } from "./reply";
 import {
   buildTools,
   formatExecResult,
+  formatRestoreReply,
   formatSearchResults,
+  formatSnapshotReply,
+  RESTORING_NOTICE,
+  snapshotPointer,
   type ExecResult,
+  type RestoreReply,
   type ScheduleInput,
   type SearchResult,
+  type SnapshotReply,
   type SnapshotResult,
   type ToolDeps,
   type ToolProgress,
+  type ToolProgressSink,
 } from "./tools";
+import {
+  ensureWorkspaceSchema,
+  getWorkspace,
+  recordSnapshot,
+  recordTooLarge,
+} from "./workspace-store";
 
 /**
  * The two registry RPCs the title fiber calls (Task 9). A local shape rather
@@ -90,6 +103,7 @@ interface StashedTurn {
 /** The narrow shape of a UIMessage part this file reads across the RPC boundary. */
 interface ToolPartLike {
   type?: string;
+  toolName?: string;
   toolCallId?: string;
   state?: string;
   output?: unknown;
@@ -100,6 +114,18 @@ interface ToolPartLike {
 function isToolPart(part: ToolPartLike): boolean {
   const type = part.type ?? "";
   return type === "dynamic-tool" || (type.startsWith("tool-") && type.length > 5);
+}
+
+/**
+ * Which tool a transcript part came from. `toolName` is what the SDK writes for a
+ * dynamic tool; for a statically registered one the name is the `tool-` prefix on
+ * `type`. Both are read because the turn-end hook has to know whether this turn
+ * touched the sandbox, and that answer decides whether a snapshot is owed.
+ */
+function toolNameOf(part: ToolPartLike): string {
+  if (typeof part.toolName === "string" && part.toolName) return part.toolName;
+  const type = part.type ?? "";
+  return type.startsWith("tool-") ? type.slice(5) : type;
 }
 
 /** The parked call's real approval id, read back off the transcript. */
@@ -145,6 +171,13 @@ export class FederationAgent extends Agent<Env> {
   private readonly turnUser = new Map<string, StashedTurn[]>();
   /** The running operation per session, so tool progress lands on its stream. */
   private readonly currentOp = new Map<string, string>();
+  /**
+   * Sessions this isolate has already run a command for. It only decides whether
+   * to warn that a workspace may have to be rebuilt, so a wrong answer costs one
+   * extra line of progress, never a wrong file: the sandbox pool lives in the
+   * sandbox worker's KV, and an evict that the worker reports clears the entry.
+   */
+  private readonly sandboxSeen = new Set<string>();
   private schemaReady = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -229,6 +262,7 @@ export class FederationAgent extends Agent<Env> {
     if (!this.schemaReady) {
       ensureSchema(handle);
       ensureVaultSchema(handle);
+      ensureWorkspaceSchema(handle);
       this.schemaReady = true;
     }
     return handle;
@@ -557,24 +591,18 @@ export class FederationAgent extends Agent<Env> {
     content: string,
     kind: "exec" | "search" | "capabilities",
     chatTier: ChatTier,
-    session: string
+    session: string,
+    onProgress?: ToolProgressSink
   ): Promise<AgentReply> {
     const sql = this.db();
 
     // Deterministic answer for capability questions: the free-tier model
-    // ignores the system prompt here, and this is factual product copy. Every
-    // line comes from the one capability table (Task 16).
+    // ignores the system prompt here, and this is factual product copy. The whole
+    // reply, safety line included, is generated from the one capability table
+    // (Task 16) and served again by GET /api/capabilities (Task 29), so the chat
+    // answer and the Tools tab cannot disagree.
     if (kind === "capabilities") {
-      const wired = capabilitiesText(EXPECTED_TOOLS);
-      const missing = capabilityList(EXPECTED_TOOLS)
-        .filter((c) => !c.wired)
-        .map((c) => c.label.toLowerCase())
-        .join(", ");
-      const reply =
-        "Right now I can:\n" +
-        wired +
-        (missing ? `\n\nNot connected yet: ${missing}.` : "") +
-        "\n\nSafety: high-risk commands (destructive, irreversible, outward-facing, or spending money) are held for your explicit approval before they run.";
+      const reply = capabilityAnswer(EXPECTED_TOOLS);
       logMessage(sql, "assistant", reply, chatTier);
       await this.rememberGlobal("exchange", `User: ${content}\nAgent: ${reply}`, 1);
       return { reply, state: "idle", verb: "Ready" };
@@ -586,7 +614,7 @@ export class FederationAgent extends Agent<Env> {
     // bypasses the isRisky approval gate that guards MODEL-emitted commands.
     if (kind === "exec") {
       const cmd = arg;
-      const result = await this.runSandbox(cmd, session);
+      const result = await this.runSandbox(cmd, session, onProgress);
       const output = formatExecResult(result);
       await this.rememberGlobal(
         "tool",
@@ -594,6 +622,12 @@ export class FederationAgent extends Agent<Env> {
         2
       );
       logMessage(sql, "assistant", output, chatTier);
+      // The same turn-end rule as the harness path: if the sandbox ran anything,
+      // the turn owes a snapshot. A command that exited non-zero may still have
+      // written files, so the gate is "reached the sandbox", not "succeeded".
+      if (!result.error) {
+        this.ctx.waitUntil(this.snapshotWorkspace(session).then(() => {}));
+      }
       const runs: ToolRun[] = [
         { name: "exec", cmd, output: output.slice(0, 4000), ok: result.ok },
       ];
@@ -667,7 +701,17 @@ export class FederationAgent extends Agent<Env> {
       } else {
         this.hub.write(streamId, { t: "state", state: "think", verb: "Thinking" });
       }
-      const reply = await this.runDirect(content, kind, tier, session);
+      const onProgress: ToolProgressSink = (p) => {
+        this.hub.write(streamId, {
+          t: "tool-progress",
+          id: toolCallId,
+          phase: p.phase,
+          message: p.message,
+          fraction: p.fraction,
+          ...(p.tail === undefined ? {} : { tail: p.tail }),
+        });
+      };
+      const reply = await this.runDirect(content, kind, tier, session, onProgress);
       if (tool) {
         const run = reply.tools?.[0];
         this.hub.write(streamId, {
@@ -763,6 +807,27 @@ export class FederationAgent extends Agent<Env> {
         `User: ${stashed.content}\nAgent: ${text}`,
         2
       );
+    }
+    // Task 29: a turn that used the sandbox owes a snapshot, so the files it
+    // built survive the VM being recycled without the model remembering to save.
+    // Detached and non-fatal: the reply is already complete, the stream already
+    // finished, and a save that fails is told by the next restore card and by the
+    // over-limit row in the workspace store, never by holding this turn open.
+    // A turn parked on an approval is not over, so it is not charged.
+    if (!pending && turn.status === "done") {
+      const touched = (turn.message?.parts ?? []).some((raw) => {
+        const name = toolNameOf(raw as ToolPartLike);
+        return name === "exec" || name === "save_workspace";
+      });
+      if (touched) {
+        this.ctx.waitUntil(
+          this.snapshotWorkspace(turn.session).then((r) => {
+            if (!r.ok) {
+              console.error(`turn-end snapshot failed for ${turn.session}: ${r.output}`);
+            }
+          })
+        );
+      }
     }
   }
 
@@ -1143,7 +1208,7 @@ export class FederationAgent extends Agent<Env> {
   /** The four tool dependencies, each bound to the calling session (R40). */
   private toolDeps(session: string): ToolDeps {
     return {
-      exec: (cmd) => this.runSandbox(cmd, session),
+      exec: (cmd, onProgress) => this.runSandbox(cmd, session, onProgress),
       search: (query) => this.searchParallel(query),
       schedule: (input) => this.scheduleJob(input),
       snapshot: () => this.snapshotWorkspace(session),
@@ -1155,8 +1220,17 @@ export class FederationAgent extends Agent<Env> {
    * One shell command in the E2B sandbox. The session id keys the sandbox lease
    * (R40), so two chats never share one lease. Never throws: every failure comes
    * back as an ExecResult the formatter can report honestly.
+   *
+   * A cold sandbox is not free: the worker rebuilds it and unpacks the session's
+   * saved tree, which takes seconds the user would otherwise experience as a
+   * hang. So the wait gets a name before the call and its numbers after, and the
+   * exec card that carries them is the tool's own, not a floating notice.
    */
-  private async runSandbox(cmd: string, sessionId: string): Promise<ExecResult> {
+  private async runSandbox(
+    cmd: string,
+    sessionId: string,
+    onProgress?: ToolProgressSink
+  ): Promise<ExecResult> {
     if (!this.env.SANDBOX) {
       return {
         ok: false,
@@ -1165,6 +1239,14 @@ export class FederationAgent extends Agent<Env> {
         stderr: "",
         error: "sandbox not configured",
       };
+    }
+    // The only signal the brain has that a rebuild is possible is its own pointer
+    // row plus the fact that this isolate has not talked to this session's sandbox
+    // yet. Guessing wrong costs one progress line, never a wrong file.
+    const mayRebuild =
+      !this.sandboxSeen.has(sessionId) && Boolean(getWorkspace(this.db(), sessionId)?.key);
+    if (mayRebuild) {
+      onProgress?.({ phase: "restoring", message: RESTORING_NOTICE, fraction: null });
     }
     try {
       const res = await this.env.SANDBOX.fetch("https://zay-sandbox/run", {
@@ -1180,7 +1262,23 @@ export class FederationAgent extends Agent<Env> {
         stderr?: string;
         exitCode?: number;
         error?: string;
+        restore?: RestoreReply | null;
       };
+      if (res.ok) this.sandboxSeen.add(sessionId);
+      if (data.restore) {
+        const line = formatRestoreReply(data.restore);
+        if (line) {
+          onProgress?.({ phase: "restoring", message: line, fraction: 1 });
+        }
+      } else if (mayRebuild) {
+        // The sandbox was still running, so nothing had to be rebuilt. Say so
+        // rather than leaving "Rebuilding your workspace" as the last word.
+        onProgress?.({
+          phase: "restoring",
+          message: "Sandbox was still running",
+          fraction: 1,
+        });
+      }
       if (!res.ok) {
         return {
           ok: false,
@@ -1304,11 +1402,29 @@ export class FederationAgent extends Agent<Env> {
       : `Scheduled "${title}" at ${when}. It runs autonomously with tool access, in the main session's conversation rather than this one.`;
   }
 
-  /** Snapshot the calling session's sandbox home so its files survive a restart. */
+  /**
+   * Snapshot the calling session's workspace and record where it landed.
+   *
+   * The pointer row's digest goes out as `priorSha256`. When the tree has not
+   * changed, the worker measures it, recognizes its own digest and writes nothing,
+   * which is what keeps an automatic save at the end of every sandbox turn inside
+   * the free plan's 1,000 KV writes a day.
+   *
+   * The body is the outcome, not the status code: 413 carries a real measurement
+   * of a tree that is too big, and a 200 can carry `reason: "empty"`. Only a
+   * reply that names a key and a digest may overwrite the pointer, so a failed
+   * attempt leaves the address of the last good archive exactly where it was.
+   *
+   * No progress sink: the `save_workspace` tool already opens its card and closes
+   * it with this string, so a second copy here would only repeat itself.
+   */
   private async snapshotWorkspace(session: string): Promise<SnapshotResult> {
     if (!this.env.SANDBOX) {
       return { ok: false, output: "sandbox not configured" };
     }
+    const sql = this.db();
+    const prior = getWorkspace(sql, session);
+    let data: SnapshotReply;
     try {
       const res = await this.env.SANDBOX.fetch(
         "https://zay-sandbox/workspace/snapshot",
@@ -1318,15 +1434,32 @@ export class FederationAgent extends Agent<Env> {
             authorization: `Bearer ${this.env.SBOX_TOKEN}`,
             "content-type": "application/json",
           },
-          body: JSON.stringify({ sessionId: session }),
+          body: JSON.stringify({
+            sessionId: session,
+            ...(prior?.sha256 ? { priorSha256: prior.sha256 } : {}),
+          }),
         }
       );
-      const data = (await res.json()) as Record<string, unknown>;
-      return res.ok
-        ? { ok: true, output: `Workspace saved: ${JSON.stringify(data)}` }
-        : { ok: false, output: `snapshot error: ${JSON.stringify(data).slice(0, 400)}` };
-    } catch (err) {
-      return { ok: false, output: `snapshot error: ${String(err)}` };
+      data = (await res.json()) as SnapshotReply;
+    } catch {
+      data = { ok: false, reason: "network" };
     }
+    const output = formatSnapshotReply(data);
+    const pointer = snapshotPointer(data);
+    if (pointer) {
+      recordSnapshot(sql, {
+        session_id: session,
+        ...pointer,
+        // An unchanged tree did not land now, so the row keeps the moment the
+        // copy that is really in storage was written. Only a fresh archive for
+        // this same key may stamp a new time.
+        updated_at:
+          data.unchanged && prior?.key === pointer.key ? prior.updated_at : Date.now(),
+        over_limit_bytes: null,
+      });
+    } else if (data.reason === "too_large") {
+      recordTooLarge(sql, session, data.bytes ?? 0, Date.now());
+    }
+    return { ok: Boolean(data.ok), output };
   }
 }

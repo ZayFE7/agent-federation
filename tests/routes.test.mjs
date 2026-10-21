@@ -524,16 +524,16 @@ check("src/agent.ts threads a real session id to the sandbox instead of the lite
     'a hardcoded sessionId: "agent" still names one shared sandbox session (Step 3d)'
   );
   assert.ok(
-    /private\s+async\s+runSandbox\(\s*cmd:\s*string,\s*sessionId:\s*string\s*\)/.test(
+    /private\s+async\s+runSandbox\(\s*cmd:\s*string,\s*sessionId:\s*string,\s*onProgress\?:\s*ToolProgressSink\s*\)/.test(
       AGENT_SOURCE.replace(/\s+/g, " ")
     ),
     "runSandbox must take the sessionId rather than invent one"
   );
   // The callers: the directive path and the exec tool take the threaded id, and the
   // scheduled path passes main explicitly because after Step 3c it only runs there.
-  assert.ok(/this\.runSandbox\(\s*cmd,\s*session\s*\)/.test(AGENT_SOURCE), "the directive path must pass the threaded id");
-  assert.ok(/this\.runSandbox\(\s*cmd,\s*session\s*\)/.test(AGENT_SOURCE), "the exec tool must pass the threaded id");
-  assert.ok(/exec:\s*\(cmd\)\s*=>\s*this\.runSandbox\(cmd,\s*session\)/.test(AGENT_SOURCE), "toolDeps must bind the session to the exec tool");
+  // Task 29 added a progress sink to both call sites; the pin stays the session id.
+  assert.ok(/this\.runSandbox\(\s*cmd,\s*session,\s*onProgress\s*\)/.test(AGENT_SOURCE), "the directive path must pass the threaded id");
+  assert.ok(/exec:\s*\(cmd,\s*onProgress\)\s*=>\s*this\.runSandbox\(\s*cmd,\s*session,\s*onProgress\s*\)/.test(AGENT_SOURCE), "toolDeps must bind the session and the sink to the exec tool");
   assert.ok(/this\.chat\(\s*instructions,\s*"cheap",\s*MAIN_DO_NAME\s*\)/.test(AGENT_SOURCE), "onScheduledTask must pass main explicitly");
 });
 
@@ -683,6 +683,47 @@ check("src/agent.ts keeps memory global from any DO (R45, Step 3b)", () => {
     assert.ok(/this\.db\(\)/.test(rpc), `${name} must run against this DO's own store, as the pre-shard sites did`);
     assert.equal(/private/.test(rpc), false, `${name} is what a session DO calls over a stub, so it cannot be private`);
   }
+});
+
+// ------------------------------------------- turn-end workspace snapshot (P4) ----
+
+check("a turn that used the sandbox owes exactly one workspace snapshot", () => {
+  const turnEnd = AGENT_SOURCE.match(/private\s+async\s+onHarnessTurnEnd\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(turnEnd, "src/agent.ts declares no private onHarnessTurnEnd(...) to read");
+  assert.match(
+    turnEnd,
+    /name === "exec" \|\| name === "save_workspace"/,
+    "the two tools that can write into the sandbox are the two that charge a save"
+  );
+  assert.match(turnEnd, /this\.ctx\.waitUntil\(\s*this\.snapshotWorkspace\(turn\.session\)/);
+  assert.equal(
+    /await this\.snapshotWorkspace\(/.test(turnEnd),
+    false,
+    "the save runs after the reply is complete; awaiting it would hold the turn open"
+  );
+  // A turn parked on an approval is not over, and a save on a failed status would
+  // spend the free plan's 1,000 writes a day on work that never landed.
+  assert.match(turnEnd, /if \(!pending && turn\.status === "done"\)/);
+
+  const snap = AGENT_SOURCE.match(/private\s+async\s+snapshotWorkspace\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(snap, "src/agent.ts declares no private snapshotWorkspace(...) to read");
+  assert.match(snap, /priorSha256: prior\.sha256/, "an unchanged tree must cost zero KV writes");
+  assert.match(snap, /recordSnapshot\(sql,/, "a landed snapshot must move the pointer row");
+  assert.match(snap, /recordTooLarge\(sql, session/, "an attempt that did not fit must be remembered");
+  assert.equal(
+    /res\.ok/.test(snap),
+    false,
+    "413 carries a real measurement and 200 can carry reason: empty, so only the body decides"
+  );
+
+  // The human-typed directive owes the same save, gated on reaching the sandbox
+  // rather than on exit code 0: a command that failed may still have written files.
+  const runDirect = AGENT_SOURCE.match(/private\s+async\s+runDirect\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.match(
+    runDirect,
+    /if \(!result\.error\) \{[\s\S]{0,12}this\.ctx\.waitUntil\(this\.snapshotWorkspace\(session\)/,
+    "run: <cmd> must not be the one sandbox turn that loses its files"
+  );
 });
 
 // ------------------------------------------------------- agentStubFor (R38) ----

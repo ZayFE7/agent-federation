@@ -3,9 +3,14 @@
 // all render from this table, so a tool cannot be wired without being described
 // and a capability cannot be claimed without being wired.
 //
-// Dependency-free apart from type imports so offline tests can load it directly.
+// The only runtime import is ./workspace-keys.ts, which is itself pure and
+// Node-loadable: the snapshot ceiling is stated in three places (this table, the
+// save_workspace description, the console) and one number is the only version of
+// that promise that stays true. Everything else is a type import, so offline
+// tests load this module directly.
 
 import type { MemoryRow } from "./memory.ts";
+import { SNAPSHOT_LIMIT_BYTES, formatLimit } from "./workspace-keys.ts";
 
 // The E2B "base" template runs as a non-root user whose home is /home/user, so
 // a path outside it cannot be created. Promising /workspace in a tool
@@ -32,6 +37,17 @@ export const DEFAULT_PERSONA =
  */
 export const HARD_RULE =
   "You are Blip. Always use tools when the task needs a computer. Never reply with a plan; act.";
+
+/**
+ * The approval rule, stated once. It is part of the answer to "what can you do"
+ * because what a person most needs to know there is not only what runs but what
+ * waits for them.
+ */
+export const SAFETY_NOTE =
+  "High-risk commands (destructive, irreversible, outward-facing, or spending money) are held for your explicit approval before they run.";
+
+/** The ceiling every snapshot sentence quotes, formatted the way a person reads it. */
+export const SNAPSHOT_LIMIT_LABEL = formatLimit(SNAPSHOT_LIMIT_BYTES);
 
 /** One capability claim, generated from the table below. */
 export interface Capability {
@@ -63,7 +79,7 @@ const TABLE: readonly CapabilityDef[] = [
     id: "shell",
     label: "Linux sandbox",
     detail: (home) =>
-      `Run shell commands and Python (exec tool) in a real Linux computer with internet access. The home working directory is ${home}, and files there survive until the sandbox lease expires unless you snapshot them with save_workspace. The user can also prefix a message with "run:" to execute a command directly.`,
+      `Run shell commands and Python (exec tool) in a real Linux computer with internet access. The home working directory is ${home}, and every chat session gets its own sandbox: another session's files are not reachable from here. Your files in ${home} are snapshotted automatically at the end of a turn that used the sandbox, and come back when the sandbox is next needed. The user can also prefix a message with "run:" to execute a command directly.`,
     tool: "exec",
   },
   {
@@ -84,7 +100,7 @@ const TABLE: readonly CapabilityDef[] = [
     id: "snapshots",
     label: "Workspace snapshots",
     detail: () =>
-      "Snapshot sandbox files into persistent storage (save_workspace tool) so work survives a sandbox restart.",
+      `Save the sandbox home to persistent storage so work survives the sandbox going away, up to ${SNAPSHOT_LIMIT_LABEL}. This happens automatically at the end of a turn that used the sandbox; save_workspace is for when you want one right now. A tree over the limit is not saved and the failure says so.`,
     tool: "save_workspace",
   },
   {
@@ -148,6 +164,30 @@ export function capabilitiesText(
     .filter((c) => c.wired)
     .map((c) => `- ${c.label}: ${c.detail}`)
     .join("\n");
+}
+
+/**
+ * The whole answer to "what can you do", in one place. The free-tier model
+ * ignores the system prompt for this question, so the agent replies
+ * deterministically, and a deterministic reply is copy that has to come from the
+ * table like everything else. Unwired entries are named, not hidden: a person
+ * asking what is possible is asking about the edges too.
+ */
+export function capabilityAnswer(
+  tools: readonly string[],
+  home: string = SANDBOX_HOME
+): string {
+  const list = capabilityList(tools, home);
+  const missing = list
+    .filter((c) => !c.wired)
+    .map((c) => c.label.toLowerCase())
+    .join(", ");
+  return (
+    "Right now I can:\n" +
+    capabilitiesText(tools, home) +
+    (missing ? `\n\nNot connected yet: ${missing}.` : "") +
+    `\n\nSafety: ${SAFETY_NOTE}`
+  );
 }
 
 /**
