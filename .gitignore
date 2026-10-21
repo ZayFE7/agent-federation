@@ -1,9 +1,13 @@
 node_modules/
 .wrangler/
 .dev.vars
+# Cloudflare convention: anything ending .local is local-only. agent_key.local holds the
+# live rotated AGENT_API_KEY, so it must never be stageable in a public repo.
+*.local
 dist/
 .env
 __pycache__/
+*.log
 
 deploy/router-worker/router-config.json
 design-extract/
