@@ -1,10 +1,12 @@
 # tests/
 
-Twenty-five entries live here, this README included. Twenty are offline, framework-free, and run by
+Thirty entries live here, this README included. Twenty-four are offline, framework-free, and run by
 `npm test`:
 `approval.test.mjs` (a test that only `exec` is gated by shell risk and a malformed input fails
 closed), `context.test.mjs` (a test that every capability claim renders from one table and that
-memory sits after the tool guidance), `guardrails.test.mjs` (a unit test for
+memory sits after the tool guidance), `frames.test.mjs` (a test of the wire vocabulary in
+`../src/frames.ts`: the tool-to-widget table, the chunk-to-frame mapping and the one-line SSE
+encoding), `guardrails.test.mjs` (a unit test for
 `../src/guardrails.ts`), `harness.test.mjs` (a test of `../src/harness-config.ts`, the one harness
 options object: the 12-step construction-time budget, the session-bound tool factory, the approval
 hook, the explicit recovery numbers and the absence of an invented `onEvent` hook),
@@ -32,7 +34,12 @@ the worker's HTTP surface), `session-scope.test.mjs` (a test of `src/session-sco
 one copy of the session-id shape and of the guard the DO runs on itself, and since the fix
 round the single home of `MAIN_DO_NAME`, the name three files used to spell), `sql-handle.test.mjs` (a
 test of `src/sql-handle.ts`, the one exec adapter both Durable Objects build their `db()`
-from, against a real `node:sqlite` database), `titles.test.mjs` (a test of `src/titles.ts`, the
+from, against a real `node:sqlite` database), `sse-auth.test.mjs` (a test that the EventSource
+query token and the Authorization header both fail closed on a blank key and compare through
+`safeEq`), `stream-hub.test.mjs` (a test of `../src/stream-hub.ts`: one durable stream per
+operation, frames buffered until the writer exists, and a terminal state that survives a simulated
+eviction), `submit.test.mjs` (a test that the message route returns the two ids without waiting for
+the turn and refuses a hostile id before any DO or registry call), `titles.test.mjs` (a test of `src/titles.ts`, the
 title parser that cuts at 40 codepoints rather than UTF-16 units, strips wrapping quotes,
 accepts the JSON object form the cheap model often returns, and falls back deterministically),
 `tools.test.mjs` (a test of the AI SDK tool set: the four frozen names, recovery policy and
@@ -134,15 +141,16 @@ i.e. dead code. That was wrong; the code wins.)
   schema is covered offline by `registry-store.test.mjs`). The guardrail classifier itself is
   covered offline by `guardrails.test.mjs`; the harness approval round trip needs a Durable
   Object and is only exercised live.
-- `npm test` runs twenty-three offline files (`approval`, `context`, `fake-sql`, `frames`,
+- `npm test` runs twenty-four offline files (`approval`, `context`, `fake-sql`, `frames`,
   `guardrails`, `harness`, `markdown`, `memory`, `paths`, `prefix`, `provider`, `registry`,
   `registry-input`, `registry-store`, `reply`, `router`, `routes`, `session-scope`, `sql-handle`,
-  `sse-auth`, `stream-hub`, `titles`, `tools`). No offline
+  `sse-auth`, `stream-hub`, `submit`, `titles`, `tools`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
-- `routes.test.mjs` covers the seven worker-side session routes: `GET /api/sessions?limit=N`,
+- `routes.test.mjs` covers the eight worker-side session routes: `GET /api/sessions?limit=N`,
   `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`,
-  `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message` and
+  `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message`,
+  `POST /api/sessions/:id/abort` and
   `GET /api/sessions/:id/stream/:streamId`. Every agent-side answer
   in it is a stub, so it proves nothing about the Durable Object behind those calls, and it
   never opens `project/agent-federation`, so it cannot see deploy-tree drift.
