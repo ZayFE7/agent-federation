@@ -169,9 +169,70 @@ export interface ScheduleInput {
 }
 
 export interface DelegateInput {
-  task: string;
-  context?: string;
+  /**
+   * The sub-agent's identity, derived from the goal by `childNameFor`, never typed
+   * by the model: it is what makes two delegations of the same goal land on one
+   * child instead of two.
+   */
+  name: string;
+  goal: string;
+  focus?: string;
+  /**
+   * The parent's `delegate` tool-call id, which is the card the child's progress
+   * folds onto (src/frames.ts, `childEventToParentFrames`). Empty means the caller
+   * could not supply one and the child will refuse the run rather than guess.
+   */
+  parentCallId: string;
 }
+
+/**
+ * How many sub-agents one session may have working at the same time. One number
+ * for the tool description the model reads and the runner that refuses, so the
+ * promise and the limit cannot drift apart.
+ */
+export const MAX_CHILDREN_PER_SESSION = 3;
+
+/** What a child's report costs the parent's context, in characters. */
+export const CHILD_REPORT_BYTES = 6000;
+
+/** The refusal a capped fan-out hands back. Named here so it is one string. */
+export function childBusyRefusal(max: number = MAX_CHILDREN_PER_SESSION): string {
+  return `${max} sub-agents already running; wait or ask for fewer`;
+}
+
+const CHILD_NAME_PREFIX = "sub";
+
+/** Stable base36 digest of a string. Not a security anything; a facet-name suffix. */
+function digest(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+/**
+ * The goal, made into a Durable Object name: `sub-<words>-<digest>`.
+ *
+ * The words are for whoever is reading `wrangler` output or a facet list and wants
+ * to know what this child is doing. The digest is for correctness: a slug of the
+ * first 40 characters alone would put "summarize R2" and "summarize R2 and compare
+ * S3" on the same child, and a child keeps the conversation it had, so the second
+ * task would be answered out of the first one's context.
+ *
+ * `dynamicAgents.get` is idempotent per name, which is the whole reason the name
+ * comes from the goal and not from a counter: fifty delegations of one goal are
+ * fifty calls to one child.
+ */
+export function childNameFor(goal: string): string {
+  const slug = (goal ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+  return `${CHILD_NAME_PREFIX}-${slug || "task"}-${digest(goal ?? "")}`;
+}
+
 
 /**
  * What a running tool reports while it works. `fraction` is null until the tool
@@ -198,6 +259,11 @@ export interface ToolDeps {
   search(query: string, onProgress?: ToolProgressSink): Promise<SearchResult[]>;
   schedule(input: ScheduleInput, onProgress?: ToolProgressSink): Promise<string>;
   snapshot(onProgress?: ToolProgressSink): Promise<SnapshotResult>;
+  /**
+   * Run one sub-agent and return its report. Absent for a child, and `delegate`
+   * is then not built at all: a caller that has no way to spawn cannot be handed
+   * the tool that would let it recurse.
+   */
   delegate?(input: DelegateInput, onProgress?: ToolProgressSink): Promise<string>;
   progress?(toolCallId: string, p: ToolProgress): void;
 }
@@ -393,6 +459,51 @@ function saveWorkspaceTool(deps: ToolDeps) {
 }
 
 /**
+ * Hand a self-contained task to a sub-agent (Task 32). The runner is a dep because
+ * only the Durable Object can reach `this.dynamicAgents`; what is decided here is
+ * the name, the cap on what the model was told, and the size of the report.
+ */
+function delegateTool(deps: ToolDeps, run: NonNullable<ToolDeps["delegate"]>) {
+  return tool({
+    description:
+      `Give one self-contained task to a research sub-agent and get its written report back. A sub-agent has the shell and web search in this same session's sandbox, no memory of this conversation, no approval menu, and no way to ask the user, so the goal must carry everything it needs: what to find out and what the report should say. Use it for parts of a bigger ask that can be worked on independently, and ask for several in one reply to have them run at the same time (up to ${MAX_CHILDREN_PER_SESSION} at once; past that the call fails and says so rather than queueing). It cannot schedule jobs, save files, or spawn further agents, and a risky or irreversible command is blocked there instead of held, so keep that work for yourself. The report comes back capped at ${CHILD_REPORT_BYTES} characters.`,
+    inputSchema: z.object({
+      goal: z
+        .string()
+        .describe(
+          "What to find out, written for a reader who cannot ask follow-ups and has not seen this conversation. Example: 'Find what Cloudflare Durable Objects SQLite storage is and report the two calls a facet uses.'"
+        ),
+      focus: z
+        .string()
+        .optional()
+        .describe(
+          "Optional narrowing: the angle, the format, or the limit. Example: 'only what is free on a worker plan, as five bullets.'"
+        ),
+    }),
+    execute: async ({ goal, focus }, options) => {
+      const name = childNameFor(goal);
+      const onProgress = progressSink(deps, options);
+      onProgress?.({
+        phase: "delegating",
+        message: `sub-agent ${name} starting`,
+        fraction: null,
+      });
+      const report = await run(
+        { name, goal, focus, parentCallId: options?.toolCallId ?? "" },
+        onProgress
+      );
+      onProgress?.({
+        phase: "delegating",
+        message: `sub-agent ${name} reported`,
+        fraction: 1,
+        tail: clip(report, 200),
+      });
+      return `sub-agent ${name} reported:\n${clip(report, CHILD_REPORT_BYTES)}`;
+    },
+  });
+}
+
+/**
  * Build the tool set. `names` defaults to EXPECTED_TOOLS, so the wired set and
  * the capability table cannot drift; a child agent can be given a subset later.
  */
@@ -408,6 +519,13 @@ export function buildTools(
   };
   const tools: ToolSet = {};
   for (const name of names) {
+    if (name === "delegate") {
+      // Spawning is gated on a dep rather than on the name list, because a name
+      // list is one forgotten filter away from letting a sub-agent spawn its own.
+      const run = deps.delegate;
+      if (typeof run === "function") tools.delegate = delegateTool(deps, run);
+      continue;
+    }
     const build = builders[name];
     if (build) tools[name] = build(deps);
   }

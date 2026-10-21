@@ -44,10 +44,11 @@ export function createRouterModel(env: Env, modelId: string): LanguageModel {
 }
 
 /**
- * Non-tool uses ONLY: session titles, self-critique, `/api/decide`. The pinned
- * cheap id fails a tool round trip at the deployed lane (ledger R25/R29), so
- * never hand this model to a harness session that runs tools; use
- * `createPrimaryModel` there.
+ * Non-tool uses ONLY: session titles, self-critique, `/api/decide`. This is the
+ * cost/latency lane, not a lane that cannot tool: `ocf/deepseek-v4.1-flash-free`
+ * completed a full tool round trip through the funnel when re-pinned (2026-10-21),
+ * but the harness turns still use `createPrimaryModel`. The `ocf/` prefix only
+ * resolves when `ROUTER_URL` is the funnel, not the cloud `zay-router` Worker.
  */
 export function createCheapModel(env: Env): LanguageModel {
   return createRouterModel(env, env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP);

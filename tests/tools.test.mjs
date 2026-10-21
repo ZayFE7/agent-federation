@@ -4,8 +4,19 @@
 // Plain Node: `node tests/tools.test.mjs`. Silent on success (exit 0).
 
 import assert from "node:assert/strict";
-import { buildTools } from "../src/tools.ts";
-import { EXPECTED_TOOLS } from "../src/capabilities.ts";
+import {
+  CHILD_REPORT_BYTES,
+  buildTools,
+  childBusyRefusal,
+  childNameFor,
+} from "../src/tools.ts";
+import {
+  CHILD_TOOL_NAMES,
+  EXPECTED_TOOLS,
+  capabilityList,
+  capabilitiesText,
+} from "../src/capabilities.ts";
+import { TOOL_WIDGET } from "../src/frames.ts";
 
 const failures = [];
 
@@ -43,7 +54,9 @@ function recordingDeps() {
   };
 }
 
-const tools = buildTools(deps);
+// `delegate` is only built for a caller that can actually spawn, so the wired-set
+// check has to hand buildTools a runner.
+const tools = buildTools({ ...deps, delegate: async () => "sub-agent report" });
 
 await check("buildTools wires exactly EXPECTED_TOOLS, in order", () => {
   assert.deepEqual(Object.keys(tools), [...EXPECTED_TOOLS]);
@@ -145,6 +158,127 @@ await check("every tool's final progress is fraction 1, and phases use the fixed
 await check("no progress transport is a valid dependency set", async () => {
   const out = await buildTools(deps).exec.execute({ cmd: "pwd" }, { toolCallId: "c" });
   assert.match(out, /exit 0/);
+});
+
+// Task 32: the delegate tool, which is what makes src/child.ts reachable.
+// The runner itself lives in src/agent.ts (it needs the DO), so everything here
+// is the part that can be proven without one: the name policy that decides how
+// many children exist, the report ceiling, the widget agreement, and the refusal
+// text the model reads when the fan-out cap is hit.
+
+const delegateDeps = (report = "found: X came from https://example.com") => {
+  const seen = [];
+  return {
+    seen,
+    deps: {
+      ...deps,
+      delegate: async (input, onProgress) => {
+        seen.push(input);
+        onProgress?.({ phase: "delegating", message: `sub-agent ${input.name} started`, fraction: null });
+        return report;
+      },
+      progress: () => {},
+    },
+  };
+};
+
+await check("delegate reuses one sub-agent per goal, so 50 calls cannot mean 50 children", async () => {
+  const fake = delegateDeps();
+  const t = buildTools(fake.deps).delegate;
+  const names = new Set();
+  for (let i = 0; i < 50; i++) {
+    await t.execute({ goal: "Summarize what durable objects are" }, { toolCallId: `c${i}` });
+  }
+  assert.equal(fake.seen.length, 50, "one runner call per tool call");
+  for (const call of fake.seen) names.add(call.name);
+  assert.equal(names.size, 1, `same goal produced ${names.size} sub-agent names`);
+});
+
+await check("childNameFor is deterministic, readable, and a legal Durable Object name", () => {
+  const goal = "Summarize Durable Objects";
+  assert.equal(childNameFor(goal), childNameFor(goal));
+  assert.match(childNameFor(goal), /^sub-summarize-durable-objects-[a-z0-9]+$/);
+  assert.notEqual(childNameFor(goal), childNameFor("Summarize R2"), "same suffix for different goals");
+  assert.match(childNameFor(goal), /^[A-Za-z0-9_-]{1,64}$/);
+  const long = childNameFor("x".repeat(2000));
+  assert.ok(long.length <= 64, `derived name is ${long.length} chars`);
+  assert.match(long, /^[A-Za-z0-9_-]{1,64}$/);
+});
+
+await check("delegate hands the runner the parent's routing, not a guess", async () => {
+  const fake = delegateDeps();
+  await buildTools(fake.deps).delegate.execute(
+    { goal: "check the logs", focus: "only the last hour" },
+    { toolCallId: "call-77" }
+  );
+  const input = fake.seen[0];
+  assert.equal(input.parentCallId, "call-77", "the child must report onto this card");
+  assert.equal(input.goal, "check the logs");
+  assert.equal(input.focus, "only the last hour");
+});
+
+await check("the report is capped at CHILD_REPORT_BYTES with a truncation note", async () => {
+  assert.equal(CHILD_REPORT_BYTES, 6000);
+  const fake = delegateDeps("r".repeat(CHILD_REPORT_BYTES + 2500));
+  const out = await buildTools(fake.deps).delegate.execute(
+    { goal: "long one" },
+    { toolCallId: "c" }
+  );
+  assert.match(out, /\[truncated 2500 chars\]/);
+  assert.ok(out.length < CHILD_REPORT_BYTES + 200, `capped output is ${out.length} chars`);
+});
+
+await check("delegate reports delegating and settles at 1", async () => {
+  const calls = [];
+  const t = buildTools({
+    ...deps,
+    delegate: async () => "done",
+    progress: (toolCallId, p) => calls.push({ toolCallId, ...p }),
+  }).delegate;
+  await t.execute({ goal: "summarize R2" }, { toolCallId: "c-deleg" });
+  assert.equal(calls[0].toolCallId, "c-deleg");
+  assert.equal(calls[0].phase, "delegating");
+  assert.equal(calls[0].fraction, null);
+  assert.equal(calls.at(-1).fraction, 1);
+});
+
+await check("delegate is a write, so it does not opt into rerun", () => {
+  assert.equal("recovery" in tools.delegate, false);
+});
+
+await check("no runner means no delegate tool, not a tool that always fails", () => {
+  // A child is built from deps with no runner. Handing it a `delegate` that
+  // throws on every call would still tell the model it can spawn.
+  const built = buildTools(deps);
+  assert.equal("delegate" in built, false);
+  assert.deepEqual(Object.keys(built), ["exec", "web_search", "schedule_task", "save_workspace"]);
+});
+
+await check("the fan-out refusal names the cap and the way out", () => {
+  const text = childBusyRefusal(3);
+  assert.equal(text, "3 sub-agents already running; wait or ask for fewer");
+  assert.equal(text.includes("\u2014"), false);
+});
+
+await check("every wired tool has a widget, so no card renders as a generic Tool", () => {
+  for (const name of EXPECTED_TOOLS) {
+    const w = TOOL_WIDGET[name];
+    assert.ok(w, `TOOL_WIDGET has no entry for ${name}`);
+    assert.ok(typeof w.label === "string" && w.label.length > 0, `${name} label`);
+    assert.ok(typeof w.state === "string" && w.state.length > 0, `${name} state`);
+  }
+});
+
+await check("the capability table now claims sub-agents, and the child set still does not", () => {
+  assert.match(capabilitiesText(EXPECTED_TOOLS), /^- Sub-agents:/m);
+  const row = capabilityList(EXPECTED_TOOLS).find((c) => c.id === "sub-agents");
+  assert.equal(row.wired, true);
+  assert.match(row.detail, /delegate tool/);
+  assert.doesNotMatch(capabilitiesText(CHILD_TOOL_NAMES), /Sub-agents/);
+  assert.equal(
+    capabilityList(CHILD_TOOL_NAMES).find((c) => c.id === "sub-agents").wired,
+    false
+  );
 });
 
 if (failures.length > 0) {

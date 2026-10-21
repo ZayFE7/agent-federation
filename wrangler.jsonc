@@ -52,9 +52,11 @@
   // Public vars (non-secret). Replace ROUTER_URL with your trigger URL.
   // Local dev: .dev.vars overrides these for the keys it defines.
   // RENDER_URL is added after the Render service has its public URL.
+  // MODEL_CHEAP carries the `ocf/` prefix, which only the omniroute funnel
+  // resolves, so ROUTER_URL must be the funnel (see src/types.ts).
   "vars": {
     "MODEL_PRIMARY": "gemini3.7flash",
-    "MODEL_CHEAP": "gemini3.8flash"
+    "MODEL_CHEAP": "ocf/deepseek-v4.1-flash-free"
   },
   // Secrets (never put these in vars):
   //   wrangler secret put ROUTER_KEY        (bearer for the model router)

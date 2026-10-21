@@ -53,12 +53,13 @@ check("SANDBOX_HOME is the real E2B home", () => {
   assert.equal(SANDBOX_HOME, "/home/user");
 });
 
-check("EXPECTED_TOOLS is the four wired tools, frozen", () => {
+check("EXPECTED_TOOLS is the five wired tools, frozen", () => {
   assert.deepEqual([...EXPECTED_TOOLS], [
     "exec",
     "web_search",
     "schedule_task",
     "save_workspace",
+    "delegate",
   ]);
   assert.ok(Object.isFrozen(EXPECTED_TOOLS), "EXPECTED_TOOLS must be frozen");
 });

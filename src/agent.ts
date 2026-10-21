@@ -61,15 +61,19 @@ import { searchParallel as searchParallelWeb } from "./search-client";
 import { parseDirective } from "./directives";
 import { buildHarness } from "./harness";
 import { MAX_STEPS_CHAT } from "./harness-config";
+import { Researcher } from "./child";
 import { framesFromEvent, TOOL_WIDGET, type StreamFrame } from "./frames";
 import { StreamHub, streamIdFor } from "./stream-hub";
 import { messageText, replyFrom } from "./reply";
 import {
   buildTools,
+  childBusyRefusal,
   formatExecResult,
   formatSearchResults,
   formatSnapshotReply,
   snapshotPointer,
+  MAX_CHILDREN_PER_SESSION,
+  type DelegateInput,
   type ExecResult,
   type ScheduleInput,
   type SearchResult,
@@ -186,6 +190,12 @@ export class FederationAgent extends Agent<Env> {
    * sandbox worker's KV, and an evict that the worker reports clears the entry.
    */
   private readonly sandboxSeen = new Set<string>();
+  /**
+   * Sub-agent names this session has in flight. It is what makes the fan-out cap
+   * real: the cap the model reads and the cap enforced here are the same constant,
+   * and a name already working cannot be started twice against one facet.
+   */
+  private readonly childInFlight = new Set<string>();
   private schemaReady = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -573,6 +583,17 @@ export class FederationAgent extends Agent<Env> {
   /** Stop one operation, or everything open in the session when no id is named. */
   async abortTurn(sessionId: string, operationId?: string): Promise<boolean> {
     if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return false;
+    // A child is a separate facet with its own operation, so the harness abort
+    // above does not reach it. Its own `delegate` call rejects when the abort
+    // lands, and the `finally` in `runChild` releases the cap slot and the facet.
+    for (const name of this.childInFlight) {
+      try {
+        this.dynamicAgents.abort(Researcher, name, "the user stopped this turn");
+      } catch {
+        // A facet that already finished needs no abort. Nothing here can report a
+        // stop more faithfully than the harness result below.
+      }
+    }
     try {
       return await this.harness.session(sessionId).abort(operationId);
     } catch {
@@ -1221,8 +1242,57 @@ export class FederationAgent extends Agent<Env> {
       search: (query) => this.searchParallel(query),
       schedule: (input) => this.scheduleJob(input),
       snapshot: () => this.snapshotWorkspace(session),
+      delegate: (input) => this.runChild(input, session),
       progress: (toolCallId, p) => this.emitToolProgress(session, toolCallId, p),
     };
+  }
+
+  /**
+   * Spawn or reuse one `Researcher` facet and return its report (Task 32).
+   *
+   * Three things are decided here rather than in `src/tools.ts`, and all three
+   * need the Durable Object: the facet itself (`this.dynamicAgents`), the stream
+   * the child reports onto (the operation this session is running right now), and
+   * the cap. `src/child.ts` takes the routing from the caller and never derives it,
+   * because a child that guessed an operation id would put its progress on the
+   * wrong turn.
+   */
+  private async runChild(input: DelegateInput, session: string): Promise<string> {
+    const operationId = this.currentOp.get(session);
+    // No operation means nowhere to report onto. The child refuses the same
+    // missing routing, so failing here keeps the reason in the parent's words.
+    if (!input.parentCallId || !operationId) {
+      throw new Error(
+        `sub-agent ${input.name} was not started: this turn has no operation stream for its progress to land on.`
+      );
+    }
+    if (this.childInFlight.has(input.name)) {
+      throw new Error(
+        `sub-agent ${input.name} is already working on that goal; its report is on the way`
+      );
+    }
+    if (this.childInFlight.size >= MAX_CHILDREN_PER_SESSION) {
+      throw new Error(childBusyRefusal(MAX_CHILDREN_PER_SESSION));
+    }
+    this.childInFlight.add(input.name);
+    try {
+      const child = await this.dynamicAgents.get(Researcher, input.name);
+      const report = await child.research({
+        goal: input.goal,
+        focus: input.focus,
+        parentSessionId: session,
+        parentStreamId: streamIdFor(session, operationId),
+        parentCallId: input.parentCallId,
+      });
+      return report.text;
+    } finally {
+      this.childInFlight.delete(input.name);
+      // One facet per goal is a Durable Object, and nothing reuses it: the child
+      // keeps no memory of the report it just gave, so leaving it idle forever is
+      // a lease with no purpose. A failed delete must not turn a delivered report
+      // into a failed tool call, so it is dropped rather than thrown.
+      await this.dynamicAgents.delete(Researcher, input.name).catch(() => {});
+    }
   }
 
   /**

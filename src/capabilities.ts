@@ -24,6 +24,7 @@ export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
   "web_search",
   "schedule_task",
   "save_workspace",
+  "delegate",
 ]);
 
 /**
@@ -134,7 +135,7 @@ const TABLE: readonly CapabilityDef[] = [
     id: "sub-agents",
     label: "Sub-agents",
     detail: () =>
-      "Spawn sub-agents (delegate tool) that work on independent parts of a larger ask in parallel.",
+      "Spawn sub-agents (delegate tool) that work on independent parts of a larger ask at the same time, each with the shell and web search in this session's sandbox, and each reporting back one capped summary.",
     tool: "delegate",
   },
   {
