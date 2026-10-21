@@ -104,6 +104,9 @@ function fakeAgentNamespace() {
   const fetches = [];
   const submits = [];
   const aborts = [];
+  const workspaces = [];
+  const clears = [];
+  const fileDeletes = [];
   const stubs = new Map();
   const ns = {
     names,
@@ -113,10 +116,15 @@ function fakeAgentNamespace() {
     fetches,
     submits,
     aborts,
+    workspaces,
+    clears,
+    fileDeletes,
     reply: { reply: "pong" },
     messageRows: [],
     submitReply: null,
     abortReply: true,
+    workspaceReply: { saved: false },
+    fileDeleteReply: { ok: true, output: "deleted" },
     idFromName(name) {
       names.push(name);
       return { __sessionName: name, toString: () => `do:${name}` };
@@ -142,6 +150,20 @@ function fakeAgentNamespace() {
             aborts.push({ name, args, arity: args.length });
             return ns.abortReply;
           },
+          // Task 30: the three workspace RPCs. Each records its exact arguments,
+          // because the route is what decides whether a hostile path ever reaches
+          // the DO at all.
+          async workspaceState(...args) {
+            workspaces.push({ name, args, arity: args.length });
+            return ns.workspaceReply;
+          },
+          async clearWorkspace(...args) {
+            clears.push({ name, args, arity: args.length });
+          },
+          async deleteWorkspaceFile(...args) {
+            fileDeletes.push({ name, args, arity: args.length });
+            return ns.fileDeleteReply;
+          },
           async messages(...args) {
             messageCalls.push({ name, args, arity: args.length });
             return ns.messageRows.map((row) => ({ ...row }));
@@ -164,12 +186,58 @@ function fakeAgentNamespace() {
   return ns;
 }
 
-function fakeEnv({ key = "k", registry, agent } = {}) {
+/**
+ * Fake `env.SANDBOX` service binding (Task 30). The brain is the only thing that
+ * holds `SBOX_TOKEN`, so the console's workspace reads are a proxy: this records
+ * the URL each route built and answers with the body the route forwards.
+ *
+ * `answers` is keyed on pathname so one case can give the manifest a 404 and the
+ * archive a 200 without inventing a second fake.
+ *
+ * The headers are recorded as plain entries, not as a `Headers`: `deepStrictEqual`
+ * compares own enumerable properties, and a `Headers` has none, so any two of them
+ * are equal. A recorded `Headers` would let a sandbox call with NO authorization
+ * header pass as the right one, which is the exact bug worth catching here.
+ */
+function fakeSandbox({ answers = {} } = {}) {
+  const calls = [];
+  return {
+    calls,
+    paths: () => calls.map((c) => c.pathname),
+    async fetch(url, init = {}) {
+      const target = new URL(String(url));
+      const pathname = target.pathname;
+      let body;
+      if (typeof init.body === "string") {
+        try {
+          body = JSON.parse(init.body);
+        } catch {
+          body = init.body;
+        }
+      }
+      calls.push({
+        url: String(url),
+        pathname,
+        query: Object.fromEntries(target.searchParams),
+        method: init.method ?? "GET",
+        headers: Object.fromEntries(new Headers(init.headers ?? {})),
+        ...(body === undefined ? {} : { body }),
+      });
+      const hit = answers[pathname];
+      if (hit === undefined) return new Response(null, { status: 404 });
+      if (hit instanceof Response) return hit;
+      return Response.json(hit.body ?? {}, { status: hit.status ?? 200 });
+    },
+  };
+}
+
+function fakeEnv({ key = "k", registry, agent, sandbox = fakeSandbox() } = {}) {
   const registryNames = [];
   return {
     AGENT_API_KEY: key,
     STATE_KEY: "",
-    SBOX_TOKEN: "",
+    SBOX_TOKEN: "sbox",
+    SANDBOX: sandbox,
     FEDERATION_AGENT: agent,
     REGISTRY: {
       registryNames,
@@ -201,10 +269,11 @@ const DEFAULT_ROWS = () =>
     pinned: 0,
   }));
 
-function setup({ key = "k", rows = DEFAULT_ROWS(), agent } = {}) {
+function setup({ key = "k", rows = DEFAULT_ROWS(), agent, sandbox } = {}) {
   const registry = fakeRegistry(rows);
   const fed = agent || fakeAgentNamespace();
-  const env = fakeEnv({ key, registry, agent: fed });
+  const box = sandbox || fakeSandbox();
+  const env = fakeEnv({ key, registry, agent: fed, sandbox: box });
   // A recorder, not a no-op: amendment 5 (R73) moves the accepted send's `touch`
   // behind `ctx.waitUntil`, and the promise arriving here is the only way a test can
   // see that the route handed the work over instead of awaiting it.
@@ -215,7 +284,7 @@ function setup({ key = "k", rows = DEFAULT_ROWS(), agent } = {}) {
     },
     passThroughOnException() {},
   };
-  return { registry, fed, env, ctx, promised };
+  return { registry, fed, env, ctx, promised, sandbox: box };
 }
 
 const AUTH = { authorization: "Bearer k" };
@@ -317,7 +386,13 @@ check("src/routes.ts is importable offline: no non-type import of ./agent or age
 // joined the list in Task 8 because that module imports nothing at all (R47), which
 // the check below re-states from the other side.
 check("src/routes.ts value-imports exactly the dependency-free allow-list (R75)", () => {
-  const ALLOWED = new Set(["./auth", "./registry-input", "./registry-store", "./session-scope"]);
+  const ALLOWED = new Set([
+    "./auth",
+    "./registry-input",
+    "./registry-store",
+    "./session-scope",
+    "./workspace-keys",
+  ]);
   const value = importsOf(ROUTES_SOURCE)
     .filter((i) => !i.typeOnly)
     .map((i) => i.specifier.replace(/\.(?:ts|mts|js|mjs)$/, ""));
@@ -900,7 +975,9 @@ await checkAsync("DELETE /api/sessions/abc removes the id", async () => {
   const world = setup();
   const res = await handleFetch(req("/api/sessions/abc", "DELETE"), world.env, world.ctx);
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true });
+  // Task 30 grew this body: a session delete says what happened to the files, because
+  // "ok" alone reads as a total success to a client that kept 24 MiB of work.
+  assert.deepEqual(await res.json(), { ok: true, workspace: "kept" });
   assert.deepEqual(
     world.registry.calls.filter(([m]) => m === "remove"),
     [["remove", "abc"]]
@@ -1421,10 +1498,12 @@ await checkAsync("a wrong bearer token is 401 on the list route", async () => {
   assert.equal(res.status, 401);
 });
 
-// The seven routes the Interfaces block enumerates are the whole family: a shape, or
-// a method on a shape, that is not one of them is a 404. `GET /api/sessions/:id` is
+// The shapes the Interfaces block enumerates are the whole family: a shape, or a
+// method on a shape, that is not one of them is a 404. `GET /api/sessions/:id` is
 // deliberately NOT one of them: the plan lists no single-session read on the worker
 // (the registry DO has one under /registry/, and Task 22 adds /:id/stream/:streamId).
+// Task 30 added the workspace four to the family, and this loop still pins that
+// nothing else under the prefix answers.
 await checkAsync("a path with an unknown shape 404s", async () => {
   for (const [path, method] of [
     ["/api/sessions/abc/nope", "GET"],
@@ -1444,7 +1523,7 @@ await checkAsync("a path with an unknown shape 404s", async () => {
       world.env,
       world.ctx
     );
-    assert.equal(res.status, 404, `${method} ${path} is not one of the seven routes`);
+    assert.equal(res.status, 404, `${method} ${path} is not one of the family shapes`);
     assert.deepEqual(world.registry.calls, [], `${method} ${path} must not reach the registry`);
     assert.equal(world.fed.submits.length, 0, `${method} ${path} must not reach the agent`);
     assert.equal(world.fed.messageCalls.length, 0, `${method} ${path} must not read a transcript`);
@@ -1455,6 +1534,261 @@ await checkAsync("every session response is JSON", async () => {
   const world = setup();
   const res = await handleFetch(req("/api/sessions"), world.env, world.ctx);
   assert.match(res.headers.get("content-type") ?? "", /application\/json/);
+});
+
+// ------------------------------------------------- workspace routes (Task 30) ----
+
+await checkAsync("GET /:id/workspace answers the pointer row through the gate order", async () => {
+  const world = setup();
+  world.fed.workspaceReply = {
+    saved: true,
+    bytes: 2160,
+    files: 5,
+    updatedAt: 1234,
+    overLimit: null,
+    limit: 25165824,
+  };
+  const res = await handleFetch(req("/api/sessions/abc/workspace"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /"bytes":2160/);
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the read gates on the row first");
+  assert.deepEqual(world.fed.workspaces, [{ name: "abc", args: ["abc"], arity: 1 }]);
+});
+
+await checkAsync("the workspace reads answer 401, 400 and 404 in the family order", async () => {
+  const unauth = setup();
+  const noKey = await handleFetch(
+    req("/api/sessions/abc/workspace", "GET", { headers: {} }),
+    unauth.env,
+    unauth.ctx
+  );
+  assert.equal(noKey.status, 401);
+  assert.deepEqual(unauth.sandbox.calls, [], "an unauthenticated read must not touch the sandbox");
+
+  const ghost = setup();
+  const missing = await handleFetch(req("/api/sessions/deadbeef/workspace"), ghost.env, ghost.ctx);
+  assert.equal(missing.status, 404, "a well-formed id with no row must not instantiate a DO");
+  assert.deepEqual(ghost.fed.names, [], "gate 3 runs before idFromName");
+
+  const hostile = setup();
+  const bad = await handleFetch(req("/api/sessions/abc%2fd/workspace"), hostile.env, hostile.ctx);
+  assert.equal(bad.status, 400, "gate 2 covers the workspace family as much as the chat one");
+  assert.deepEqual(hostile.registry.calls, []);
+});
+
+await checkAsync("no workspace route accepts a query token", async () => {
+  // Only the EventSource stream shape may carry ?token=, because a header cannot
+  // be set there. A download CAN use fetch(), so widening this would put the
+  // shared bearer in a URL, browser history and Worker logs for no reason.
+  for (const path of [
+    "/api/sessions/abc/workspace?token=k",
+    "/api/sessions/abc/workspace/files?token=k",
+    "/api/sessions/abc/workspace/archive?token=k",
+  ]) {
+    const world = setup();
+    const res = await handleFetch(req(path, "GET", { headers: {} }), world.env, world.ctx);
+    assert.equal(res.status, 401, `${path} must not authenticate on a query token`);
+  }
+});
+
+await checkAsync("GET /:id/workspace/files forwards the sandbox manifest", async () => {
+  const sandbox = fakeSandbox({
+    answers: {
+      "/workspace/manifest": {
+        status: 200,
+        body: { ok: true, files: [{ path: "app.py", bytes: 12, mtime: "1970-01-01 00:00" }] },
+      },
+    },
+  });
+  const world = setup({ sandbox });
+  const res = await handleFetch(req("/api/sessions/abc/workspace/files"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /app\.py/);
+  assert.deepEqual(sandbox.calls, [
+    {
+      url: "https://zay-sandbox/workspace/manifest?sessionId=abc",
+      pathname: "/workspace/manifest",
+      query: { sessionId: "abc" },
+      method: "GET",
+      headers: { authorization: "Bearer sbox" },
+    },
+  ]);
+});
+
+await checkAsync("a session with nothing stored reads as no_snapshot, not as an error", async () => {
+  const sandbox = fakeSandbox({
+    answers: { "/workspace/manifest": { status: 404, body: { ok: false, reason: "no_snapshot" } } },
+  });
+  const world = setup({ sandbox });
+  const res = await handleFetch(req("/api/sessions/abc/workspace/files"), world.env, world.ctx);
+  assert.equal(res.status, 404);
+  assert.match(await res.text(), /no_snapshot/);
+});
+
+await checkAsync("GET /:id/workspace/archive forwards the bytes and names the file", async () => {
+  const tar = new Uint8Array([0x1f, 0x8b, 1, 2, 3]);
+  const sandbox = fakeSandbox({
+    answers: {
+      "/workspace/archive": new Response(tar, {
+        status: 200,
+        headers: { "content-type": "application/gzip" },
+      }),
+    },
+  });
+  const world = setup({ sandbox });
+  const res = await handleFetch(req("/api/sessions/abc/workspace/archive"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/gzip");
+  assert.equal(
+    res.headers.get("content-disposition"),
+    'attachment; filename="workspace-abc.tar.gz"',
+    "a download with no filename lands as archive.tar and teaches the user nothing"
+  );
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), tar);
+});
+
+await checkAsync("an absent SANDBOX binding is 503, never a silent empty list", async () => {
+  for (const path of ["/workspace/files", "/workspace/archive"]) {
+    const world = setup();
+    delete world.env.SANDBOX;
+    const res = await handleFetch(req(`/api/sessions/abc${path}`), world.env, world.ctx);
+    assert.equal(res.status, 503, `${path} with no binding`);
+    assert.match(await res.text(), /sandbox not configured/);
+  }
+});
+
+await checkAsync("a traversal-shaped file path is 400 before anything is called", async () => {
+  // The URL layer never sees a slash here, so it cannot normalize the dots out.
+  // This is the shape that would reach `rm` as `x/../../etc/passwd` if the route
+  // trusted the split it did itself.
+  const tails = [
+    "x%2f..%2f..%2fetc%2fpasswd",
+    "%2e%2e%2f%2e%2e%2fetc",
+    "%2fetc%2fpasswd",
+    "a%2f%2e%2e%2fb",
+    "",
+    "a%2f",
+  ];
+  for (const tail of tails) {
+    const world = setup();
+    const res = await handleFetch(
+      req(`/api/sessions/abc/workspace/files/${tail}`, "DELETE"),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 400, `${tail} must be refused as a path`);
+    assert.deepEqual(world.sandbox.calls, [], `${tail} must not reach KV`);
+    assert.deepEqual(world.registry.calls, [], `${tail} must not reach the registry`);
+    assert.deepEqual(world.fed.names, [], `${tail} must not instantiate a DO`);
+    assert.deepEqual(world.fed.fileDeletes, []);
+  }
+});
+
+await checkAsync("a legal file path deletes through the DO, once", async () => {
+  const world = setup();
+  world.fed.fileDeleteReply = { ok: true, output: "removed app.py", unavailable: false };
+  const res = await handleFetch(
+    req("/api/sessions/abc/workspace/files/src/app.py", "DELETE"),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(world.fed.workspaces, [], "a delete reads nothing it did not need");
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]]);
+  assert.deepEqual(world.fed.fileDeletes, [
+    { name: "abc", args: ["abc", "src/app.py"], arity: 2 },
+  ]);
+});
+
+await checkAsync("a path a live sandbox does not have is 409, and a dead one is 502", async () => {
+  const missing = setup();
+  missing.fed.fileDeleteReply = {
+    ok: false,
+    output: "rm: cannot remove 'gone.txt': No such file or directory",
+    unavailable: false,
+  };
+  const a = await handleFetch(
+    req("/api/sessions/abc/workspace/files/gone.txt", "DELETE"),
+    missing.env,
+    missing.ctx
+  );
+  assert.equal(a.status, 409);
+  assert.match(await a.text(), /No such file/);
+
+  const dead = setup();
+  dead.fed.fileDeleteReply = {
+    ok: false,
+    output: "sandbox HTTP 502: boot: quota",
+    unavailable: true,
+  };
+  const b = await handleFetch(
+    req("/api/sessions/abc/workspace/files/x.txt", "DELETE"),
+    dead.env,
+    dead.ctx
+  );
+  assert.equal(b.status, 502);
+});
+
+await checkAsync("DELETE /:id keeps the workspace unless the body confirms otherwise", async () => {
+  const plain = setup();
+  const res = await handleFetch(req("/api/sessions/abc", "DELETE"), plain.env, plain.ctx);
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(await res.text()), { ok: true, workspace: "kept" });
+  assert.deepEqual(plain.sandbox.calls, [], "an unconfirmed delete must not touch KV");
+  assert.deepEqual(plain.fed.clears, [], "and must not clear the pointer row");
+  assert.deepEqual(plain.registry.calls, [["remove", "abc"]]);
+
+  for (const body of ['{"confirm_body":false}', '{"confirm_body":"yes"}', "{}", "not json"]) {
+    const world = setup();
+    const r = await handleFetch(
+      req("/api/sessions/abc", "DELETE", { body }),
+      world.env,
+      world.ctx
+    );
+    assert.equal(r.status, 200, `${body} is still a session delete`);
+    assert.deepEqual(world.sandbox.calls, [], `${body} must not forget files`);
+  }
+});
+
+await checkAsync("a confirmed delete forgets both keys by name, clears the row, then removes it", async () => {
+  const sandbox = fakeSandbox({
+    answers: { "/workspace/forget": { status: 200, body: { ok: true, deleted: ["ws:tar:abc", "ws:man:abc"] } } },
+  });
+  const world = setup({ sandbox });
+  const res = await handleFetch(
+    req("/api/sessions/abc", "DELETE", { body: '{"confirm_body":true}' }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(await res.text()), { ok: true, workspace: "deleted" });
+  assert.equal(sandbox.calls.length, 1, "one forget call, by derived name, never a list()");
+  assert.equal(sandbox.calls[0].pathname, "/workspace/forget");
+  assert.equal(sandbox.calls[0].method, "POST");
+  assert.equal(sandbox.calls[0].body.sessionId, "abc");
+  assert.equal(
+    sandbox.calls[0].headers.authorization,
+    "Bearer sbox",
+    "a forget without the bearer never reaches KV, and the session would report its files gone while they did not"
+  );
+  assert.deepEqual(world.fed.clears, [{ name: "abc", args: ["abc"], arity: 1 }]);
+  assert.deepEqual(world.registry.calls, [["exists", "abc"], ["remove", "abc"]]);
+});
+
+await checkAsync("a confirmed delete that cannot reach the sandbox still removes the session", async () => {
+  // The user asked for both to go. Refusing to delete the chat because KV is
+  // unreachable would strand them with no way to retry from the console, so the
+  // session goes and the answer says the files did not.
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/abc", "DELETE", { body: '{"confirm_body":true}' }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(await res.text()), { ok: true, workspace: "kept" });
+  assert.deepEqual(world.registry.calls, [["exists", "abc"], ["remove", "abc"]]);
+  assert.deepEqual(world.fed.clears, [], "nothing was forgotten, so the pointer stays true");
 });
 
 // ------------------------------------------------------------------ summary ----

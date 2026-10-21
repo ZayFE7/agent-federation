@@ -112,3 +112,63 @@ export function formatLimit(bytes: number): string {
   }
   return `${Math.round(bytes)} B`;
 }
+
+// ------------------------------------------------------- the path guard ----
+//
+// Task 30 puts a file path in a URL for the first time:
+// `DELETE /api/sessions/:id/workspace/files/<path>`. Two things make that a
+// guard-shaped problem rather than a lookup. The path arrives percent-encoded and
+// is decoded HERE, after the URL layer has already normalized the dots it could
+// see, so `x%2f..%2f..%2fetc%2fpasswd` reaches this code as the five segments
+// `x .. .. etc passwd`, which no earlier layer ever treated as dots. And the path
+// is not a lookup key: it is interpolated into a command that runs as the
+// session's own user, so a name that slips through does not read another
+// session's file, it deletes one the user meant to keep.
+//
+// NOT MIRRORED IN deploy/sandbox-worker. The worker never takes a path from a
+// request: it takes a whole command the brain built, or a fixed path it chose
+// itself. The mirror rule exists for values both sides must agree on, and a
+// brain-side URL guard is not one of them.
+
+/** Long enough for any real tree, short enough that a 4 MB filename is a refusal. */
+export const MAX_PATH_BYTES = 512;
+
+/**
+ * The path, or null. Absolute paths, empty segments, dots and dot-dots, embedded
+ * control characters and anything over MAX_PATH_BYTES are refused. A name with a
+ * space, a quote or a non-ASCII character is accepted: those are legal Linux
+ * filenames, and `quoteShellArg` is what makes them safe to hand to rm.
+ */
+export function safeWorkspacePath(raw: string): string | null {
+  if (typeof raw !== "string" || raw === "") return null;
+  if (new TextEncoder().encode(raw).length > MAX_PATH_BYTES) return null;
+  if (hasControlChar(raw)) return null;
+  if (raw.charAt(0) === "/") return null;
+  const segments = raw.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === "..") return null;
+  }
+  return segments.join("/");
+}
+
+/**
+ * C0 controls and DEL are refused, tab and newline included: a filename that
+ * prints as two lines can impersonate another row in the Files tab, and no real
+ * file in this workspace needs one.
+ */
+function hasControlChar(value: string): boolean {
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
+/**
+ * POSIX single quotes, with every inner quote closed, escaped and reopened. This
+ * is the whole reason a legal filename is safe to pass: inside single quotes the
+ * shell reads `$`, backticks, `;`, `|` and `&` as literal characters.
+ */
+export function quoteShellArg(value: string): string {
+  return "'" + value.split("'").join("'\\''") + "'";
+}

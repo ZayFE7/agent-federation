@@ -354,10 +354,15 @@ let html="";const P=t=>inl(t).replace(/\n/g,"<br>");for(const b of out){if(b.raw
 return html.replace(/\u0000I(\d+)\u0000/g,(m,i)=>tokInl[+i]).replace(/\u0000(\d+)\u0000/g,(m,i)=>tok[+i])};
 let cur="idle",tab="chat",t0=Date.now(),vi=0,LOG=[],MXE,pkt,NF=99,busy=false;
 Object.assign(I,{menu:"M4 7h16M4 12h10M4 17h16",plus:"M12 5v14M5 12h14",send:"M12 19V5M6 11l6-6 6 6",sun:"M12 8a4 4 0 100 8 4 4 0 000-8zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"});
-const TABS=[["chat","chat","Chat"],["tasks","task","Tasks"],["docs","doc","Docs"],["ideas","idea","Ideas"],["tools","tools","Tools"]];
+const TABS=[["chat","chat","Chat"],["tasks","task","Tasks"],["docs","doc","Files"],["ideas","idea","Ideas"],["tools","tools","Tools"]];
 const state={sessions:[],sessionId:null};
 const T=k=>S[k].c,MK={files:"read"};
 let TASKS=[],PENDING=null,CAPS=[],CAPSFAILED=false;
+// The Files tab's two reads are different stores: WS is the pointer row (local SQLite
+// in the session DO, answers even when the sandbox is down), MF is the manifest KV
+// holds (only the sandbox worker can read it). WSE names which one failed, because
+// "no files" and "could not check" cannot share a rendering.
+let WS=null,MF=null,WSE="";
 const awayState=t=>/mail|email/i.test(t)?"mail":/search|web|look/i.test(t)?"search":/code|build|script/i.test(t)?"code":/log|date|file/i.test(t)?"files":"memory";
 const LG=[];
 function pose(k){MXE.classList.remove("chg");void MXE.getBoundingClientRect();MXE.classList.add("chg");const j=MK[k]||k,q=PS[j],[la,ra,w,wd,ex,ey,by,ba,bo]=q.p,sp=(a,b)=>MXE.style.setProperty(a,b);MXE.dataset.s=j;MXE.dataset.e=q.e;MXE.dataset.m=q.m;
@@ -371,7 +376,24 @@ tasks:()=>{const live=TASKS.filter(t=>t.status!=="done"),done=TASKS.filter(t=>t.
 const rows=live.map(t=>`<div class="row" style="--t:${T(awayState(t.title))}"><div class="ico">${ic(S[awayState(t.title)].ic)}</div><div class="grow"><b>${t.title.replace(/</g,"&lt;")}</b><small>${t.status==="running"?"Running now":"Scheduled · "+(t.due_at?new Date(t.due_at).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"soon")}</small>${t.status==="running"?`<div class="pr"><i style="width:60%"></i></div>`:""}</div></div>`).join("");
 const away=done.map(t=>`<div style="--t:${T(awayState(t.title))}">${t.title.replace(/</g,"&lt;")}<small>${t.due_at?new Date(t.due_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):""}</small></div>`).join("");
 return`<h1 class="h">Tasks</h1><p class="sub">${live.length?`Blip is running ${live.length} thing${live.length>1?"s":""}`:done.length?"All jobs finished":"Nothing scheduled yet"}</p>`+(rows||`<div class="row" style="--t:var(--t)"><div class="ico">${ic("task")}</div><div class="grow"><b>No jobs yet</b><small>Ask Blip: "every morning at 8, check X and brief me"</small></div></div>`)+(away?`<div class="lab">While you were away</div><div class="tl">${away}</div>`:"")},
-docs:()=>{return`<h1 class="h">Docs</h1><p class="sub">Things Blip made for you</p><div class="row" style="--t:var(--t)"><div class="ico">${ic("doc")}</div><div class="grow"><b>Nothing yet</b><small>Docs Blip creates will collect here</small></div></div>`},
+docs:()=>{
+const head=`<h1 class="h">Files</h1><p class="sub">What this chat saved. Files stay until you delete them.</p>`;
+if(!hasKey())return head+`<div class="se"><p>Add your agent key and this tab lists what the chat saved.</p><button class="sm" onclick="setKey()">Set key</button></div>`;
+if(!state.sessionId)return head+`<div class="se"><p>No chat is open. Open one and its files appear here.</p></div>`;
+if(WSE=="load")return head+`<div class="se"><p>Could not read this chat's saved files. Try again in a moment.</p><button class="sm" onclick="loadWs()">Try again</button></div>`;
+if(!WS)return head+`<div class="row" style="--t:var(--t)"><div class="ico">${ic("doc")}</div><div class="grow"><b>Asking the agent</b><small>Checking what this chat saved</small></div></div>`;
+const sum=WS.saved?`<div class="dc">${WS.files} file${WS.files==1?"":"s"}, ${fmtB(WS.bytes)}<small>Saved ${rel(WS.updatedAt)} · ceiling ${fmtB(WS.limit)}</small></div>`
+:`<div class="dc">Nothing saved yet<small>Ask Blip to build something. It lands here and stays after the chat closes.</small></div>`;
+const warn=WS.overLimit?`<div class="row" style="--t:#FF7A6B"><div class="ico">${ic("ask")}</div><div class="grow"><b>Too big to save</b><small>The last attempt measured ${fmtB(WS.overLimit)} against the ${fmtB(WS.limit)} ceiling, so nothing new was stored. Delete what you do not need, then ask again.</small></div></div>`:"";
+const acts=`<div style="display:flex;gap:8px;flex-wrap:wrap">${WS.saved?`<button class="sm" onclick="dlWs()">Download all</button>`:""}<button class="sm" onclick="loadWs()">Refresh</button></div>`;
+const note=WSE=="list"?`<div class="se"><p>Could not read the file list. The numbers above are still what was last saved.</p><button class="sm" onclick="loadWs()">Try again</button></div>`:"";
+// The count above comes from the session DO and this list comes from KV, which lags a
+// write by up to about a minute. When they disagree and the list is not capped, say so
+// instead of letting the two quietly contradict each other.
+const lag=WS.saved&&MF&&!MF.truncated&&MF.files.length!=WS.files?`<div class="se"><p>The list has not caught up with the last change yet. Try again in a moment.</p><button class="sm" onclick="loadWs()">Refresh</button></div>`:"";
+const rows=!WS.saved||MF===null||!MF.files.length?"":`<div class="lab">In this workspace</div>`+MF.files.map((f,i)=>`<div class="row" style="--t:${T("files")}"><div class="ico">${ic("doc")}</div><div class="grow"><b>${esc(f.path)}</b><small>${fmtB(f.bytes||0)}</small></div><button class="sm" onclick="delFileAt(${i})">Delete</button></div>`).join("")
++(MF&&MF.truncated?`<div class="se"><p>The list stops at ${MF.files.length} files. The rest are still in the download.</p></div>`:"");
+return head+`<div class="docs">${sum}</div>`+warn+acts+rows+note+lag},
 ideas:()=>{return`<h1 class="h">Ideas</h1><p class="sub">Things Blip noticed</p><div class="row" style="--t:var(--t)"><div class="ico">${ic("idea")}</div><div class="grow"><b>No ideas yet</b><small>Suggestions appear as Blip learns your patterns</small></div></div>`},
 tools:()=>{const head=`<h1 class="h">Tools</h1><p class="sub">What I can touch</p>`;
 if(!hasKey())return head+`<div class="row" style="--t:var(--t)"><div class="ico">${ic("tools")}</div><div class="grow"><b>No agent key yet</b><small>Add your agent key and this list comes from the agent itself</small></div></div>`;
@@ -381,6 +403,9 @@ if(!CAPS.length)return head+(CAPSFAILED?`<div class="se"><p>Could not load what 
 const V={memory:["idea","think"],shell:["code","code"],"web-search":["search","search"],scheduling:["task","think"],snapshots:["doc","files"],"sub-agents":["chat","think"],browser:["web","browse"],email:["mail","mail"],payments:["pay","pay"],mcp:["tools","idle"]};
 return head+CAPS.map(c=>{const v=V[c.id]||["tools","idle"];return`<div class="row" style="--t:${T(v[1])};${c.wired?"":"opacity:.55"}"><div class="ico">${ic(v[0])}</div><div class="grow"><b>${esc(c.label)}</b><small>${esc(c.detail)}</small></div></div>`}).join("")}};
 const rel=t=>{const d=Date.now()-Number(t);if(!t||!isFinite(d)||d<60000)return"just now";const m=Math.floor(d/60000);if(m<60)return m+"m ago";const h=Math.floor(m/60);if(h<24)return h+"h ago";const dy=Math.floor(h/24);if(dy<7)return dy+"d ago";return new Date(Number(t)).toLocaleDateString([],{month:"short",day:"numeric"})};
+// Binary units, because the ceiling the agent quotes is 24 MiB and a decimal MB makes
+// a 24.0 MiB save look like it went over it.
+const fmtB=n=>{const x=Number(n)||0;return x>=1048576?(x/1048576).toFixed(x>=10485760?0:1)+" MiB":x>=1024?(x/1024).toFixed(x>=10240?0:1)+" KiB":x+" B"};
 const row=s=>{const on=s.id===state.sessionId;return`<button class="th2" ${on&&tab=="chat"?'aria-current="true"':""} onclick="pick('${s.id}')"><span>${esc(s.title||"Untitled")}<small>${esc(rel(s.updated_at))}</small></span></button>`+(on?`<div class="sact"><button onclick="renameSession('${s.id}')">Rename</button><button onclick="deleteSession('${s.id}')">Delete</button></div>`:"")};
 const lst=q=>{if(!hasKey())return`<div class="se"><p>No chats yet. Add your agent key to load them.</p><button class="sm" onclick="setKey()">Set key</button></div>`;if(!state.sessions.length)return`<div class="se"><p>No chats yet.</p><button class="sm" onclick="newChat()">New chat</button></div>`;q=(q||"").toLowerCase();const rows=state.sessions.filter(s=>String(s.title||"").toLowerCase().includes(q));return rows.length?rows.map(row).join(""):`<div class="se"><p>No chats match.</p></div>`};
 const renderList=()=>{const tl=$("tl2");if(tl)tl.innerHTML=lst($("sq")?$("sq").value:"")};
@@ -421,7 +446,7 @@ if(f.output!=null)t.pre.textContent=String(f.output);
 if(!f.ok)t.card.classList.add("open");keepEnd()}
 function finishLive(reply){const L=LIVE;if(!L)return;clearTimeout(L.timer);const text=reply||L.text;
 if(text){if(L.node){L.node.innerHTML=md(text);L.node.classList.remove("streaming")}else{L.node=mk("div","m a",md(text));L.host.insertBefore(L.node,L.working||L.cw)}LOG.push(["a",text])}
-teardown();clearLive();PENDING=null;busy=false;cur="success";upd();loadTasks();refreshSessionsSoon()}
+teardown();clearLive();PENDING=null;busy=false;cur="success";upd();loadTasks();refreshSessionsSoon();if(tab=="docs")loadWs()}
 function failLive(msg){const L=LIVE;if(!L)return;clearTimeout(L.timer);
 if(L.parked){teardown();clearLive();busy=false;cur="approve";upd();return}
 const text="[error] "+(msg||"The stream ended with an error.");L.text=text;const n=ensureText();if(n)n.innerHTML=md(text);
@@ -451,9 +476,9 @@ window.addEventListener("pagehide",()=>{const L=LIVE;if(L&&L.es){L.es.onerror=nu
 function render(){if(tab=="chat")renderThread();else $("scr").innerHTML=`<div class="pgw">${SC[tab]()}</div>`;
 const nav=TABS.map(t=>`<button role="tab" aria-selected="${t[0]==tab}" onclick="go('${t[0]}')">${ic(t[1])}<span>${t[2]}</span></button>`).join("");$("dock").innerHTML=nav;$("rail").innerHTML=nav;
 $("cmp").style.display=tab=="chat"?"flex":"none";$("side").innerHTML=sideHTML();upd();NF=99}
-const go=t=>{tab=t;side(0);render();if(t=="tasks")loadTasks();if(t=="tools")loadCaps()},side=o=>$("app").classList.toggle("dr",!!o);
+const go=t=>{tab=t;side(0);render();if(t=="tasks")loadTasks();if(t=="tools")loadCaps();if(t=="docs")loadWs()},side=o=>$("app").classList.toggle("dr",!!o);
 function pick(id){openSession(id)}
-async function openSession(id){teardown();PENDING=null;state.sessionId=id;localStorage.setItem("blip.session",id);tab="chat";try{const r=await api("/api/sessions/"+id+"/messages");const j=await r.json();if(state.sessionId!==id)return;if(j.ok&&Array.isArray(j.messages)){
+async function openSession(id){teardown();PENDING=null;WS=null;MF=null;WSE="";state.sessionId=id;localStorage.setItem("blip.session",id);tab="chat";try{const r=await api("/api/sessions/"+id+"/messages");const j=await r.json();if(state.sessionId!==id)return;if(j.ok&&Array.isArray(j.messages)){
 // Phase 1: /api/sessions/:id/messages returns MessageRow text rows only. Tool cards
 // are not persisted there, so reopening a chat shows text and drops the cards. Do
 // not fake them from in-flight state; durable Streams (Task 18 onward) restore them.
@@ -464,7 +489,14 @@ function newChat(){newSession().catch(()=>{})}
 let tsq1=0,tsq2=0;
 function refreshSessionsSoon(){clearTimeout(tsq1);clearTimeout(tsq2);loadSessions();tsq1=setTimeout(loadSessions,2500);tsq2=setTimeout(loadSessions,7000)}
 async function renameSession(id,title){const s=state.sessions.find(x=>x.id===id);if(!s)return;if(title===undefined){const v=prompt("Rename session",s.title||"");if(v===null)return;title=v}const t=String(title).trim();if(!t)return;try{const r=await api("/api/sessions/"+id,{method:"PATCH",headers:{"content-type":"application/json"},body:JSON.stringify({title:t})});const j=await r.json().catch(()=>({}));if(!j.ok)return;s.title=t;renderList()}catch(e){}}
-async function deleteSession(id){if(!confirm("Delete this chat? Its workspace files are kept."))return;try{const r=await api("/api/sessions/"+id,{method:"DELETE"});const j=await r.json().catch(()=>({}));if(!j.ok)return;state.sessions=state.sessions.filter(s=>s.id!==id);if(state.sessionId!==id){renderList();return}teardown();clearLive();const next=state.sessions.find(s=>s.id==="main")||state.sessions[0];if(next){await openSession(next.id);return}state.sessionId=null;localStorage.removeItem("blip.session");LOG=[];busy=false;cur="idle";tab="chat";render()}catch(e){}}
+async function deleteSession(id){if(!confirm("Delete this chat? Its files are kept."))return;
+// The second question is the only thing between a mis-tap and an unrecoverable loss, so
+// it is asked once, with the numbers, and only for the chat whose pointer row this
+// browser has actually read. Anything else deletes the chat and keeps the files, which
+// is what the first question promised.
+const also=!!(id===state.sessionId&&WS&&WS.saved&&confirm("This chat also saved "+WS.files+" file"+(WS.files==1?"":"s")+" ("+fmtB(WS.bytes)+"). Delete those too? Nothing can bring them back."));
+try{const r=await api("/api/sessions/"+id,{method:"DELETE",headers:{"content-type":"application/json"},body:JSON.stringify(also?{confirm_body:true}:{})});const j=await r.json().catch(()=>({}));if(!j.ok)return;
+if(also&&j.workspace!=="deleted")alert("The chat is deleted. Its files are not, and still take up storage.");state.sessions=state.sessions.filter(s=>s.id!==id);if(state.sessionId!==id){renderList();return}teardown();clearLive();const next=state.sessions.find(s=>s.id==="main")||state.sessions[0];if(next){await openSession(next.id);return}state.sessionId=null;localStorage.removeItem("blip.session");LOG=[];busy=false;cur="idle";tab="chat";render()}catch(e){}}
 function setKey(){const k=prompt("Agent API key (stored in this browser only):");if(!k||!k.trim())return;localStorage.setItem("blip_key",k.trim());bootLoad()}
 async function bootLoad(){if(!hasKey())return;await loadSessions();loadTasks();loadCaps();const ids=state.sessions.map(s=>s.id),stored=localStorage.getItem("blip.session");const id=(stored&&ids.includes(stored))?stored:(ids.includes("main")?"main":ids[0]);if(id)await openSession(id);else{state.sessionId=null;localStorage.removeItem("blip.session");render()}}
 function st(k){cur=k;side(0);if(tab!="chat"){tab="chat";render()}else upd()}
@@ -475,6 +507,42 @@ async function loadTasks(){if(!hasKey())return;try{const r=await api("/api/tasks
 // The agent owns its own capability list; the console only renders it. A failed
 // fetch says it failed instead of leaving the tab on "loading" forever.
 async function loadCaps(){if(!hasKey())return;try{const r=await api("/api/capabilities");const j=await r.json();if(!j.ok||!Array.isArray(j.capabilities)){CAPSFAILED=true;CAPS=[];if(tab=="tools")render();return}CAPS=j.capabilities;CAPSFAILED=false;if(tab=="tools")render()}catch(e){CAPSFAILED=true;CAPS=[];if(tab=="tools")render()}}
+// The Files tab's one pass. The pointer row is read from the session DO, and the file
+// list is only worth reading when something is saved (a session with no snapshot has no
+// KV keys to list). WSE names which read failed, and a pointer failure outranks a list
+// failure, because then there is nothing reliable to annotate.
+async function loadWs(){
+if(!hasKey()||!state.sessionId)return;const sid=state.sessionId;let p=null,m=null,pe="",me="";
+try{const r=await api("/api/sessions/"+encodeURIComponent(sid)+"/workspace");const j=await r.json().catch(()=>({}));
+if(r.ok&&j.ok&&j.workspace)p=j.workspace;else pe="load"}catch(e){pe="load"}
+if(state.sessionId!==sid)return;
+if(p&&p.saved){try{const r=await api("/api/sessions/"+encodeURIComponent(sid)+"/workspace/files");
+if(r.status==404)m={files:[],truncated:false};else if(r.ok){const j=await r.json().catch(()=>null);
+if(j&&Array.isArray(j.files))m={files:j.files,truncated:!!j.truncated};else me="list"}else me="list"}catch(e){me="list"}}
+else if(p)m={files:[],truncated:false};
+WS=p;MF=m;WSE=pe||me;if(tab=="docs")render()}
+// A download has to carry the bearer, and the ?token= trick the stream uses is refused
+// here on purpose: a key in a URL lands in browser history and Worker logs.
+async function dlWs(){const sid=state.sessionId;if(!sid)return;
+try{const r=await api("/api/sessions/"+encodeURIComponent(sid)+"/workspace/archive");
+if(!r.ok){const j=await r.json().catch(()=>({}));alert(j.error||j.reason||("Could not download ("+r.status+")"));return}
+const u=URL.createObjectURL(await r.blob());const a=document.createElement("a");
+a.href=u;a.download="workspace-"+sid+".tar.gz";document.body.appendChild(a);a.click();a.remove();
+setTimeout(()=>URL.revokeObjectURL(u),4000)}catch(e){alert("network: "+e)}}
+// By index, never by path: a filename is attacker-shaped text, and dropping one inside
+// an onclick attribute is how a quote turns into code.
+async function delFileAt(i){const sid=state.sessionId;if(!sid||!MF||!MF.files[i])return;
+const p=String(MF.files[i].path);if(!confirm("Delete "+p+" from this chat's files? It goes from the saved snapshot too."))return;
+try{const tail=p.split("/").map(encodeURIComponent).join("/");
+const r=await api("/api/sessions/"+encodeURIComponent(sid)+"/workspace/files/"+tail,{method:"DELETE"});
+const j=await r.json().catch(()=>({}));if(!r.ok){alert(j.error||("Delete failed ("+r.status+")"));return}
+await loadWs();
+// KV reads lag a write by up to about a minute, and the file list is the only part of
+// this tab that lives in KV. So a delete the agent already confirmed can come back as a
+// stale row. The pointer row (session DO SQLite, read-your-write) is the fact: drop the
+// row here rather than show a file that is gone.
+if(MF&&MF.files.some(f=>String(f.path)===p))MF={files:MF.files.filter(f=>String(f.path)!==p),truncated:!!MF.truncated};
+if(tab=="docs")render()}catch(e){alert("network: "+e)}}
 async function decide(approve){if(!PENDING)return;const toolCallId=PENDING.toolCallId,cmd=PENDING.cmd;PENDING=null;try{const r=await api("/api/approve",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId:state.sessionId,toolCallId,approved:approve})});const j=await r.json();LOG.push(["a",(approve?"[approved] ":"[denied] ")+cmd]);if(j.output)LOG.push(["t",{name:"exec",cmd,output:j.output,ok:j.ok}]);if(j.reply)LOG.push(["a",j.reply]);NF=LOG.length-1;cur=(j.state&&S[j.state])?j.state:"idle";busy=false;renderThread();upd();refreshSessionsSoon()}catch(e){LOG.push(["a","[network] "+e]);cur="error";busy=false;renderThread();upd()}}
 let lv="";function tick(){const s=S[cur],e=Math.floor((Date.now()-t0)/1000),v=s.v[vi%s.v.length]+(s.i?"…":"");if(v!=lv){lv=v;$("verb").innerHTML=`<span class="vb">${v}</span>`}$("clk").textContent=s.i?Math.floor(e/60)+":"+String(e%60).padStart(2,"0"):""}
 function theme(){D.dataset.theme=D.dataset.theme=="dark"?"light":"dark"}

@@ -17,6 +17,8 @@ import type {
   ToolRun,
   TurnReceipt,
   TurnRefusal,
+  WorkspaceDeleteResult,
+  WorkspaceState,
 } from "./types";
 import { DEFAULT_MODEL_CHEAP } from "./types";
 import {
@@ -78,11 +80,17 @@ import {
   type ToolProgressSink,
 } from "./tools";
 import {
+  clearWorkspace as clearWorkspaceRow,
   ensureWorkspaceSchema,
   getWorkspace,
   recordSnapshot,
   recordTooLarge,
 } from "./workspace-store";
+import {
+  SNAPSHOT_LIMIT_BYTES,
+  quoteShellArg,
+  safeWorkspacePath,
+} from "./workspace-keys";
 
 /**
  * The two registry RPCs the title fiber calls (Task 9). A local shape rather
@@ -1400,6 +1408,97 @@ export class FederationAgent extends Agent<Env> {
     return recurrence
       ? `Scheduled "${title}" daily at ${input.dailyAt} UTC. Next run ${when}. It runs autonomously with tool access, in the main session's conversation rather than this one.`
       : `Scheduled "${title}" at ${when}. It runs autonomously with tool access, in the main session's conversation rather than this one.`;
+  }
+
+  /**
+   * The pointer row, in the shape the Files tab renders (Task 30).
+   *
+   * This is a read of this DO's own SQLite and never touches KV, which is the
+   * whole point of the row: a KV `get` can be up to 60 s stale on the free plan,
+   * and a Files tab that said "nothing saved" about a workspace saved seconds ago
+   * would be believed.
+   *
+   * A row whose `key` is empty is reported as not saved. `recordTooLarge` inserts
+   * exactly that shape when a session's first ever attempt is over the ceiling, so
+   * `overLimit` can warn a user who has never had a snapshot, without the tab
+   * claiming a restore is possible.
+   */
+  async workspaceState(sessionId: string): Promise<WorkspaceState> {
+    const empty: WorkspaceState = {
+      saved: false,
+      bytes: 0,
+      files: 0,
+      updatedAt: null,
+      overLimit: null,
+      limit: SNAPSHOT_LIMIT_BYTES,
+    };
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return empty;
+    const row = getWorkspace(this.db(), sessionId);
+    if (!row) return empty;
+    return {
+      saved: Boolean(row.key),
+      bytes: row.bytes,
+      files: row.files,
+      updatedAt: row.key ? row.updated_at : null,
+      overLimit: row.over_limit_bytes,
+      limit: SNAPSHOT_LIMIT_BYTES,
+    };
+  }
+
+  /** Drop the pointer row, after the archives it names have been forgotten. */
+  async clearWorkspace(sessionId: string): Promise<void> {
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return;
+    clearWorkspaceRow(this.db(), sessionId);
+  }
+
+  /**
+   * Delete one file from a session's workspace (Task 30).
+   *
+   * WHY THIS CANNOT BE A KV EDIT. The workspace is one gzip member list, not a
+   * folder: to take one file out you have to unpack, drop it and re-pack, so the
+   * only honest implementation is the running box. The command goes through
+   * `runSandbox`, which boots a VM for this session and restores its archive if
+   * one exists, so a delete on a cold session costs a boot and two KV writes and
+   * is still the same answer. A bare `rm` with no `-r` and no `-f`: a directory is
+   * not what this route lists, and a name that does not exist must fail loudly
+   * rather than report a success for a file that was already gone.
+   *
+   * The path is guarded a second time here even though src/routes.ts refused the
+   * bad shapes with a 400. A DO RPC can be called by anything that holds the stub,
+   * and the argument ends up inside a shell command.
+   */
+  async deleteWorkspaceFile(
+    sessionId: string,
+    path: string
+  ): Promise<WorkspaceDeleteResult> {
+    const safe = safeWorkspacePath(path);
+    if (!safe) {
+      return { ok: false, output: "invalid file path", unavailable: false };
+    }
+    if (!this.env.SANDBOX) {
+      return { ok: false, output: "sandbox not configured", unavailable: true };
+    }
+    const result = await this.runSandbox(`rm -- ${quoteShellArg(safe)}`, sessionId);
+    if (!result.ok) {
+      // exitCode null is runSandbox's own mark for an infrastructure failure, so
+      // the route can answer 502 for it and 409 for a command that simply failed.
+      const text = result.error || result.stderr || result.stdout;
+      return {
+        ok: false,
+        output: text.trim().split("\n")[0] || "the sandbox returned nothing",
+        unavailable: result.exitCode === null,
+      };
+    }
+    const saved = await this.snapshotWorkspace(sessionId);
+    return {
+      // A delete that did not re-pack is not a delete: the next cold boot restores
+      // the file from the archive that still names it.
+      ok: saved.ok,
+      output: saved.ok
+        ? `Removed ${safe}. ${saved.output}`
+        : `Removed ${safe}, but the new snapshot did not land: ${saved.output}`,
+      unavailable: false,
+    };
   }
 
   /**

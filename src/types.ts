@@ -125,6 +125,40 @@ export interface AgentStub {
   vaultChunk(key: string, idx: number): Promise<string | null>;
   vaultHealth(key: string): Promise<Record<string, unknown> | null>;
   vaultDelete(key: string): Promise<void>;
+  /** Task 30: the pointer row for this session's last good snapshot. */
+  workspaceState(sessionId: string): Promise<WorkspaceState>;
+  /** Task 30: drop the pointer row once the archives behind it are gone. */
+  clearWorkspace(sessionId: string): Promise<void>;
+  /** Task 30: remove one file from a live workspace and re-snapshot it. */
+  deleteWorkspaceFile(sessionId: string, path: string): Promise<WorkspaceDeleteResult>;
+}
+
+/**
+ * What the brain knows about one session's workspace without touching KV (Task 30).
+ *
+ * `saved` is the pointer row's own truth: the last archive that LANDED. `bytes`,
+ * `files` and `updatedAt` describe that archive, and `overLimit` is the measured
+ * size of the newest attempt that did not land, so a session that outgrew the
+ * ceiling can be told in the Files tab before another save fails.
+ */
+export interface WorkspaceState {
+  saved: boolean;
+  bytes: number;
+  files: number;
+  updatedAt: number | null;
+  overLimit: number | null;
+  limit: number;
+}
+
+/**
+ * The one file delete's outcome. `unavailable` separates "the sandbox could not be
+ * reached at all" from "the file is not there": the first is a 502 the user can
+ * retry, the second is a 409 that no retry fixes.
+ */
+export interface WorkspaceDeleteResult {
+  ok: boolean;
+  output: string;
+  unavailable: boolean;
 }
 
 /**

@@ -7,26 +7,59 @@
 // plus dependency-free modules only (R39), and takes both DO namespaces from the
 // `env` argument instead of the classes they are bound to.
 //
-// WHAT IT OWNS (R42): the eight routes below and nothing else. `/api/tasks`,
+// WHAT IT OWNS (R42): the twelve shapes below and nothing else. `/api/tasks`,
 // `/api/approve`, `/api/decide`, the WebSocket upgrade and the six
 // `/internal/vault/*` handlers keep their existing addressing in src/index.ts;
 // src/index.ts delegates here on the `/api/sessions` prefix only. `/api/plan` is
 // removed by Task 15, not by this file.
 //
-//   GET    /api/sessions?limit=N          { ok, sessions: SessionRow[], truncated }
-//   POST   /api/sessions                  { ok, session: SessionRow }
-//   PATCH  /api/sessions/:id              { ok }
-//   DELETE /api/sessions/:id              { ok }
-//   GET    /api/sessions/:id/messages     { ok, messages: MessageRow[] }  (oldest first)
-//   POST   /api/sessions/:id/message      { ok, streamId, operationId }   (Task 23, submit-and-return)
-//   POST   /api/sessions/:id/abort        { ok, aborted }                 (Task 23)
-//   GET    /api/sessions/:id/stream/:id   the durable operation stream, as SSE
+//   GET    /api/sessions?limit=N              { ok, sessions: SessionRow[], truncated }
+//   POST   /api/sessions                      { ok, session: SessionRow }
+//   PATCH  /api/sessions/:id                  { ok }
+//   DELETE /api/sessions/:id                  { ok, workspace: "kept" | "deleted" }
+//   GET    /api/sessions/:id/messages         { ok, messages: MessageRow[] }  (oldest first)
+//   POST   /api/sessions/:id/message          { ok, streamId, operationId }   (Task 23, submit-and-return)
+//   POST   /api/sessions/:id/abort            { ok, aborted }                 (Task 23)
+//   GET    /api/sessions/:id/stream/:id       the durable operation stream, as SSE
+//   GET    /api/sessions/:id/workspace        { ok, workspace: WorkspaceState }  (Task 30)
+//   GET    /api/sessions/:id/workspace/files  the KV manifest, proxied from zay-sandbox
+//   GET    /api/sessions/:id/workspace/archive  the gzip tar, as a named download
+//   DELETE /api/sessions/:id/workspace/files/<path>  { ok, output }
 //
 // Every one of them 401s when `authed()` fails and 400s on a malformed body. A shape
 // the family does not serve, including a wrong method on a shape it does, is 404.
 // The ONE exception to header auth is a GET of the stream shape: `EventSource`
 // cannot set an Authorization header, so that request may carry `?token=` and is
 // checked by `tokenOk` (which still fails closed on a blank key).
+//
+// THE WORKSPACE FOUR do not share a mechanism, and that split is the design (Task 30):
+//
+//   - `GET .../workspace` reads the POINTER ROW out of the session DO. The row says
+//     whether a snapshot landed, how big it was, and the ceiling; it is local SQLite,
+//     so it answers even when the sandbox and KV are down.
+//   - `.../files` and `.../archive` read the ARCHIVE ITSELF, which lives in KV and is
+//     only addressable through the sandbox worker. The brain holds `SBOX_TOKEN` and
+//     the console does not, so these two are proxies that add the bearer and nothing
+//     else. They skip gate 3 on purpose: both key off a name derived from an id that
+//     already cleared gate 2, and an absent id simply gets the worker's own 404
+//     `no_snapshot`. Adding the registry read would make a download cost a DO wake-up
+//     to learn nothing the KV miss does not already say.
+//   - `DELETE .../files/<path>` goes through the DO, because deleting a member means
+//     re-packing the whole tar: the DO owns the sandbox lease, the `rm`, and the save
+//     that follows. The route's only jobs are the path guard and the status mapping.
+//
+// A download deliberately does NOT get the `?token=` exception. `EventSource` needs it
+// because it cannot set a header; `fetch()` can, so a token in a download URL would
+// put the shared bearer in browser history, in Worker logs, and in any Referer for no
+// reason at all. `streamShape` stays the only widening.
+//
+// `DELETE /api/sessions/:id` keeps the workspace unless the body says
+// `{"confirm_body":true}` (a strict boolean: `"yes"`, `1`, and an absent key are all
+// "keep"). Deleting a chat is cheap and undoable-by-creating-another-one; deleting a
+// user's files is neither, so the destructive half needs an explicit word. When the
+// confirm lands but KV is unreachable, the SESSION still goes and the answer says
+// `workspace: "kept"`: refusing would strand the user with a chat the console cannot
+// open and no route to retry from.
 //
 // THE GATE ORDER for a session-addressed request (R76), and what each answer means:
 //
@@ -36,9 +69,12 @@
 //   4. the DO                   200, or 403 for a submit refused with code "invalid_session"
 //
 // Gate 3 guards every route that could otherwise act on, or report a success
-// about, a row nobody created: PATCH, GET messages, POST message, POST abort and
-// the stream proxy. DELETE answers ok:true for an absent id by design (the
-// handler below says why). PATCH runs the read INSIDE its handler, so a blank
+// about, a row nobody created: PATCH, GET messages, POST message, POST abort, the
+// stream proxy, GET workspace and the workspace file DELETE. DELETE of a session
+// answers ok:true for an absent id by design on its keep-files path (the handler
+// below says why), and runs the read on its confirm-and-forget path, because the
+// extra RPC there is a DO call that would otherwise instantiate a DO for a ghost id.
+// PATCH runs the read INSIDE its handler, so a blank
 // title still 400s ahead of the 404, as the order above requires.
 //
 // Step 2 is where an attacker-controlled string is actually stopped, and it covers
@@ -68,22 +104,35 @@
 // `abc..def`, `..%2f..%2fetc` as `../../etc`, and a double-encoded `%252e%252e` as a
 // literal `%2e%2e`. Those are the shapes that would otherwise reach `idFromName` and let
 // a client steer which DO id it names.
+//
+// THE WORKSPACE FILE PATH IS THE ONE PLACE IN THIS FAMILY WHERE THOSE BYTES REALLY ARE
+// A PATH, so it gets its own guard (Task 30). A session id names a DO, and a DO name has
+// no directories; `.../workspace/files/x%2f..%2f..%2fetc%2fpasswd` names a file inside a
+// Linux sandbox, where the same bytes are `/etc/passwd`. WHATWG normalization cannot
+// help: the slashes are still percent-encoded when the URL layer finishes, so nothing
+// collapses the dots and the decode happens HERE. `safeWorkspacePath` runs on the decoded
+// tail, before the registry read and before any DO call, and a refusal is a 400 with
+// zero side effects. The DO re-runs the same function (defense in depth, the rule the
+// stream proxy and the scope guard already follow: a handler does not trust its route).
 
-// The four value imports below carry their `.ts` extension, because plain Node
+// The five value imports below carry their `.ts` extension, because plain Node
 // (which runs tests/routes.test.mjs, and nothing else can) is a strict ESM resolver:
 // an extensionless relative specifier never reaches `auth.ts`. Type imports are erased
 // before resolution, so they stay extensionless like the rest of the repo.
 //
 // `allowImportingTsExtensions` is on in this tsconfig, legal because `noEmit` is
 // already true, so a `.ts` specifier is permitted rather than suppressed: tsc type
-// checks these four lines normally. Wrangler's esbuild resolves both spellings.
-// These four are the whole value-import set because R39 lets this module reach only
+// checks these five lines normally. Wrangler's esbuild resolves both spellings.
+// These five are the whole value-import set because R39 lets this module reach only
 // `src/*.ts` files that are themselves dependency-free under plain Node, which is
 // exactly why ./session-scope joined ./auth, ./registry-input and ./registry-store in
-// Task 8 (R75); a fifth value import has to clear that rule first.
+// Task 8 (R75), and why ./workspace-keys joined them in Task 30: that module imports
+// NOTHING either, which is the property its own test pins. A sixth value import has to
+// clear that rule first.
 import { idFromSegment, limitFrom, readJson } from "./registry-input.ts";
 import { PLACEHOLDER_TITLE } from "./registry-store.ts";
 import { isSessionId } from "./session-scope.ts";
+import { safeWorkspacePath } from "./workspace-keys.ts";
 import { authed, tokenOk } from "./auth.ts";
 import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
@@ -296,6 +345,156 @@ async function sessionStreamProxy(
   );
 }
 
+// ------------------------------------------------------------- workspace (Task 30) ----
+
+/**
+ * The origin used to address the sandbox service binding. A binding routes on the
+ * pathname and the host never leaves the isolate, so this string only has to be a
+ * valid absolute URL. Spelled once so a test can pin the exact URL each route built.
+ */
+const SANDBOX_ORIGIN = "https://zay-sandbox";
+
+/**
+ * The bearer, and nothing else. The inbound request's own headers stop at this
+ * Worker: the console's key is not the sandbox's key, and forwarding it would put one
+ * secret into another service's logs.
+ */
+function sandboxHeaders(env: Env, json = false): Headers {
+  return new Headers({
+    authorization: `Bearer ${env.SBOX_TOKEN}`,
+    ...(json ? { "content-type": "application/json" } : {}),
+  });
+}
+
+/**
+ * One GET against the sandbox worker, or null when this deployment has no binding.
+ * `sessionId` is already through gate 2, so it is `[A-Za-z0-9_-]` and needs no
+ * escaping; `encodeURIComponent` is here so a future widening cannot quietly make
+ * `?sessionId=` mean two things at once.
+ */
+function sandboxGet(env: Env, pathname: string, sessionId: string): Promise<Response> | null {
+  if (!env.SANDBOX) return null;
+  const url = `${SANDBOX_ORIGIN}${pathname}?sessionId=${encodeURIComponent(sessionId)}`;
+  return env.SANDBOX.fetch(url, { method: "GET", headers: sandboxHeaders(env) });
+}
+
+/** The write form. Only `/workspace/forget` uses it, and it is the one call here that deletes KV. */
+async function sandboxForget(env: Env, sessionId: string): Promise<boolean> {
+  if (!env.SANDBOX) return false;
+  try {
+    const res = await env.SANDBOX.fetch(`${SANDBOX_ORIGIN}/workspace/forget`, {
+      method: "POST",
+      headers: sandboxHeaders(env, true),
+      body: JSON.stringify({ sessionId }),
+    });
+    return res.ok;
+  } catch {
+    // A binding that rejects is unreachable, which is the same fact as a 503 and
+    // gets the same answer: the files are still there, and the session still goes.
+    return false;
+  }
+}
+
+/**
+ * The pointer row, read through the DO. Local SQLite, so this answers even when the
+ * sandbox and KV are both down, which is the whole reason the row exists (the byte
+ * count and the ceiling are what a Files tab has to show before a save fails).
+ */
+async function readWorkspaceState(env: Env, id: string): Promise<Response> {
+  const workspace = await agentStubFor(env, id).workspaceState(id);
+  return json({ ok: true, workspace });
+}
+
+/**
+ * The file manifest, forwarded as the worker answered it. The 404 `no_snapshot` in
+ * particular is kept rather than turned into an error: a session that has never
+ * saved is a fact about the session, and the console renders it as an empty list.
+ */
+async function readWorkspaceManifest(env: Env, id: string): Promise<Response> {
+  const pending = sandboxGet(env, "/workspace/manifest", id);
+  if (!pending) return fail(503, "sandbox not configured");
+  return pending;
+}
+
+/**
+ * The gzip tar, forwarded as bytes with one header re-stamped. The name is written
+ * HERE rather than copied from the upstream response, so the string a user reads in
+ * the downloads bar is one this route produced.
+ */
+async function readWorkspaceArchive(env: Env, id: string): Promise<Response> {
+  const pending = sandboxGet(env, "/workspace/archive", id);
+  if (!pending) return fail(503, "sandbox not configured");
+  const source = await pending;
+  if (!source.ok) return source;
+  const headers = new Headers(source.headers);
+  headers.set("content-disposition", `attachment; filename="workspace-${id}.tar.gz"`);
+  return new Response(source.body, {
+    status: source.status,
+    statusText: source.statusText,
+    headers,
+  });
+}
+
+/**
+ * DELETE /api/sessions/:id/workspace/files/<path>
+ *
+ * `rawSegments` is what the pathname still holds after `files/`: encoded, and split
+ * on REAL slashes only. Joined back and decoded once, `..` survives as text, which is
+ * the case `safeWorkspacePath` exists for and URL normalization cannot do anything
+ * about. The guard runs before the registry read and before any DO call, so a refused
+ * path has cost nothing and changed nothing.
+ *
+ * The delete itself is the DO's: it holds the sandbox lease, runs `rm`, and re-packs
+ * the tar. Only the DO can do that, because a member of a gzip archive cannot be
+ * removed by editing KV.
+ */
+async function deleteWorkspaceFile(
+  env: Env,
+  id: string,
+  rawSegments: string[]
+): Promise<Response> {
+  const path = safeWorkspacePath(idFromSegment(rawSegments.join("/")));
+  if (!path) return fail(400, "invalid file path");
+  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+  const result = await agentStubFor(env, id).deleteWorkspaceFile(id, path);
+  if (result.ok) return json({ ok: true, output: result.output });
+  // 502 for a sandbox that could not be reached (retrying is the fix), 409 for one
+  // that answered and said the file is not there (retrying is not).
+  return fail(result.unavailable ? 502 : 409, result.output);
+}
+
+/**
+ * DELETE /api/sessions/:id, body `{"confirm_body": true}` to also forget the files.
+ *
+ * The strict `=== true` is the whole design: deleting a chat is cheap and re-doable,
+ * deleting someone's build is neither, so the destructive half needs an explicit word
+ * in the body rather than the absence of one. `"yes"`, `1` and a malformed body are
+ * all "keep".
+ *
+ * The registry `exists` read is on the confirmed path only, and only because
+ * `clearWorkspace` is a DO call: running it for an id nobody created would instantiate
+ * a DO whose transcript the list never shows (R73). The unconfirmed path keeps the
+ * delete idempotent, which is why an absent row still answers ok:true.
+ *
+ * A confirmed delete whose KV write fails STILL removes the session. Refusing would
+ * strand the user with a chat the console cannot open and no route to retry from;
+ * instead the answer says `workspace: "kept"`, so the Files tab and the transcript
+ * agree that the files outlived the session.
+ */
+async function deleteSession(request: Request, env: Env, id: string): Promise<Response> {
+  const body = (await readJson(request)) as { confirm_body?: unknown } | null;
+  const registry = registryStubFor(env);
+  if (body?.confirm_body !== true) {
+    await registry.remove(id);
+    return json({ ok: true, workspace: "kept" });
+  }
+  const existed = await registry.exists(id);
+  const forgotten = await sandboxForget(env, id);
+  if (existed && forgotten) await agentStubFor(env, id).clearWorkspace(id);
+  await registry.remove(id);
+  return json({ ok: true, workspace: forgotten ? "deleted" : "kept" });
+}
+
 function isSessionsPath(pathname: string): boolean {
   return pathname === SESSIONS_PATH || pathname.startsWith(`${SESSIONS_PATH}/`);
 }
@@ -355,14 +554,7 @@ export async function handleFetch(
   // PATCH /api/sessions/:id  |  DELETE /api/sessions/:id
   if (parts.length === 1) {
     if (request.method === "PATCH") return renameSession(request, env, id);
-    // DELETE is the one `:id` route gate 3 does not cover, on purpose: removing an id
-    // that is not there leaves the caller in exactly the state it asked for, and
-    // `remove` returns void by contract (R37, R58), so there is no false success to
-    // prevent and a 404 here would only break idempotent retries.
-    if (request.method === "DELETE") {
-      await registryStubFor(env).remove(id);
-      return json({ ok: true });
-    }
+    if (request.method === "DELETE") return deleteSession(request, env, id);
     return fail(404, "not found");
   }
 
@@ -371,9 +563,30 @@ export async function handleFetch(
     return sessionStreamProxy(request, env, id, parts[2]);
   }
 
+  // GET /api/sessions/:id/workspace/files  |  GET .../workspace/archive
+  // DELETE /api/sessions/:id/workspace/files/<path...>
+  //
+  // The three-segment reads deliberately do NOT run gate 3 (see the header): both key
+  // off a KV name derived from an id that cleared gate 2, and the worker's own 404
+  // `no_snapshot` is the honest answer for a session with nothing stored. The DELETE
+  // guards its PATH first, which is why a traversal shape reaches neither the registry
+  // nor a DO.
+  if (parts[1] === "workspace" && parts[2] === "files" && request.method === "DELETE") {
+    return deleteWorkspaceFile(env, id, parts.slice(3));
+  }
+  if (parts.length === 3 && parts[1] === "workspace" && request.method === "GET") {
+    if (parts[2] === "files") return readWorkspaceManifest(env, id);
+    if (parts[2] === "archive") return readWorkspaceArchive(env, id);
+    return fail(404, "not found");
+  }
+
   // GET /api/sessions/:id/messages  |  POST /api/sessions/:id/message
   if (parts.length === 2) {
     const sub = parts[1];
+    if (sub === "workspace" && request.method === "GET") {
+      if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+      return readWorkspaceState(env, id);
+    }
     if (sub === "messages" && request.method === "GET") {
       // Gate 3 (R76): a well-formed id with no registry row is answered here, with no
       // DO addressed at all. `idFromName` cannot report absence (a DO name is an

