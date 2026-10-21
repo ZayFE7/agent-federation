@@ -31,6 +31,15 @@ export const TOOL_WIDGET: Record<string, { label: string; state: string }> = Obj
 
 const FALLBACK_WIDGET = { label: "Tool", state: "code" };
 
+/**
+ * `ai`'s default `onError` replaces every server-side error with this constant so
+ * internals cannot reach the browser. ThinkHarness does not override it, so a failing
+ * model call produces this frame *and* the terminal `hub.fail` frame that carries the
+ * real reason. The console tears down on the first error it sees, so forwarding the
+ * redacted one would show "An error occurred." and swallow the useful text.
+ */
+const SDK_REDACTED_ERROR = "An error occurred.";
+
 function widgetFor(name: string): { label: string; state: string } {
   return TOOL_WIDGET[name] ?? FALLBACK_WIDGET;
 }
@@ -130,7 +139,8 @@ export function framesFromChunk(chunk: UIMessageChunk): StreamFrame[] {
     }
     case "error": {
       const message = text(c.errorText);
-      return message ? [{ t: "error", message }] : [];
+      if (!message || message === SDK_REDACTED_ERROR) return [];
+      return [{ t: "error", message }];
     }
     default:
       return [];

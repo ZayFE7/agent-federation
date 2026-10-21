@@ -105,6 +105,22 @@ check("an unknown chunk returns an empty array and never throws", () => {
   assert.deepEqual(framesFromChunk(null), []);
 });
 
+check("the SDK's redacted error chunk is dropped, not forwarded", () => {
+  // `ai`'s default onError emits this constant for every server error. The terminal
+  // hub.fail frame carries the reason, so this one only shadows it.
+  assert.deepEqual(framesFromChunk({ type: "error", errorText: "An error occurred." }), []);
+});
+
+check("a detailed error chunk still reaches the console", () => {
+  const out = framesFromChunk({
+    type: "error",
+    errorText: "HTTP 503: model is experiencing high demand",
+  });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].t, "error");
+  assert.match(out[0].message, /503/);
+});
+
 check("encodeFrame is one data line and a blank line", () => {
   const wire = encodeFrame({ t: "text", d: "line one\nline two" });
   assert.equal(wire.startsWith("data: "), true);
