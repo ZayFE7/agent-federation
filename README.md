@@ -1,95 +1,90 @@
 # agent-federation (BLIP)
 
-BLIP is a personal AI agent built entirely on free, no-card tiers: a Cloudflare Worker brain
-backed by one Durable Object with SQLite memory across sessions, driven from a single-file web
-console. Chat fans out through a tiered model router (`primary` / `cheap`, `jev` reserved), the
-edge twin of the user's old local 9router API-key layer. The model gets three tools, sandbox
-`exec`, `schedule_task`, `save_workspace`, and jobs fire from a self-rearming 1 minute alarm.
+BLIP is a personal AI agent built entirely on free, no-card tiers: a Cloudflare Worker brain,
+one Durable Object per session with SQLite behind it, and a single-file web console served from
+the same Worker. The model gets four tools, `exec`, `web_search`, `schedule_task`,
+`save_workspace`, and runs inside one `ThinkHarness` loop from the `agents` SDK. Scheduled jobs
+fire from a self-rearming alarm.
 
-Runtime: Worker `src/index.ts` + DO `FederationAgent` (binding `FEDERATION_AGENT`, sqlite
-migration, `wrangler.jsonc:15-28`) + Assets from `./ui` as `ASSETS`, `run_worker_first: true`
-(`:6-10`) + service bindings `ROUTER` -> `zay-router`, `SANDBOX` -> `zay-sandbox` (`:11-14`) +
-cron `*/10 * * * *` (`:31-33`), whose handler only pings `RENDER_URL/health` (`src/index.ts:253-263`).
+There is no build step and no framework. `ui/index.html` is plain DOM and one `EventSource`.
+
+## How a turn moves
+
+```
+console  POST /api/sessions/:id/message   -> { streamId, operationId }        (returns at once)
+         GET  /api/sessions/:id/stream/:streamId?token=  -> SSE frames        (durable, per operation)
+brain    ThinkHarness turn -> chunk -> src/frames.ts -> StreamHub -> SSE
+```
+
+The frames union is the console's whole vocabulary: `text`, `reasoning`, `tool-start`,
+`tool-progress`, `tool-result`, `approval`, `state`, `step`, `done`, `error`. It is defined in
+`src/frames.ts` with its mapping tests in `tests/frames.test.mjs`; change it there, not in the UI.
 
 ## File map
 
-- `src/index.ts` (264 lines): the HTTP surface listed below.
-- `src/agent.ts` (521): the DO. Persona `You are Blip` (`:34-35`), hard rule (`:56-57`), prompt
-  builder (`:73-90`), router POST with `X-Tier` and 25 s abort (`:365-375`), tier to model
-  (`:257-262`), tool loop capped at 4 rounds (`:362`), deterministic mascot state (`:496-518`).
-- `src/memory.ts` (157) and `src/vault.ts` (104): the `memories` / `messages` / `tasks` tables
-  (`memory.ts:46-79`) and the chunked blob vault (`MAX_CHUNK_BYTES = 1_400_000`, `vault.ts:8`).
-- `src/types.ts` (71): tiers (`:3`), `AgentReply` (`:28-36`), `Env` (`:47-71`), defaults (`:44-45`).
-- `ui/index.html` (371): console titled `Blip app v7`; mascot SVG and state table `S` (`:288-300`),
-  tabs chat/tasks/docs/ideas/tools (`:321`). Plain `fetch`, no WebSocket, no markdown renderer,
-  reply text injected raw, demo placeholder strings still present (`:322`, `:330`, `:338`).
-- `pipedream/router.py` + README: abandoned predecessor router, superseded by `deploy/router-worker`.
-- `tests/`: `npm test` (`node tests/run-all.mjs`) runs the four offline `.test.mjs` files
-  (`fake-sql`, `guardrails`, `markdown`, `memory`); `tests/fake-sql.mjs` is the `SqlHandle`
-  fixture later store tests seed, contract-tested by `tests/fake-sql.test.mjs`.
-  `tests/live-matrix.mjs` is live-only, needs `BLIP_URL` plus a real `AGENT_API_KEY`, and is not
-  run by `npm test`. See `tests/README.md`.
+| Path | What it owns |
+|---|---|
+| `src/index.ts` | The non-session HTTP surface: `/health`, `/api/tasks`, `/api/approve`, `/api/decide`, six `/internal/vault/*` handlers, and the WebSocket upgrade. Delegates `/api/sessions*` to `src/routes.ts` |
+| `src/routes.ts` | The eight `/api/sessions*` routes. The only part of the worker's HTTP surface an offline test can drive |
+| `src/agent.ts` | `FederationAgent`, the per-session DO: the harness turn path, directives, memory, scheduled jobs, approvals, workspace snapshotting, the alarm tick |
+| `src/registry.ts` + `registry-store.ts` + `registry-input.ts` | `RegistryAgent`, the session index the sidebar reads |
+| `src/harness.ts` + `harness-config.ts` | The one `ThinkHarness` instance and its options object (12 steps, recovery `{2, 1000, 120000}`, compact after 80 000 tokens) |
+| `src/tools.ts` + `capabilities.ts` | The four tool definitions and the one table every capability claim renders from |
+| `src/approval.ts` + `guardrails.ts` | The gate: only `exec` can be held, and only when the command text looks risky |
+| `src/directives.ts` | `run:` / `exec:` / `execute:` / `search:`, the deterministic paths that bypass the model entirely |
+| `src/frames.ts` + `stream-hub.ts` | The wire vocabulary and the durable per-operation buffer that survives a mid-turn eviction |
+| `src/provider.ts` + `router.ts` | The AI SDK language model and the fetch that reaches the router binding |
+| `src/reply.ts` | Harness `PromptResult` projected onto the console's `AgentReply` |
+| `src/memory.ts` + `vault.ts` + `titles.ts` + `session-scope.ts` + `sql-handle.ts` | Support modules, all dependency-free enough to import from plain Node |
+| `ui/index.html` | The console: mascot, sidebar, chat, live tool cards, approval card |
+| `deploy/router-worker` | `zay-router`, the cloud model router the brain binds to |
+| `deploy/sandbox-worker` | `zay-sandbox`, the E2B microVM runner |
+| `deploy/northflank-9router`, `deploy/render-9router`, `pipedream/` | DEAD configs for abandoned hosts. Do not deploy from them |
+| `tests/` | Offline suite plus three live scripts. Read `tests/README.md` for what each one proves |
 
-## HTTP surface, as read from `src/index.ts`
+## HTTP surface
 
-| Route | Line | Auth | Returns |
-|---|---|---|---|
-| WS upgrade passthrough | 33 | none | forwarded to the DO stub |
-| `GET /health` | 38 | none | `{ok:true}` |
-| `POST /api/message` | 42 | `AGENT_API_KEY` | full `AgentReply`: `reply`, `state`, `verb`, `tools[]` |
-| `GET /api/tasks` | 62 | `AGENT_API_KEY` | `{ok:true, tasks:[...]}` |
-| `POST /api/decide` | 71 | `AGENT_API_KEY` | LLM mascot decider, unused by the UI; `context:"__debug_url"` probe `:85-95` |
-| `POST /internal/vault/push` | 156 | `STATE_KEY` | one base64 chunk, `{ok, idx, total}` |
-| `GET /internal/vault/chunk` \| `pull` \| `health` | 179, 201, 221 | `STATE_KEY` | one chunk plus `x-vault-total` \| whole blob octet-stream \| metadata |
-| `DELETE /internal/vault` | 233 | `STATE_KEY` | `{ok:true}` |
-| anything else | 246 | none | served from `ASSETS` (the console) |
+Eight session routes are listed at the top of `src/routes.ts`. The rest, from `src/index.ts`:
 
-Vault auth also requires `STATE_KEY.length > 0` (`:152-154`), so all five vault routes 401
-until that secret exists.
+| Route | Auth | Returns |
+|---|---|---|
+| `GET /health` | none | `{ok:true}` |
+| `GET /api/tasks` | `AGENT_API_KEY` | `{ok:true, tasks:[...]}` |
+| `POST /api/approve` | `AGENT_API_KEY` | the resumed turn, projected as an `AgentReply` |
+| `POST /api/decide` | `AGENT_API_KEY` | the cheap-lane mascot state decision |
+| `POST /internal/vault/push`, `GET /internal/vault/chunk`, `/pull`, `/health`, `DELETE /internal/vault` | `STATE_KEY` | the chunked router-state blob |
+| anything else | none | served from `ASSETS` (the console) |
+
+Vault routes 401 until `STATE_KEY` exists; the check is `STATE_KEY.length > 0`, so an unset
+secret fails closed.
 
 ## Env (names only, never values)
 
-`ROUTER_URL`, `MODEL_PRIMARY`, `MODEL_CHEAP` are plain vars (`wrangler.jsonc:37-41`);
-`ROUTER_KEY` and `AGENT_API_KEY` are secrets documented at `:42-44`; `STATE_KEY` and
-`SBOX_TOKEN` (both declared in `src/types.ts` `Env`) are secrets **no wrangler config mentions**;
-`RENDER_URL` is optional and absent from `wrangler.jsonc`; bindings are `ASSETS`,
-`ROUTER`, `SANDBOX`, `FEDERATION_AGENT`.
+Plain vars: `ROUTER_URL`, `MODEL_PRIMARY`, `MODEL_CHEAP`. Secrets: `ROUTER_KEY`, `AGENT_API_KEY`,
+`STATE_KEY`, `SBOX_TOKEN`. Bindings: `ASSETS`, `ROUTER` -> `zay-router`, `SANDBOX` ->
+`zay-sandbox`, `FEDERATION_AGENT`, `REGISTRY`. Cron `*/10 * * * *` pings `RENDER_URL/health`.
 
-`.dev.vars` is byte-identical to `.dev.vars.example` and contains **no working credentials**:
-`ROUTER_URL` and `ROUTER_KEY` empty, `AGENT_API_KEY=generate-me`, models still at the
-`meta/muse-spark-1.3*` fallbacks, `STATE_KEY` and `SBOX_TOKEN` missing. Anyone who reads it
-expecting live credentials will waste time.
+`.dev.vars` is gitignored and holds your own values. The committed `.dev.vars.example` is a
+placeholder file with no working credentials.
 
-## Deployables and local dev
-
-Order: `deploy/router-worker`, then `deploy/sandbox-worker` (the brain binds to both by name,
-`wrangler.jsonc:11-14`), then this brain, then `deploy/telegram-bridge` if wanted. Each satellite
-carries its own `wrangler.jsonc`, KV ids and secrets.
+## Local dev
 
 ```sh
-npm install                     # agents is pinned to 0.28.1, ai 7.0.143, @ai-sdk/openai-compatible 3.0.71
-cp .dev.vars.example .dev.vars   # pointless as-pulled: identical file, no secrets
-npm run dev                      # wrangler dev on :8787
-npm run typecheck                # tsc --noEmit, src only
-npm test                         # node tests/run-all.mjs, offline .test.mjs files only
+npm install       # agents 0.28.1, ai 7.0.143, @ai-sdk/openai-compatible 3.0.71, zod 4.6.7
+cp .dev.vars.example .dev.vars   # then fill it in by hand
+npm run dev        # wrangler dev on :8787
+npm run typecheck  # tsc --noEmit, src only
+npm test           # node tests/run-all.mjs, offline only, no network
 ```
 
-## Structural gotchas
+Two gotchas that cost time:
 
-1. `wrangler.jsonc` sets no `compatibility_flags`, but the Agents SDK requires
-   `["nodejs_compat"]` (`node_modules/agents/docs/configuration.md:56-62`), used at `src/agent.ts:1`.
-2. Cross-worker `services` bindings do not resolve in a standalone `wrangler dev`, so sandbox
-   tools answer `sandbox not configured` (`src/agent.ts:435,455`) and chat uses the public
-   `ROUTER_URL`. Also `tsconfig.json:14` is `include: ["src"]` while `deploy/sandbox-worker` and
-   `deploy/telegram-bridge` have no `tsconfig.json`, so `deploy/**` is never typechecked.
+1. Cross-worker `services` bindings do not resolve in a standalone `wrangler dev`, so locally the
+   sandbox tools answer `sandbox not configured` and chat uses the public `ROUTER_URL`.
+2. `tsconfig.json` has `include: ["src"]` and `deploy/**` has no tsconfig, so the two satellite
+   workers are never typechecked by `npm run typecheck`.
 
-## Obsolete content in the previous version of this file
+## What is not here
 
-An older copy (still inside `BLIP-export.zip`, dated 2026-10-11) must not be trusted: it named
-Pipedream as *the* router, claimed `POST /api/message` returns `{reply}` only, wrote "Sandbox
-execution comes later", listed Pipedream env trios as the live contract, and never mentioned
-`STATE_KEY`, `SBOX_TOKEN`, `RENDER_URL` or the `ROUTER`/`SANDBOX` bindings. This file supersedes it.
-
-Not verifiable from this machine, and nothing here was run or deployed: deployed cloud state,
-router KV contents, whether `wrangler dev` works with fresh secrets, provider key validity.
-See `../../GAPS.md` and `../../RECOVERY.md`.
+Vector memory and the Telegram bridge are on hold. There is no sub-agent tool yet, no CI, and no
+test framework: every test is a plain `.mjs` that exits 0 or 1.
