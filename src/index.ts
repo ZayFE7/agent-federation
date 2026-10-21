@@ -4,6 +4,7 @@ import { fetchRouter } from "./router";
 import { authed, safeEq } from "./auth";
 import { MAIN_DO_NAME, isSessionId } from "./session-scope";
 import { handleFetch } from "./routes";
+import { DEFAULT_MODEL_CHEAP } from "./types";
 import type { AgentStub, Env } from "./types";
 
 // Wrangler discovers Durable Object classes from the entry module's exports, so
@@ -137,7 +138,7 @@ export default {
           env,
           "/v1/chat/completions",
           {
-            model: env.MODEL_CHEAP || "gemini3.7flash",
+            model: env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP,
             messages: [
               { role: "system", content: sysPrompt },
               { role: "user", content: body.context },
