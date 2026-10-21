@@ -1,9 +1,13 @@
 # tests/
 
-Thirty-five entries live here, this README included. Twenty-nine are offline, framework-free, and run by
+Thirty-six entries live here, this README included. Thirty are offline, framework-free, and run by
 `npm test`:
 `approval.test.mjs` (a test that only `exec` is gated by shell risk and a malformed input fails
-closed), `context.test.mjs` (a test that every capability claim renders from one table and that
+closed), `child.test.mjs` (the sub-agent's recursion guard, tested from the outside because
+`src/child.ts` cannot load offline: `CHILD_TOOL_NAMES` is exact, frozen, a subset of the parent's
+set, and even a caller that names `delegate` gets no delegate tool out of `buildTools`; then the
+child-to-parent frame fold, its drops, its clip notices and its empty-call-id case),
+`context.test.mjs` (a test that every capability claim renders from one table and that
 memory sits after the tool guidance), `frames.test.mjs` (a test of the wire vocabulary in
 `../src/frames.ts`: the tool-to-widget table, the chunk-to-frame mapping and the one-line SSE
 encoding), `guardrails.test.mjs` (a unit test for
