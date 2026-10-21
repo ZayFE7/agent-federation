@@ -45,7 +45,9 @@ accepts the JSON object form the cheap model often returns, and falls back deter
 `tools.test.mjs` (a test of the AI SDK tool set: the four frozen names, recovery policy and
 descriptions), `workspace-keys.test.mjs` (a test of `src/workspace-keys.ts`: the two derived key
 names `ws:tar:<id>` and `ws:man:<id>`, the guard that runs before any key is built, the 24 MiB gate
-one MiB under the 25 MiB KV entry ceiling, and the exact number the console's card prints),
+one MiB under the 25 MiB KV entry ceiling, the exact number the console's card prints, and since
+Task 30 the path half: `safeWorkspacePath` refusing every escape shape including the encoded-slash
+tail that survives URL normalization, and `quoteShellArg` leaving no shell metacharacter live),
 `workspace.test.mjs` (a test of `deploy/sandbox-worker/workspace.ts` through injected fake ports: the
 pack/measure/store order, the listing shapes `tar tzvf` really prints, the four restore states, and
 the rule that a refused turn leaves the previous snapshot untouched), `sandbox-scope.test.mjs` (a test
@@ -165,11 +167,13 @@ i.e. dead code. That was wrong; the code wins.)
   `workspace-store`). No offline
   test touches a network: `live-matrix.mjs` needs a deployed worker plus a real key, and it is
   not in the glob.
-- `routes.test.mjs` covers the eight worker-side session routes: `GET /api/sessions?limit=N`,
+- `routes.test.mjs` covers the twelve worker-side session shapes: `GET /api/sessions?limit=N`,
   `POST /api/sessions`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id`,
   `GET /api/sessions/:id/messages`, `POST /api/sessions/:id/message`,
-  `POST /api/sessions/:id/abort` and
-  `GET /api/sessions/:id/stream/:streamId`. Every agent-side answer
+  `POST /api/sessions/:id/abort`,
+  `GET /api/sessions/:id/stream/:streamId`, and Task 30's four: `GET .../workspace`,
+  `GET .../workspace/files`, `GET .../workspace/archive` and
+  `DELETE .../workspace/files/<path>`. Every agent-side answer
   in it is a stub, so it proves nothing about the Durable Object behind those calls, and it
   never opens `project/agent-federation`, so it cannot see deploy-tree drift.
 - `fake-sql.mjs` is the fixture the pure-store tests of later tasks build on, and
@@ -259,14 +263,22 @@ The first offline test that reaches the worker's HTTP surface. It imports the re
 order, and a fake `FEDERATION_AGENT` namespace whose stub answers `chat` and `messages` from a
 fixture table, answers `fetch` with a recorded `text/event-stream` response, and records the exact
 arity each call used. No browser, no dev server and no
-Durable Object. The checks cover the eight routes: the `{ ok, sessions, truncated }` list and its
+Durable Object. The checks cover the twelve shapes: the `{ ok, sessions, truncated }` list and its
 `limit` clamp, the created row, the rename title rule, the delete, the transcript read from the
 addressed session, the reply passthrough with `touch(id)` and no opts, the abort forward that
 carries an `operationId` and the no-body abort-everything form, and the stream proxy
 (query-token auth on the GET stream shape only, the owning DO addressed, `token` and
 `authorization` stripped on the internal hop, `from`/`Last-Event-ID` preserved), plus the 401, 400
 and
-404 paths. Two rules that nothing else can test are pinned in the same file: R39, a source scan
+404 paths. Task 30 added a fourth fake to the same `env`, an `SANDBOX` fetch port that records each
+call and its headers as a plain object, and thirteen checks over the workspace family: the pointer
+row through the gate order, `401`/`400`/`404` in family order for the two new reads, no route in the
+family accepting a query token, the manifest forwarded, `no_snapshot` reading as an empty state
+rather than an error, the archive bytes forwarded with the file named, an absent `SANDBOX` binding
+answering 503 instead of a silent empty list, a traversal-shaped path 400ing before anything is
+called, a legal path deleting through the DO exactly once, the 409 versus 502 split on
+`exitCode === null`, and all three session-delete outcomes (kept by default, forgets both keys then
+clears then removes on confirm, still removes the session when the sandbox is unreachable). Two rules that nothing else can test are pinned in the same file: R39, a source scan
 proving `routes.ts` value-imports only dependency-free `src/*.ts` modules and addresses both DOs
 through `env` instead of importing a class, and R42, proving `src/index.ts` keeps its own
 handlers for `/api/tasks`, `/api/approve`, `/api/decide`, the WebSocket upgrade

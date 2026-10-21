@@ -25,7 +25,7 @@ The frames union is the console's whole vocabulary: `text`, `reasoning`, `tool-s
 | Path | What it owns |
 |---|---|
 | `src/index.ts` | The non-session HTTP surface: `/health`, `/api/tasks`, `/api/approve`, `/api/decide`, six `/internal/vault/*` handlers, and the WebSocket upgrade. Delegates `/api/sessions*` to `src/routes.ts` |
-| `src/routes.ts` | The eight `/api/sessions*` routes. The only part of the worker's HTTP surface an offline test can drive |
+| `src/routes.ts` | The twelve `/api/sessions*` shapes, four of them workspace ones. The only part of the worker's HTTP surface an offline test can drive |
 | `src/agent.ts` | `FederationAgent`, the per-session DO: the harness turn path, directives, memory, scheduled jobs, approvals, workspace snapshotting, the alarm tick |
 | `src/registry.ts` + `registry-store.ts` + `registry-input.ts` | `RegistryAgent`, the session index the sidebar reads |
 | `src/harness.ts` + `harness-config.ts` | The one `ThinkHarness` instance and its options object (12 steps, recovery `{2, 1000, 120000}`, compact after 80 000 tokens) |
@@ -44,7 +44,9 @@ The frames union is the console's whole vocabulary: `text`, `reasoning`, `tool-s
 
 ## HTTP surface
 
-Eight session routes are listed at the top of `src/routes.ts`. The rest, from `src/index.ts`:
+Twelve session shapes are listed at the top of `src/routes.ts`: the eight the family had through
+Phase 3, plus Task 30's `GET .../workspace`, `GET .../workspace/files`, `GET .../workspace/archive`
+and `DELETE .../workspace/files/<path>`. The rest, from `src/index.ts`:
 
 | Route | Auth | Returns |
 |---|---|---|
