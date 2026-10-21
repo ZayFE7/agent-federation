@@ -11,10 +11,11 @@
 // 1-2 MB at MAX_ARG_STRLEN; the gate here is what keeps a payload out of the
 // place where that failure used to be silent.
 //
-// The cross-tree check cannot live here yet. `deploy/sandbox-worker/workspace.ts`
-// is created by Task 27, and the two trees are separate deploys, so no product
-// module may import across them; Task 27 adds the import-both-and-compare
-// assertion to this file (prescan F15).
+// The two trees are separate deploys, so `deploy/sandbox-worker/workspace.ts`
+// mirrors this file by hand instead of importing it. Task 27 added the
+// import-both-and-compare section below (prescan F15): the mirror is only safe
+// while it is byte-identical, and nothing else in the build notices when it is
+// not.
 //
 // Plain Node, no framework, no build step: run with `node tests/workspace-keys.test.mjs`.
 // Silent on success (exit 0). Prints every failure and exits 1 otherwise.
@@ -22,6 +23,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { SESSION_ID_RE } from "../src/session-scope.ts";
+import * as mirror from "../deploy/sandbox-worker/workspace.ts";
 import {
   KV_ENTRY_BYTES,
   MAX_ID_LENGTH,
@@ -44,6 +46,15 @@ function check(name, fn) {
     fn();
   } catch (err) {
     failures.push(`${name}: ${err && err.message ? err.message : String(err)}`);
+  }
+}
+
+function catchError(fn) {
+  try {
+    fn();
+    return null;
+  } catch (err) {
+    return err && err.message ? err.message : String(err);
   }
 }
 
@@ -162,6 +173,48 @@ check("the gate sentence the console shows is buildable from these numbers alone
     sentence,
     "Not saved: the source-only archive is 41.2 MiB and the limit is 24 MiB."
   );
+});
+
+// ------------------------------------------------- cross-tree mirror (F15) ----
+
+check("the two trees build the same key names for the same session id", () => {
+  for (const id of ["main", "abc", "0", "a-b_c", "x".repeat(MAX_ID_LENGTH)]) {
+    assert.equal(mirror.tarKey(id), tarKey(id), `tarKey(${id}) differs between trees`);
+    assert.equal(mirror.manifestKey(id), manifestKey(id), `manifestKey(${id}) differs`);
+    assert.equal(
+      mirror.workspacePrefix(id),
+      workspacePrefix(id),
+      `workspacePrefix(${id}) differs between trees`
+    );
+  }
+});
+
+check("the mirrored ceilings are the same numbers, not merely the same names", () => {
+  assert.equal(mirror.MAX_KEY_BYTES, MAX_KEY_BYTES);
+  assert.equal(mirror.KV_ENTRY_BYTES, KV_ENTRY_BYTES);
+  assert.equal(mirror.SNAPSHOT_LIMIT_BYTES, SNAPSHOT_LIMIT_BYTES);
+  assert.equal(mirror.MAX_MANIFEST_ENTRIES, MAX_MANIFEST_ENTRIES);
+  assert.equal(mirror.MAX_ID_LENGTH, MAX_ID_LENGTH);
+  assert.equal(mirror.isOverSnapshotLimit(SNAPSHOT_LIMIT_BYTES), isOverSnapshotLimit(SNAPSHOT_LIMIT_BYTES));
+  assert.equal(
+    mirror.isOverSnapshotLimit(SNAPSHOT_LIMIT_BYTES + 1),
+    isOverSnapshotLimit(SNAPSHOT_LIMIT_BYTES + 1)
+  );
+});
+
+check("both guards refuse the same ids, with the same sentence", () => {
+  for (const bad of ["", "a/b", "a\\b", "..", ".", ":", "ws:tar:x", "x".repeat(MAX_ID_LENGTH + 1)]) {
+    const mine = catchError(() => tarKey(bad));
+    const theirs = catchError(() => mirror.tarKey(bad));
+    assert.ok(mine, `the accepted ${JSON.stringify(bad)} in src/workspace-keys.ts`);
+    assert.equal(theirs, mine, `${JSON.stringify(bad)} rejected differently: ${theirs}`);
+  }
+});
+
+check("the mirror formats a size exactly as this tree does", () => {
+  for (const n of [SNAPSHOT_LIMIT_BYTES, Math.round(41.2 * 1024 * 1024), 242 * 1024, 900, 0]) {
+    assert.equal(mirror.formatLimit(n), formatLimit(n), `formatLimit(${n}) differs`);
+  }
 });
 
 // ---------------------------------------------------------------- purity ----

@@ -1,7 +1,24 @@
 // zay-sandbox: E2B microVM command runner on the official SDK
 // (edge-compatible, HTTP envd data plane). Warm session pool via KV.
+//
+// Workspace snapshots live here too: one measured gzip tar per session in the
+// SESSIONS namespace, the logic in ../workspace.ts, which this file adapts to the
+// real SDK. This worker runs arbitrary shell, so the bearer gate fails closed:
+// an unset SBOX_TOKEN must 401 every route rather than compare against the
+// literal string "Bearer undefined".
 
 import { Sandbox } from "e2b";
+import { authed } from "../auth";
+import {
+  dropWorkspace,
+  readArchive,
+  readManifestRecord,
+  restore,
+  snapshot,
+  type KvPort,
+  type SandboxPort,
+} from "../workspace";
+import type { RestoreResult } from "../workspace";
 
 interface Env {
   E2B_API_KEY: string;
@@ -22,6 +39,43 @@ function json(status: number, body: unknown): Response {
   });
 }
 
+// The KV namespace holds two kinds of value: the pool rows (JSON strings, keyed
+// by bare session id) and the workspace archives (raw ArrayBuffers, keyed
+// ws:tar:<id> / ws:man:<id>). Only the second goes through this port, which is
+// why get is pinned to "arrayBuffer" rather than the default text.
+function kvPort(ns: KVNamespace): KvPort {
+  return {
+    async put(key, value, metadata) {
+      await ns.put(key, value, metadata ? { metadata } : undefined);
+    },
+    async get(key) {
+      return (await ns.get(key, "arrayBuffer")) ?? null;
+    },
+    async delete(key) {
+      await ns.delete(key);
+    },
+  };
+}
+
+type RunOpts = Parameters<Sandbox["commands"]["run"]>[1];
+
+function sandboxPort(sbx: Sandbox): SandboxPort {
+  return {
+    commands: {
+      run: async (cmd, opts) => {
+        const r = await sbx.commands.run(cmd, opts as RunOpts);
+        return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode };
+      },
+    },
+    // Pinned against e2b@1.13.2 dist/index.d.ts: read(path, {format:"bytes"})
+    // is the method that yields a Uint8Array, and write takes one.
+    readFile: (path) => sbx.files.read(path, { format: "bytes" }),
+    writeFile: async (path, data) => {
+      await sbx.files.write(path, data);
+    },
+  };
+}
+
 async function createSandbox(key: string): Promise<Sandbox> {
   return Sandbox.create({
     apiKey: key,
@@ -30,11 +84,27 @@ async function createSandbox(key: string): Promise<Sandbox> {
   });
 }
 
-async function poolGet(env: Env, sessionId: string): Promise<Sandbox> {
+async function keepWarm(env: Env, sessionId: string, sandboxId: string): Promise<void> {
+  await env.SESSIONS.put(sessionId, JSON.stringify({ id: sandboxId }), {
+    expirationTtl: POOL_TTL,
+  });
+}
+
+/**
+ * Return a live sandbox for the session, restoring its saved workspace only when
+ * this is a fresh boot. The old code ran the restore inside `try { } catch { }`
+ * and called every failure an absent snapshot, so a truncated archive or a KV
+ * read that had not replicated yet looked exactly like a session nobody ever
+ * saved. The outcome travels back to the caller instead.
+ */
+async function boot(
+  env: Env,
+  sessionId: string
+): Promise<{ sbx: Sandbox; restored: RestoreResult | null }> {
   const hit = (await env.SESSIONS.get(sessionId, "json")) as { id: string } | null;
   if (hit?.id) {
     try {
-      return await Sandbox.connect(hit.id, { apiKey: env.E2B_API_KEY });
+      return { sbx: await Sandbox.connect(hit.id, { apiKey: env.E2B_API_KEY }), restored: null };
     } catch {
       await env.SESSIONS.delete(sessionId);
     }
@@ -50,31 +120,42 @@ async function poolGet(env: Env, sessionId: string): Promise<Sandbox> {
   } catch {
     /* non-fatal: alias is best-effort */
   }
-  // Persistent workspaces: restore the last snapshot into the home dir on a
-  // fresh boot. The home dir always exists, so no mkdir.
-  try {
-    const tar = await env.SESSIONS.get(`ws:tar:${sessionId}`);
-    if (tar) {
-      await sbx.commands.run(
-        `cd ${SANDBOX_HOME} && echo '` + tar + `' | base64 -d | tar xzf -`,
-        { timeoutMs: 30_000 }
-      );
-    }
-  } catch {
-    /* no snapshot yet */
-  }
-  await env.SESSIONS.put(
+  // The home dir always exists, so nothing is mkdir'd. A snapshot that cannot be
+  // restored is reported, never repaired by silently handing the session an
+  // empty directory.
+  const kv = kvPort(env.SESSIONS);
+  const pointer = await readManifestRecord(kv, sessionId);
+  const restored = await restore(
+    sandboxPort(sbx),
+    kv,
     sessionId,
-    JSON.stringify({ id: sbx.sandboxId }),
-    { expirationTtl: POOL_TTL }
+    pointer ? { bytes: pointer.bytes, sha256: pointer.sha256 } : undefined,
+    { home: SANDBOX_HOME }
   );
-  return sbx;
+  await keepWarm(env, sessionId, sbx.sandboxId);
+  return { sbx, restored };
+}
+
+function snapshotStatus(r: { ok: boolean; reason?: string }): number {
+  if (r.ok) return 200;
+  switch (r.reason) {
+    case "too_large":
+      return 413;
+    case "empty":
+      return 200;
+    case "kv_full":
+      return 503;
+    case "write_budget":
+      return 429;
+    default:
+      return 502;
+  }
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (request.headers.get("authorization") !== `Bearer ${env.SBOX_TOKEN}`) {
+    if (!authed(request.headers.get("authorization"), env.SBOX_TOKEN)) {
       return json(401, { error: "unauthorized" });
     }
 
@@ -82,6 +163,8 @@ export default {
       return json(200, { ok: true, service: "zay-sandbox" });
     }
 
+    // Killing a VM is not deleting a user's files: this route touches the pool
+    // row and nothing else.
     if (url.pathname === "/session/kill" && request.method === "POST") {
       const body = (await request.json()) as { sessionId?: string };
       const sid = body.sessionId || "default";
@@ -99,22 +182,89 @@ export default {
     }
 
     if (url.pathname === "/workspace/snapshot" && request.method === "POST") {
-      const body = (await request.json()) as { sessionId?: string };
+      const body = (await request.json()) as { sessionId?: string; priorSha256?: string };
       const sid = body.sessionId || "agent";
       let sbx: Sandbox;
       try {
-        sbx = await poolGet(env, sid);
+        sbx = (await boot(env, sid)).sbx;
       } catch (e) {
-        return json(502, { error: String(e) });
+        return json(502, { error: "boot: " + String(e) });
       }
-      const packed = await sbx.commands.run(
-        `cd ${SANDBOX_HOME} && tar czf - . 2>/dev/null | base64 -w0`,
-        { timeoutMs: 30_000 }
-      );
-      const b64 = (packed.stdout || "").trim();
-      if (!b64) return json(200, { ok: true, bytes: 0, note: "home directory empty" });
-      await env.SESSIONS.put(`ws:tar:${sid}`, b64);
-      return json(200, { ok: true, bytes: Math.floor((b64.length * 3) / 4), sessionId: sid });
+      const r = await snapshot(sandboxPort(sbx), kvPort(env.SESSIONS), sid, {
+        priorSha256: body.priorSha256,
+        home: SANDBOX_HOME,
+      });
+      await keepWarm(env, sid, sbx.sandboxId);
+      return json(snapshotStatus(r), r);
+    }
+
+    if (url.pathname === "/workspace/restore" && request.method === "POST") {
+      const body = (await request.json()) as { sessionId?: string; expectedBytes?: number };
+      const sid = body.sessionId || "agent";
+      const kv = kvPort(env.SESSIONS);
+      let sbx: Sandbox;
+      let r: RestoreResult;
+      try {
+        const booted = await boot(env, sid);
+        sbx = booted.sbx;
+        // A fresh boot already restored; a warm one has not been touched since it
+        // came up, so an explicit call here is what re-reads a snapshot that has
+        // only now replicated.
+        r =
+          booted.restored ??
+          (await restore(
+            sandboxPort(sbx),
+            kv,
+            sid,
+            body.expectedBytes ? { bytes: body.expectedBytes } : undefined,
+            { home: SANDBOX_HOME }
+          ));
+      } catch (e) {
+        return json(502, { error: "boot: " + String(e) });
+      }
+      await keepWarm(env, sid, sbx.sandboxId);
+      return json(r.ok ? 200 : r.reason === "extract_failed" ? 500 : 409, { ...r, sessionId: sid });
+    }
+
+    if (url.pathname === "/workspace/manifest") {
+      const sid = url.searchParams.get("sessionId") || "agent";
+      const record = await readManifestRecord(kvPort(env.SESSIONS), sid);
+      if (!record) {
+        return json(404, { ok: false, reason: "no_snapshot", sessionId: sid });
+      }
+      return json(200, {
+        ok: true,
+        sessionId: sid,
+        files: record.entries,
+        truncated: record.truncated,
+        bytes: record.bytes,
+        rawBytes: record.rawBytes,
+        filesCount: record.filesCount,
+        updatedAt: record.updatedAt,
+        sha256: record.sha256,
+      });
+    }
+
+    if (url.pathname === "/workspace/archive") {
+      const sid = url.searchParams.get("sessionId") || "agent";
+      const archive = await readArchive(kvPort(env.SESSIONS), sid);
+      if (!archive) {
+        return json(409, { ok: false, reason: "no_snapshot", sessionId: sid });
+      }
+      return new Response(archive.body, {
+        headers: {
+          "content-type": "application/gzip",
+          "content-length": String(archive.bytes),
+          "content-disposition": `attachment; filename="workspace-${sid}.tar.gz"`,
+        },
+      });
+    }
+
+    if (url.pathname === "/workspace/forget" && request.method === "POST") {
+      const body = (await request.json()) as { sessionId?: string };
+      const sid = body.sessionId || "agent";
+      const r = await dropWorkspace(kvPort(env.SESSIONS), sid);
+      return json(200, { ok: true, sessionId: sid, deleted: r.deleted });
     }
 
     if (url.pathname === "/run" && request.method === "POST") {
@@ -122,15 +272,12 @@ export default {
       if (!body.cmd) return json(400, { error: "cmd required" });
       const sid = body.sessionId || "default";
       let sbx: Sandbox;
+      let restored: RestoreResult | null;
       try {
-        sbx = await poolGet(env, sid);
+        ({ sbx, restored } = await boot(env, sid));
       } catch (e) {
         return json(502, { error: "boot: " + String(e) });
       }
-      const keepWarm = () =>
-        env.SESSIONS.put(sid, JSON.stringify({ id: sbx.sandboxId }), {
-          expirationTtl: POOL_TTL,
-        });
       // onError swallows the throw on non-zero exit so we can return the real
       // stdout/stderr/exitCode. A command that fails is data, not a worker error.
       try {
@@ -139,13 +286,14 @@ export default {
           cwd: SANDBOX_HOME,
           onError: () => {},
         });
-        await keepWarm();
+        await keepWarm(env, sid, sbx.sandboxId);
         return json(200, {
           stdout: result.stdout ?? "",
           stderr: result.stderr ?? "",
           exitCode: result.exitCode ?? 0,
           sessionId: sid,
           sandboxId: sbx.sandboxId,
+          restore: restored,
         });
       } catch (e) {
         const err = e as { exitCode?: number; stdout?: string; stderr?: string };
@@ -154,19 +302,21 @@ export default {
           err.stdout !== undefined ||
           err.stderr !== undefined
         ) {
-          await keepWarm();
+          await keepWarm(env, sid, sbx.sandboxId);
           return json(200, {
             stdout: err.stdout ?? "",
             stderr: err.stderr ?? "",
             exitCode: err.exitCode ?? 1,
             sessionId: sid,
             sandboxId: sbx.sandboxId,
+            restore: restored,
           });
         }
         return json(502, {
           error: "run: " + String(e),
           sessionId: sid,
           sandboxId: sbx.sandboxId,
+          restore: restored,
         });
       }
     }
