@@ -1374,7 +1374,7 @@ deployed sandbox answers, and stop and say so out loud if it does not.
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/workspace-keys.test.mjs` asserts the two exact key strings, that a `sessionId` with `/` or `..` throws rather than producing a traversable key, and that `workspacePrefix` always ends in exactly one `/`. And that the file's strings are byte-identical to the ones `deploy/sandbox-worker/workspace.ts` builds (import both and compare), that `KV_ENTRY_BYTES` is 25 MiB and `SNAPSHOT_LIMIT_BYTES` is strictly smaller than it, and that a session id needing more than 512 bytes throws rather than producing a key KV will reject.
+`tests/workspace-keys.test.mjs` asserts the two exact key strings, that a `sessionId` with `/` or `..` throws rather than producing a traversable key, and that `workspacePrefix` always ends in exactly one `/`. And that `KV_ENTRY_BYTES` is 25 MiB and `SNAPSHOT_LIMIT_BYTES` is strictly smaller than it, and that a session id needing more than 512 bytes throws rather than producing a key KV will reject. The cross-tree byte-identity pin cannot run here: `deploy/sandbox-worker/workspace.ts` does not exist until Task 27, so Task 26 asserts the agreed literals (`ws:tar:<id>`, `ws:man:<id>`) and Task 27 adds the import-both-and-compare assertion to this same test file (prescan F15). The two trees are separate deploys, so no module may import across them; only the test does.
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -1396,7 +1396,7 @@ git commit -m "P4: KV key scheme with a measured size gate, no new bindings"
 ### Task 27: Snapshot and restore as one gzip tar in KV
 
 **Files:**
-- Modify: `deploy/sandbox-worker/src/index.ts`
+- Modify: `deploy/sandbox-worker/src/index.ts`, `tests/workspace-keys.test.mjs` (the cross-tree pin only)
 - Create: `deploy/sandbox-worker/workspace.ts`
 - Create: `tests/workspace.test.mjs`
 
@@ -1406,7 +1406,7 @@ git commit -m "P4: KV key scheme with a measured size gate, no new bindings"
 
 - [ ] **Step 1: Pin the E2B file API first, then write the test**
 
-`e2b` is declared in `deploy/sandbox-worker/package.json` and installed in neither tree, so installing it is a setup step for this task, not a step inside it: run `npm install` in `deploy/sandbox-worker` and record the resolved version in the commit body. Read that version's TypeScript definitions for the method that reads a sandbox file as bytes (`dist/index.d.ts`, grep `class Filesystem` and `download`). Record the exact name and signature in the commit body. `tests/workspace.test.mjs` then asserts, against fakes: that snapshot measures the tar with `stat` inside the sandbox and returns `reason: "too_large"` plus `bytes`, `limit`, and `biggest` for a payload over `SNAPSHOT_LIMIT_BYTES` (24 MiB) WITHOUT calling `put` and without removing the old key; that a payload over the 25 MiB entry ceiling is therefore unreachable by construction; that `unchanged: true` writes nothing when `priorSha256` matches; that restore with no object returns `{restored: false, reason: "no_snapshot"}`; that restore with a pointer that claims 1200 bytes against a KV read of null or 800 bytes returns `reason: "not_visible_yet"` or `"size_mismatch"` after at most 3 attempts, and never boots an empty workspace while reporting success; and that a manifest of 5000 entries truncates to 1000 with `truncated: true`; and that the sandbox worker's bearer gate fails CLOSED. With `SBOX_TOKEN` unset every route must answer 401 and never compare equal to the literal `Bearer undefined`: `deploy/sandbox-worker/src/index.ts` compares `authorization !== \`Bearer ${env.SBOX_TOKEN}\`` today, which is a fail-open comparison against an unset secret in a worker that runs arbitrary shell (prescan F21), and it is not constant-time. `deploy/sandbox-worker` is a separate deploy and cannot import `src/auth.ts`, so the check is necessarily a second copy; assert the same two properties here that `src/auth.ts`'s `safeEq` and `authed` provide, so the copies cannot drift apart.
+`e2b` is declared in `deploy/sandbox-worker/package.json` and installed in neither tree, so installing it is a setup step for this task, not a step inside it: run `npm install` in `deploy/sandbox-worker` and record the resolved version in the commit body. Read that version's TypeScript definitions for the method that reads a sandbox file as bytes (`dist/index.d.ts`, grep `class Filesystem` and `download`). Record the exact name and signature in the commit body. `tests/workspace.test.mjs` then asserts, against fakes: that snapshot measures the tar with `stat` inside the sandbox and returns `reason: "too_large"` plus `bytes`, `limit`, and `biggest` for a payload over `SNAPSHOT_LIMIT_BYTES` (24 MiB) WITHOUT calling `put` and without removing the old key; that a payload over the 25 MiB entry ceiling is therefore unreachable by construction; that `unchanged: true` writes nothing when `priorSha256` matches; that restore with no object returns `{restored: false, reason: "no_snapshot"}`; that restore with a pointer that claims 1200 bytes against a KV read of null or 800 bytes returns `reason: "not_visible_yet"` or `"size_mismatch"` after at most 3 attempts, and never boots an empty workspace while reporting success; and that a manifest of 5000 entries truncates to 1000 with `truncated: true`; and that the sandbox worker's bearer gate fails CLOSED. With `SBOX_TOKEN` unset every route must answer 401 and never compare equal to the literal `Bearer undefined`: `deploy/sandbox-worker/src/index.ts` compares `authorization !== \`Bearer ${env.SBOX_TOKEN}\`` today, which is a fail-open comparison against an unset secret in a worker that runs arbitrary shell (prescan F21), and it is not constant-time. `deploy/sandbox-worker` is a separate deploy and cannot import `src/auth.ts`, so the check is necessarily a second copy; assert the same two properties here that `src/auth.ts`'s `safeEq` and `authed` provide, so the copies cannot drift apart. Task 27 also adds the deferred cross-tree pin to `tests/workspace-keys.test.mjs`: import `src/workspace-keys.ts` and `deploy/sandbox-worker/workspace.ts` from that one test and assert the two produce identical `ws:tar:<id>` and `ws:man:<id>` strings for the same session id (prescan F15).
 
 - [ ] **Step 2: Run it to make sure it fails**
 
@@ -1421,7 +1421,7 @@ Tar inside the sandbox to `/tmp/ws.tar.gz` with `--sort=name --mtime=@0 --numeri
 Write a file in one session, snapshot, `POST /session/kill` for that session, then in a fresh sandbox list `/home/user` and confirm the file is back. Report the measured gzip bytes, the raw byte total, the file count, the sha256, and the duration; then make a file larger than `SNAPSHOT_LIMIT_BYTES` if you can (a big generated file is enough) and show the `too_large` response with its number in it, which also proves the Task 26 gate runs before the write. Paste both outputs.
 
 ```bash
-git add deploy/sandbox-worker/ tests/workspace.test.mjs
+git add deploy/sandbox-worker/ tests/workspace.test.mjs tests/workspace-keys.test.mjs
 git commit -m "P4: workspace snapshots and restores become one measured gzip tar in KV"
 ```
 
