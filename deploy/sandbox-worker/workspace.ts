@@ -456,7 +456,12 @@ export async function snapshot(
     return {
       ...shape,
       ok: false,
-      reason: classifyKvWriteError(String(err && err.message ? err.message : err)),
+      // `err` is unknown (strict catch typing); `err.message` does not exist on
+      // it, and narrowing `err &&` alone leaves `{}`. Read the message only from
+      // an object that actually carries one, then classify the text.
+      reason: classifyKvWriteError(
+        String(err && typeof err === "object" && "message" in err ? err.message : err)
+      ),
       ms: Date.now() - started,
     };
   }

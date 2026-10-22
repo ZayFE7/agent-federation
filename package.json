@@ -6,7 +6,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "test": "node tests/run-all.mjs"
+    "typecheck:all": "tsc --noEmit -p . && tsc --noEmit -p deploy/router-worker",
+    "test": "node tests/run-all.mjs",
+    "typecheck:sandbox": "tsc --noEmit -p deploy/sandbox-worker"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "3.0.71",
