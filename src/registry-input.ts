@@ -76,3 +76,36 @@ export async function readJson(request: Request): Promise<unknown | null> {
     return null;
   }
 }
+
+/** Ceiling for a model id the console may hand us; router ids are short. */
+export const MAX_MODEL_ID_CHARS = 120;
+
+const MODEL_ID_RE = /^[A-Za-z0-9._:/@+-]+$/;
+
+/**
+ * The console's model picker sends `{model}`. An empty string means CLEAR the
+ * override and go back to the pinned var, and it is the only value accepted as
+ * such: an overlong or oddly-shaped id is a mistake, and quietly clearing one
+ * would run a different model than the user just asked for.
+ */
+export function parseModelId(
+  body: unknown
+): { ok: true; model: string | null } | { ok: false; error: string } {
+  if (typeof body !== "object" || body === null) return { ok: false, error: "body required" };
+  const raw = (body as Record<string, unknown>).model;
+  if (raw === undefined || raw === null) return { ok: false, error: "model required" };
+  if (typeof raw !== "string") return { ok: false, error: "model must be a string" };
+  const value = raw.trim();
+  if (value === "") return { ok: true, model: null };
+  if (value.length > MAX_MODEL_ID_CHARS) {
+    return { ok: false, error: `model is over ${MAX_MODEL_ID_CHARS} characters` };
+  }
+  if (!MODEL_ID_RE.test(value)) return { ok: false, error: "model has unsupported characters" };
+  // A slash separates provider lanes, so every segment has to name something. This
+  // rejects `../etc/passwd` without banning the slash that `cf/@cf/qwen/qwen3.8-27b`
+  // needs, which a character class alone cannot do.
+  if (value.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return { ok: false, error: "model has an empty path segment" };
+  }
+  return { ok: true, model: value };
+}

@@ -121,6 +121,11 @@ export function renameSession(sql: SqlHandle, id: string, title: string): void {
 /**
  * Bump updated_at, and unread as well when opts.unreadDelta is present. A delta
  * of 0 takes the same statement as any other value; only an absent key skips it.
+ *
+ * The no-delta form is the read marker, not just a clock bump: the two callers
+ * that use it are the worker's accepted send and the console opening a chat, and
+ * in both cases the user is looking at that session, so anything queued on it
+ * stops being unread (Task 33).
  */
 export function touchSession(
   sql: SqlHandle,
@@ -129,7 +134,7 @@ export function touchSession(
   opts?: { unreadDelta?: number }
 ): void {
   if (opts?.unreadDelta === undefined) {
-    sql.exec("UPDATE sessions SET updated_at = ? WHERE id = ?", now, id);
+    sql.exec("UPDATE sessions SET updated_at = ?, unread = 0 WHERE id = ?", now, id);
     return;
   }
   sql.exec(

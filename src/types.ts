@@ -131,6 +131,10 @@ export interface AgentStub {
   clearWorkspace(sessionId: string): Promise<void>;
   /** Task 30: remove one file from a live workspace and re-snapshot it. */
   deleteWorkspaceFile(sessionId: string, path: string): Promise<WorkspaceDeleteResult>;
+  /** Console model picker: false means the session id does not belong to this DO. */
+  setModel(sessionId: string, model: string | null): Promise<boolean>;
+  /** Console model picker: the override for this session plus the pinned fallback. */
+  modelChoice(sessionId: string): Promise<{ model: string | null; pinned: string }>;
 }
 
 /**
@@ -185,16 +189,18 @@ export interface RegistryStub {
 }
 
 /**
- * Fallbacks when the wrangler vars are unset. Both ids were measured live on
- * 2026-10-21 against the funnel `ROUTER_URL`: a plain echo and a full tool round
- * trip (tool chosen, tool result fed back, final answer) each returned 200 on
- * both. The cheap lane is `ocf/deepseek-v4.1-flash-free`, NOT `gemini3.8flash`;
- * the user has repeatedly said not to use gemini 3.8 flash, so keep it off this
- * pin. The `ocf/` prefix resolves on the funnel and not on the cloud `zay-router`
- * Worker, so this id is only valid while `ROUTER_URL` is the funnel.
+ * Fallbacks when the wrangler vars are unset. `cf/@cf/qwen/qwen3.8-27b` was
+ * measured live on 2026-10-22 through the funnel `ROUTER_URL`: plain echo 200,
+ * and a full tool round trip 200 with `finish_reason: "tool_calls"` and the
+ * nonce returned in the tool arguments. It replaced the pair that throttled:
+ * `ocf/deepseek-v4.1-flash-free` answers 429 `All credentials ... cooling down`
+ * on the free tier, and that lane carries titles, compaction and `/api/decide`.
+ * `gemini3.7flash` still answers on the funnel and is what the console's model
+ * picker can be switched back to. Both ids resolve ONLY through the funnel;
+ * the cloud `zay-router` Worker 404s `ocf/` and `cf/` prefixed names alike.
  */
-export const DEFAULT_MODEL_PRIMARY = "gemini3.7flash";
-export const DEFAULT_MODEL_CHEAP = "ocf/deepseek-v4.1-flash-free";
+export const DEFAULT_MODEL_PRIMARY = "cf/@cf/qwen/qwen3.8-27b";
+export const DEFAULT_MODEL_CHEAP = "cf/@cf/qwen/qwen3.8-27b";
 
 export interface Env {
   /** HTTPS URL of the Pipedream router workflow. */

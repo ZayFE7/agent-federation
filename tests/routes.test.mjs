@@ -107,6 +107,7 @@ function fakeAgentNamespace() {
   const workspaces = [];
   const clears = [];
   const fileDeletes = [];
+  const models = [];
   const stubs = new Map();
   const ns = {
     names,
@@ -119,12 +120,15 @@ function fakeAgentNamespace() {
     workspaces,
     clears,
     fileDeletes,
+    models,
     reply: { reply: "pong" },
     messageRows: [],
     submitReply: null,
     abortReply: true,
     workspaceReply: { saved: false },
     fileDeleteReply: { ok: true, output: "deleted" },
+    setModelReply: true,
+    modelReply: { model: null, pinned: "gemini3.7flash" },
     idFromName(name) {
       names.push(name);
       return { __sessionName: name, toString: () => `do:${name}` };
@@ -163,6 +167,16 @@ function fakeAgentNamespace() {
           async deleteWorkspaceFile(...args) {
             fileDeletes.push({ name, args, arity: args.length });
             return ns.fileDeleteReply;
+          },
+          // The model picker's two RPCs. One recorder for both, because the route
+          // contract worth pinning is which session id each call carried.
+          async setModel(...args) {
+            models.push({ name, method: "setModel", args, arity: args.length });
+            return ns.setModelReply;
+          },
+          async modelChoice(...args) {
+            models.push({ name, method: "modelChoice", args, arity: args.length });
+            return ns.modelReply;
           },
           async messages(...args) {
             messageCalls.push({ name, args, arity: args.length });
@@ -804,6 +818,124 @@ check("a turn that used the sandbox owes exactly one workspace snapshot", () => 
   );
 });
 
+// ------------------------------------------------------- /api/sessions/:id/model ----
+
+await checkAsync("PUT model lands the id on the session DO and echoes it", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/abc/model", "PUT", { body: JSON.stringify({ model: "cf/x/y" }) }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200, `expected 200, got ${res.status}`);
+  assert.deepEqual(await res.json(), { ok: true, model: "cf/x/y" });
+  assert.deepEqual(world.fed.models, [
+    { name: "abc", method: "setModel", args: ["abc", "cf/x/y"], arity: 2 },
+  ]);
+});
+
+await checkAsync("PUT model with an empty string clears the override, it is not a 400", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/abc/model", "PUT", { body: JSON.stringify({ model: "" }) }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, model: null });
+  assert.deepEqual(world.fed.models[0].args, ["abc", null], "clear means null, never ''");
+});
+
+await checkAsync("PUT model refuses a spacey or overlong id BEFORE addressing the DO", async () => {
+  for (const bad of ["two words", "x".repeat(121), "has\u0000nul", "../etc/passwd"]) {
+    const world = setup();
+    const res = await handleFetch(
+      req("/api/sessions/abc/model", "PUT", { body: JSON.stringify({ model: bad }) }),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 400, `"${bad.slice(0, 12)}" must be a 400, got ${res.status}`);
+    assert.deepEqual(world.fed.models, [], "a rejected id must never reach a DO");
+  }
+});
+
+await checkAsync("PUT model with no body is a 400, not a silent clear", async () => {
+  const world = setup();
+  const res = await handleFetch(req("/api/sessions/abc/model", "PUT", { body: "{}" }), world.env, world.ctx);
+  assert.equal(res.status, 400, "an absent model key is a mistake, not a clear");
+  assert.deepEqual(world.fed.models, []);
+});
+
+await checkAsync("PUT model unauthenticated is 401 and addresses nothing", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/abc/model", "PUT", {
+      headers: {},
+      body: JSON.stringify({ model: "cf/x/y" }),
+    }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 401);
+  assert.deepEqual(world.fed.models, []);
+});
+
+await checkAsync("PUT model on an id with no registry row is 404 with no DO addressed", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/nosuch/model", "PUT", { body: JSON.stringify({ model: "cf/x/y" }) }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 404);
+  assert.deepEqual(world.fed.addressed, [], "gate 3 before gate 4");
+});
+
+await checkAsync("PUT model when the DO says the id is not its session is 403", async () => {
+  const fed = fakeAgentNamespace();
+  fed.setModelReply = false;
+  const world = setup({ agent: fed });
+  const res = await handleFetch(
+    req("/api/sessions/abc/model", "PUT", { body: JSON.stringify({ model: "cf/x/y" }) }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 403, "a wrong-scope write must not answer ok");
+});
+
+await checkAsync("GET model returns the override and the pinned fallback together", async () => {
+  const fed = fakeAgentNamespace();
+  fed.modelReply = { model: "cf/x/y", pinned: "gemini3.7flash" };
+  const world = setup({ agent: fed });
+  const res = await handleFetch(req("/api/sessions/abc/model"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, model: "cf/x/y", pinned: "gemini3.7flash" });
+  assert.deepEqual(world.fed.models[0].args, ["abc"]);
+});
+
+// --------------------------------------------------- /api/sessions/:id/read ----
+
+await checkAsync("POST read drains the badge with a no-delta touch", async () => {
+  const world = setup();
+  const res = await handleFetch(req("/api/sessions/abc/read", "POST"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+  assert.deepEqual(world.registry.calls, [["exists", "abc"], ["touch", "abc", undefined]]);
+});
+
+await checkAsync("POST read on an id with no registry row is 404 and touches nothing", async () => {
+  const world = setup();
+  const res = await handleFetch(req("/api/sessions/nosuch/read", "POST"), world.env, world.ctx);
+  assert.equal(res.status, 404);
+  assert.deepEqual(world.registry.touchCalls ?? [], [], "the existence gate runs before the write");
+});
+
+await checkAsync("GET read is not a route: a drain writes, so it must be a POST", async () => {
+  const world = setup();
+  const res = await handleFetch(req("/api/sessions/abc/read"), world.env, world.ctx);
+  assert.equal(res.status, 404);
+});
+
 // ------------------------------------------------------- agentStubFor (R38) ----
 
 check("agentStubFor resolves the bare id as the DO name, with no prefix", () => {
@@ -1113,7 +1245,7 @@ await checkAsync("an accepted submit touches the registry once with (id, undefin
   assert.deepEqual(
     world.registry.touchCalls,
     [["abc", undefined]],
-    "touch(id) with NO opts: bumps updated_at only, and unread is a later phase"
+    "touch(id) with NO opts: the store clears unread in that same statement (Task 33)"
   );
   await Promise.all(world.promised);
   assert.equal(world.promised.length, 1, "the touch went through ctx.waitUntil, exactly once (amendment 5)");

@@ -20,7 +20,7 @@ import type {
   WorkspaceDeleteResult,
   WorkspaceState,
 } from "./types";
-import { DEFAULT_MODEL_CHEAP } from "./types";
+import { DEFAULT_MODEL_CHEAP, DEFAULT_MODEL_PRIMARY } from "./types";
 import {
   EXPECTED_TOOLS,
   SANDBOX_HOME,
@@ -32,12 +32,14 @@ import {
   dueTasks,
   enqueueTask,
   ensureSchema,
+  getModelOverride,
   listTasks,
   logMessage,
   nextDailyDue,
   recall,
   recentMessages,
   remember,
+  setModelOverride,
   type MemoryRow,
   type MessageRow,
   type SqlHandle,
@@ -59,6 +61,7 @@ import { summarizeConversation } from "./compact";
 import { runInSandbox } from "./sandbox-client";
 import { searchParallel as searchParallelWeb } from "./search-client";
 import { parseDirective } from "./directives";
+import { createPrimaryModel } from "./provider";
 import { buildHarness } from "./harness";
 import { MAX_STEPS_CHAT } from "./harness-config";
 import { Researcher } from "./child";
@@ -104,6 +107,15 @@ import {
 interface TitleRegistry {
   get(id: string): Promise<{ title: string } | null>;
   rename(id: string, title: string): Promise<void>;
+}
+
+/**
+ * The same DO row seen from a fired job: only the badge write. Its shape matches
+ * `RegistryAgent.touch`, and a DO RPC stub is cast to the narrow interface it uses
+ * because a missing method should fail here rather than at the call site.
+ */
+interface BadgeRegistry {
+  touch(id: string, opts?: { unreadDelta?: number }): Promise<void>;
 }
 
 /** One stashed user turn, consumed by the matching onTurnEnd. */
@@ -297,6 +309,17 @@ export class FederationAgent extends Agent<Env> {
     if (!operationId || operationId.includes(":")) return;
     if (frames.length === 0) return;
     this.hub.feed(streamId, sessionId, frames);
+  }
+
+  /**
+   * The one dereference of the registry namespace. Two callers, the title fiber and
+   * the fired-job badge, and a second copy of the idFromName line is how a stub
+   * address drifts away from the guard that pins it (R48).
+   */
+  private registryStub<T>(): T {
+    return this.env.REGISTRY.get(
+      this.env.REGISTRY.idFromName("registry")
+    ) as unknown as T;
   }
 
   /**
@@ -832,8 +855,12 @@ export class FederationAgent extends Agent<Env> {
         memories = [];
       }
     }
+    // The console's picker can put this session on another model id. Unset means
+    // follow the worker's pinned var, so a cleared session still runs.
+    const override = getModelOverride(this.db(), turn.session);
     return {
       system: buildSystemPrompt(memories, capabilitiesText(EXPECTED_TOOLS), SANDBOX_HOME),
+      ...(override ? { model: createPrimaryModel(this.env, override) } : {}),
     };
   }
 
@@ -908,9 +935,7 @@ export class FederationAgent extends Agent<Env> {
     try {
       void this.runFiber("title", async () => {
         try {
-          const registry = this.env.REGISTRY.get(
-            this.env.REGISTRY.idFromName("registry")
-          ) as unknown as TitleRegistry;
+          const registry = this.registryStub<TitleRegistry>();
 
           const before = await registry.get(id);
           if (!before || before.title !== PLACEHOLDER_TITLE) return;
@@ -1152,6 +1177,15 @@ export class FederationAgent extends Agent<Env> {
         // than inheriting an unscoped undefined (Task 8, R46).
         const result = await this.chat(instructions, "cheap", MAIN_DO_NAME);
         remember(sql, "task-done", `Task #${task.id} (${task.title}) result: ${result.reply.slice(0, 800)}`, 3);
+        // Task 33: the reply is in main's transcript, and a badge is the only way
+        // anyone finds out without the console already open. Its own failure is not
+        // the job's failure, so it is swallowed here rather than reaching the catch
+        // below and recording a run that actually succeeded as failed.
+        try {
+          await this.registryStub<BadgeRegistry>().touch(MAIN_DO_NAME, { unreadDelta: 1 });
+        } catch {
+          // No REGISTRY binding or an RPC miss: the result is still stored.
+        }
       } catch (err) {
         // A failed run must not kill a recurring schedule; record it and re-arm below.
         remember(sql, "error", `Task #${task.id} failed: ${String(err)}`, 3);
@@ -1392,6 +1426,25 @@ export class FederationAgent extends Agent<Env> {
    * `overLimit` can warn a user who has never had a snapshot, without the tab
    * claiming a restore is possible.
    */
+  /**
+   * Per-session model override for the console's picker. A scope failure returns
+   * false instead of throwing, because a thrown value crossing a DO RPC arrives
+   * in another realm where `instanceof` cannot match it (src/session-scope.ts).
+   */
+  async setModel(sessionId: string, model: string | null): Promise<boolean> {
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return false;
+    setModelOverride(this.db(), sessionId, model);
+    return true;
+  }
+
+  async modelChoice(sessionId: string): Promise<{ model: string | null; pinned: string }> {
+    const pinned = this.env.MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY;
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
+      return { model: null, pinned };
+    }
+    return { model: getModelOverride(this.db(), sessionId), pinned };
+  }
+
   async workspaceState(sessionId: string): Promise<WorkspaceState> {
     const empty: WorkspaceState = {
       saved: false,

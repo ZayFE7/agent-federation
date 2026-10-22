@@ -54,6 +54,11 @@ export function createCheapModel(env: Env): LanguageModel {
   return createRouterModel(env, env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP);
 }
 
-export function createPrimaryModel(env: Env): LanguageModel {
-  return createRouterModel(env, env.MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY);
+/**
+ * The harness lane. `modelId` is the console's per-session pick; an empty or
+ * absent override falls back to the pinned var, so clearing a choice can never
+ * leave a turn with no model.
+ */
+export function createPrimaryModel(env: Env, modelId?: string | null): LanguageModel {
+  return createRouterModel(env, modelId || (env.MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY));
 }

@@ -82,6 +82,12 @@ export function ensureSchema(sql: SqlHandle): void {
   // surfaces the newest few, so old ones never age out). Prune that backlog: a
   // served one-off is status='done' with no recurrence. Runs once per isolate.
   sql.exec(`DELETE FROM tasks WHERE status = 'done' AND recurrence IS NULL`);
+  // One model override per session, in this DO's own SQLite: `beforeTurn` runs
+  // before every step, so the read must be local rather than a hop to another DO.
+  sql.exec(`CREATE TABLE IF NOT EXISTS model_overrides (
+    session_id TEXT PRIMARY KEY,
+    model TEXT NOT NULL
+  )`);
 }
 
 function escapeLike(value: string): string {
@@ -182,4 +188,30 @@ export function nextDailyDue(hh: number, mm: number, fromMs: number): number {
   next.setUTCHours(hh, mm, 0, 0);
   if (next.getTime() <= fromMs) next.setUTCDate(next.getUTCDate() + 1);
   return next.getTime();
+}
+
+/** `null` clears the override so the session follows the worker's pinned var. */
+export function setModelOverride(
+  sql: SqlHandle,
+  sessionId: string,
+  model: string | null
+): void {
+  if (model === null) {
+    sql.exec("DELETE FROM model_overrides WHERE session_id = ?", sessionId);
+    return;
+  }
+  sql.exec(
+    "INSERT INTO model_overrides (session_id, model) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET model = excluded.model",
+    sessionId,
+    model
+  );
+}
+
+export function getModelOverride(sql: SqlHandle, sessionId: string): string | null {
+  return (
+    sql.exec<{ model: string }>(
+      "SELECT model FROM model_overrides WHERE session_id = ?",
+      sessionId
+    ).results[0]?.model ?? null
+  );
 }

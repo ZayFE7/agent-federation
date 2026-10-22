@@ -25,6 +25,8 @@
 //   GET    /api/sessions/:id/workspace/files  the KV manifest, proxied from zay-sandbox
 //   GET    /api/sessions/:id/workspace/archive  the gzip tar, as a named download
 //   DELETE /api/sessions/:id/workspace/files/<path>  { ok, output }
+//   GET    /api/sessions/:id/model             { ok, model, pinned }   (console picker)
+//   PUT    /api/sessions/:id/model             { ok, model }           ("" clears)
 //
 // Every one of them 401s when `authed()` fails and 400s on a malformed body. A shape
 // the family does not serve, including a wrong method on a shape it does, is 404.
@@ -129,7 +131,7 @@
 // Task 8 (R75), and why ./workspace-keys joined them in Task 30: that module imports
 // NOTHING either, which is the property its own test pins. A sixth value import has to
 // clear that rule first.
-import { idFromSegment, limitFrom, readJson } from "./registry-input.ts";
+import { idFromSegment, limitFrom, parseModelId, readJson } from "./registry-input.ts";
 import { PLACEHOLDER_TITLE } from "./registry-store.ts";
 import { isSessionId } from "./session-scope.ts";
 import { safeWorkspacePath } from "./workspace-keys.ts";
@@ -257,8 +259,9 @@ async function readTranscript(env: Env, id: string, search: URLSearchParams): Pr
  * A refusal carrying `code: "invalid_session"` is a DO that refused work outside
  * its own session (Task 8) and answers 403. It is NOT activity, so the registry
  * `touch` is skipped (R71 amendment 2). An accepted submit bumps updated_at and
- * nothing else, because the list is `ORDER BY pinned DESC, updated_at DESC`
- * (R54). The touch goes through `ctx.waitUntil` (R71 amendment 5): the receipt is
+ * clears unread, because the list is `ORDER BY pinned DESC, updated_at DESC`
+ * (R54) and writing into a chat is reading it (Task 33). The touch goes through
+ * `ctx.waitUntil` (R71 amendment 5): the receipt is
  * already paid for, and an awaited registry RPC could cost the caller a receipt
  * for a turn that is already durable.
  */
@@ -396,7 +399,28 @@ async function sandboxForget(env: Env, sessionId: string): Promise<boolean> {
 }
 
 /**
- * The pointer row, read through the DO. Local SQLite, so this answers even when the
+ * The model picker's write. A refusal from the DO means the id did not address
+ * this DO's own session, which is the same shape the workspace reads use, so it
+ * answers 403 rather than pretending the choice landed on another chat.
+ */
+async function writeSessionModel(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const parsed = parseModelId(await readJson(request));
+  if (!parsed.ok) return fail(400, parsed.error);
+  if (!(await agentStubFor(env, id).setModel(id, parsed.model))) {
+    return fail(403, "wrong session");
+  }
+  return json({ ok: true, model: parsed.model });
+}
+
+async function readSessionModel(env: Env, id: string): Promise<Response> {
+  return json({ ok: true, ...(await agentStubFor(env, id).modelChoice(id)) });
+}
+
+/** The pointer row, read through the DO. Local SQLite, so this answers even when the
  * sandbox and KV are both down, which is the whole reason the row exists (the byte
  * count and the ceiling are what a Files tab has to show before a save fails).
  */
@@ -603,6 +627,25 @@ export async function handleFetch(
     if (sub === "abort" && request.method === "POST") {
       if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
       return abortSession(request, env, id);
+    }
+    // The model picker. Same existence gate as the transcript: an id with no
+    // registry row must not instantiate a DO just to be told about its model.
+    if (sub === "model" && request.method === "PUT") {
+      if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+      return writeSessionModel(request, env, id);
+    }
+    if (sub === "model" && request.method === "GET") {
+      if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+      return readSessionModel(env, id);
+    }
+    // Task 33: opening a chat in the console is what clears its badge. A POST, not a
+    // GET, because this writes the row, and not folded into /messages, because that
+    // read is also what a background poll does, and a poll must not silently mark a
+    // chat the person never looked at as read.
+    if (sub === "read" && request.method === "POST") {
+      if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+      await registryStubFor(env).touch(id);
+      return json({ ok: true });
     }
     return fail(404, "not found");
   }

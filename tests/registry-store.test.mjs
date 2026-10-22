@@ -223,11 +223,11 @@ check("renameSession sets the title by id and reports no affected-row count", ()
   assert.deepEqual(bindings, ["Renamed", "abc123"]);
 });
 
-check("touchSession without a delta moves updated_at only", () => {
+check("touchSession without a delta bumps updated_at and clears unread (Task 33)", () => {
   const sql = newFake();
   assert.equal(touchSession(sql, "abc123", 5000), undefined);
   const [query, bindings] = onlyStmt(sql);
-  assert.equal(query, "UPDATE sessions SET updated_at = ? WHERE id = ?");
+  assert.equal(query, "UPDATE sessions SET updated_at = ?, unread = 0 WHERE id = ?");
   assert.deepEqual(bindings, [5000, "abc123"]);
 });
 
@@ -239,7 +239,7 @@ check("touchSession with an unreadDelta moves updated_at and unread in one state
   assert.deepEqual(bindings, [6000, 3, "abc123"]);
 });
 
-check("touchSession reads a negative delta the same way, so unread can be cleared", () => {
+check("touchSession reads a negative delta the same way, so the column can move down", () => {
   const sql = newFake();
   touchSession(sql, "abc123", 7000, { unreadDelta: -4 });
   assert.deepEqual(onlyStmt(sql)[1], [7000, -4, "abc123"]);
@@ -257,7 +257,7 @@ check("touchSession keeps the delta form for an explicit zero, so 0 is not read 
 check("touchSession treats an empty options object as no delta", () => {
   const sql = newFake();
   touchSession(sql, "abc123", 9000, {});
-  assert.equal(onlyStmt(sql)[0], "UPDATE sessions SET updated_at = ? WHERE id = ?");
+  assert.equal(onlyStmt(sql)[0], "UPDATE sessions SET updated_at = ?, unread = 0 WHERE id = ?");
 });
 
 check("deleteSession removes by id and reports no affected-row count", () => {
