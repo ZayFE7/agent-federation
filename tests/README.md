@@ -1,11 +1,11 @@
 # tests/
 
-Thirty offline, framework-free test files live here, all run by `npm test`. Beside them are the
+Thirty-one offline, framework-free test files live here, all run by `npm test`. Beside them are the
 runner, one shared fixture, and three live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
-30 such files.
+31 such files.
 
 ## How the suite runs
 
@@ -78,6 +78,17 @@ Proves the capability copy a user reads has one source (`src/capabilities.ts`) a
 into a second hand-written list: it flags unhedged future-tense promises in shipped UI text, a tool
 name claimed by the agent but absent from `EXPECTED_TOOLS`, the same sentence maintained in two files,
 a description that no longer matches the code, and any em dash in that copy.
+
+### observability.test.mjs
+Executes `src/observability.ts`, the per-turn span helper, and drives `tracedTurn` against a fake
+`Tracing`/`Span` pair. Pins that a turn's span carries `blip.session.id` and `blip.operation.id` as
+string attributes, that tracing stays off unless the deployment has a key AND the caller asked (the
+`X-Blip-Trace: 1` header, which `src/routes.ts` reads and hands to the DO as `submitTurn`'s fourth
+argument, since an RPC turn has no request of its own), that the span is opened once and ended once
+whether the turn returned or threw, and that a span the runtime dropped costs no attribute writes.
+Cannot prove a real Cloudflare trace exists: the platform `tracing` object is faked here. The
+route-side half of the gate is pinned by `submit.test.mjs` and `routes.test.mjs` instead, which
+record the argument the fake DO actually received.
 
 ### paths.test.mjs
 Pins the sandbox home to one constant and refuses to let any source still promise a directory the

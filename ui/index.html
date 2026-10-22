@@ -47,7 +47,7 @@ button,input{font:inherit;color:inherit}button{cursor:pointer}:focus-visible{out
 .who.big .av{transform:scale(2.7) translateY(10px)}.who.big .avc{clip-path:none}.who.big .ring,.who.big .nm,.who.big .pill{opacity:0}
 .pk{position:absolute;inset:0;z-index:7;background:color-mix(in srgb,var(--bg) 72%,transparent);backdrop-filter:blur(10px);opacity:0;pointer-events:none;transition:opacity .4s}.pk.on{opacity:1;pointer-events:auto}
 .run{display:flex;gap:8px;align-items:center;border:1px solid var(--ln);background:var(--s1);box-shadow:var(--sh1);border-radius:99px;padding:9px 14px;font-weight:700;font-size:13px}.run i{width:8px;height:8px;border-radius:50%;background:var(--t);animation:pls 1s infinite}
-.mps{border:1px solid var(--ln);background:var(--s1);box-shadow:var(--sh1);border-radius:99px;padding:9px 12px;font-weight:700;font-size:12px;color:inherit;max-width:184px;text-overflow:ellipsis}
+.mps{border:1px solid var(--ln);background:var(--s1);box-shadow:var(--sh1);border-radius:99px;padding:9px 12px;font-weight:700;font-size:12px;color:inherit;max-width:220px;text-overflow:ellipsis}
 .scr{flex:1;overflow:auto;padding:8px 16px 170px;scrollbar-width:none}.scr::-webkit-scrollbar{display:none}
 .thr,.pgw{width:100%;max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:10px}
 .dv{align-self:center;font-size:12.5px;color:var(--mu);font-weight:600;margin:2px 0 4px}
@@ -505,8 +505,11 @@ if(also&&j.workspace!=="deleted")alert("The chat is deleted. Its files are not, 
 function setKey(){const k=prompt("Agent API key (stored in this browser only):");if(!k||!k.trim())return;localStorage.setItem("blip_key",k.trim());bootLoad()}
 // Model picker: one override per chat, stored by the agent, so a swap survives a
 // reload and a different browser. "Pinned" means no override: the worker's var.
-const MODS=["cf/@cf/qwen/qwen3.8-27b","gemini3.7flash","ocf/deepseek-v4.1-flash-free"];
-function renderModel(){const s=$("mps");if(!s)return;if(!state.sessionId){s.hidden=true;return}const v=state.model||"";s.hidden=false;s.innerHTML='<option value="">Model: pinned ('+esc(state.pinned||"?")+")</option>"+MODS.map(m=>'<option value="'+esc(m)+'">'+esc(m)+"</option>").join("")+(v&&MODS.indexOf(v)<0?'<option value="'+esc(v)+'">'+esc(v)+"</option>":"")+'<option value="__x">Type another id...</option>';s.value=v}
+const MODS=["cf/@cf/qwen/qwen3.8-27b"];
+// The id is long enough that the pill would ellipsis before the model name, which is
+// the only part a reader needs at a glance; the full id stays in the tooltip.
+const shortId=m=>{const s=String(m||"");const i=s.lastIndexOf("/");return i<0?s:s.slice(i+1)};
+function renderModel(){const s=$("mps");if(!s)return;if(!state.sessionId){s.hidden=true;return}const v=state.model||"";s.hidden=false;s.innerHTML='<option value="" title="'+esc(state.pinned||"")+'">Pinned: '+esc(shortId(state.pinned)||"?")+"</option>"+MODS.map(m=>'<option value="'+esc(m)+'" title="'+esc(m)+'">'+esc(m)+"</option>").join("")+(v&&MODS.indexOf(v)<0?'<option value="'+esc(v)+'" title="'+esc(v)+'">'+esc(v)+"</option>":"")+'<option value="__x">Type another id...</option>';s.value=v}
 async function loadModel(id){try{const r=await api("/api/sessions/"+id+"/model");const j=await r.json();if(state.sessionId!==id)return;state.model=j.ok?(j.model||""):state.model||"";state.pinned=j.pinned||"";renderModel()}catch(e){}}
 async function pickModel(v){const id=state.sessionId;if(!id)return;let m=v;if(v==="__x"){const t=prompt("Model id exactly as your router knows it. Blank uses the pinned default.");if(t===null){renderModel();return}m=t.trim()}try{const r=await api("/api/sessions/"+id+"/model",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({model:m})});const j=await r.json();if(!j.ok){renderModel();alert(j.error||"The agent refused that model id.");return}state.model=j.model||"";renderModel()}catch(e){renderModel()}}
 async function bootLoad(){if(!hasKey())return;await loadSessions();loadTasks();loadCaps();const ids=state.sessions.map(s=>s.id),stored=localStorage.getItem("blip.session");const id=(stored&&ids.includes(stored))?stored:(ids.includes("main")?"main":ids[0]);if(id)await openSession(id);else{state.sessionId=null;localStorage.removeItem("blip.session");render()}}

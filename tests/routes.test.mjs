@@ -398,10 +398,14 @@ check("src/routes.ts is importable offline: no non-type import of ./agent or age
 // file at import time rather than in the scan. R75 makes the allow-list explicit, so
 // a fifth value import is a decision someone has to write down here. `./session-scope`
 // joined the list in Task 8 because that module imports nothing at all (R47), which
-// the check below re-states from the other side.
+// the check below re-states from the other side. `./observability` joined in Task 38
+// for the same reason and no other: it is import-free by construction (its Span and
+// Tracing names are type positions only), and the route is the last place a Request
+// exists, so the `X-Blip-Trace` half of the gate has to be read here.
 check("src/routes.ts value-imports exactly the dependency-free allow-list (R75)", () => {
   const ALLOWED = new Set([
     "./auth",
+    "./observability",
     "./registry-input",
     "./registry-store",
     "./session-scope",
@@ -1198,7 +1202,14 @@ await checkAsync("POST /api/sessions/abc/message submits to the abc DO and retur
 // addresses, and once as submitTurn's third argument, which is the only way the DO
 // can check the claim. Drop the third argument and src/agent.ts's guard becomes
 // dead code and the 403 unreachable.
-await checkAsync("the submit calls submitTurn(content, tier, sessionId) with three arguments (R65)", async () => {
+//
+// R65 AMENDED (Task 38): the list grew a fourth argument, the trace flag, and the
+// session id stayed where it was rather than staying last. What R65 protects is that
+// the id is PRESENT and positional, so the DO can compare it against the name it was
+// addressed by; "last" was a consequence of there being nothing after it, not the
+// rule. The alternative, tracing every authenticated turn, is the cost the header
+// half of the gate exists to avoid.
+await checkAsync("the submit calls submitTurn(content, tier, sessionId, trace) with four arguments (R65 amended)", async () => {
   const world = setup();
   await handleFetch(
     req("/api/sessions/abc/message", "POST", {
@@ -1208,20 +1219,21 @@ await checkAsync("the submit calls submitTurn(content, tier, sessionId) with thr
     world.ctx
   );
   const call = world.fed.submits[0];
-  assert.equal(call.arity, 3, "submitTurn grows exactly the session id, in last position");
-  assert.deepEqual(call.args, ["say pong", "cheap", "abc"]);
+  assert.equal(call.arity, 4, "submitTurn carries the session id and the trace flag, and nothing else");
+  assert.deepEqual(call.args, ["say pong", "cheap", "abc", false]);
   assert.equal(call.args[2], "abc", "the id handed to submitTurn is the id the route addressed");
+  assert.equal(call.args[3], false, "no X-Blip-Trace header means the DO opens no span");
 });
 
-await checkAsync("an absent or unknown tier is passed through as undefined, still three arguments", async () => {
+await checkAsync("an absent or unknown tier is passed through as undefined, still four arguments", async () => {
   const world = setup();
   await handleFetch(
     req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "hello" }) }),
     world.env,
     world.ctx
   );
-  assert.equal(world.fed.submits[0].arity, 3);
-  assert.deepEqual(world.fed.submits[0].args, ["hello", undefined, "abc"]);
+  assert.equal(world.fed.submits[0].arity, 4);
+  assert.deepEqual(world.fed.submits[0].args, ["hello", undefined, "abc", false]);
   assert.equal(world.fed.submits[0].args[1], undefined, "no tier means undefined, the same rule src/index.ts:82");
 });
 

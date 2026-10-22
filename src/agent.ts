@@ -1,4 +1,5 @@
 import { Agent, type Connection } from "agents";
+import { tracing } from "cloudflare:workers";
 import { classifyContextOverflow } from "agents/harness/think";
 import type {
   ThinkHarness,
@@ -21,6 +22,7 @@ import type {
   WorkspaceState,
 } from "./types";
 import { DEFAULT_MODEL_CHEAP, DEFAULT_MODEL_PRIMARY } from "./types";
+import { tracedTurn, turnTracing } from "./observability";
 import {
   EXPECTED_TOOLS,
   SANDBOX_HOME,
@@ -196,6 +198,13 @@ export class FederationAgent extends Agent<Env> {
   /** The running operation per session, so tool progress lands on its stream. */
   private readonly currentOp = new Map<string, string>();
   /**
+   * Operation ids whose caller asked for a trace (Task 38). A sub-agent's turn is a
+   * turn too and the plan wants it spanned, but the child is a separate DO with no
+   * request to read, so the opt-in travels with the operation id instead. Cleared
+   * where `currentOp` is, so a finished turn leaves nothing behind.
+   */
+  private readonly tracedOps = new Set<string>();
+  /**
    * Sessions this isolate has already run a command for. It only decides whether
    * to warn that a workspace may have to be rebuilt, so a wrong answer costs one
    * extra line of progress, never a wrong file: the sandbox pool lives in the
@@ -257,6 +266,7 @@ export class FederationAgent extends Agent<Env> {
     if (this.currentOp.get(session) === ev.status.operationId) {
       this.currentOp.delete(session);
     }
+    this.tracedOps.delete(ev.status.operationId);
     const streamId = streamIdFor(session, ev.status.operationId);
     if (ev.status.status === "done") {
       this.hub.finish(streamId, session, ev.status.text ?? "");
@@ -563,7 +573,8 @@ export class FederationAgent extends Agent<Env> {
   async submitTurn(
     content: string,
     tier: ChatTier | undefined,
-    sessionId: string
+    sessionId: string,
+    trace: boolean
   ): Promise<TurnReceipt | TurnRefusal> {
     if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
       return { code: "invalid_session" };
@@ -590,10 +601,23 @@ export class FederationAgent extends Agent<Env> {
     }
 
     this.stashTurn(sessionId, { content, tier: chatTier });
+    if (trace) this.tracedOps.add(operationId);
     try {
-      const receipt = await this.harness.session(sessionId).submit(content, {
-        source: "server",
+      // The span on this lane marks the submit, not the model: the harness runs a
+      // durably submitted turn from its own job queue, and one span cannot span two
+      // invocations without the truncation the SDK's tracing surface warns about. The
+      // two ids still key it, so the queue's own spans hang off the same pair.
+      // `trace` is the caller's header answer, so ordinary traffic pays for nothing.
+      const receipt = await tracedTurn({
+        tracing: trace ? turnTracing(this.env, tracing) : undefined,
+        agent: "FederationAgent",
+        sessionId,
         operationId,
+        run: () =>
+          this.harness.session(sessionId).submit(content, {
+            source: "server",
+            operationId,
+          }),
       });
       return { operationId: receipt.operationId, streamId };
     } catch (err) {
@@ -651,6 +675,10 @@ export class FederationAgent extends Agent<Env> {
     // observer that only reacts to run-start would race the async open().
     const opId = crypto.randomUUID();
     await this.hub.open(streamIdFor(session, opId), session);
+    // No span on this lane, and that is not an oversight: `chat` is reached only from
+    // the WebSocket handler and the alarm tick, and neither carries a request, so
+    // nothing here could have answered the `X-Blip-Trace` gate (Task 38). Tracing it
+    // unconditionally would span ordinary traffic the gate exists to leave alone.
     const result = await this.harness.session(session).prompt(content, {
       source: "server",
       operationId: opId,
@@ -1317,6 +1345,7 @@ export class FederationAgent extends Agent<Env> {
         parentSessionId: session,
         parentStreamId: streamIdFor(session, operationId),
         parentCallId: input.parentCallId,
+        trace: this.tracedOps.has(operationId),
       });
       return report.text;
     } finally {

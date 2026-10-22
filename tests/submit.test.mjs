@@ -112,8 +112,8 @@ await checkAsync("the accepted send returns the receipt and never waits on the t
     "both ids come straight from the DO, and no reply text is invented here"
   );
   assert.equal(w.submits.length, 1, "the send reaches the DO exactly once");
-  assert.equal(w.submits[0].arity, 3, "submitTurn(content, tier, sessionId)");
-  assert.deepEqual(w.submits[0].args, ["hello", undefined, "abc"]);
+  assert.equal(w.submits[0].arity, 4, "submitTurn(content, tier, sessionId, trace)");
+  assert.deepEqual(w.submits[0].args, ["hello", undefined, "abc", false]);
   assert.deepEqual(w.names, ["abc"]);
   assert.deepEqual(w.addressed, ["abc"]);
   assert.deepEqual(
@@ -129,6 +129,28 @@ await checkAsync("the accepted send returns the receipt and never waits on the t
     ["touch-start", "abc"],
     ["touch-done", "abc"],
   ]);
+});
+
+await checkAsync("X-Blip-Trace opt-in reaches the DO and ordinary sends stay untraced", async () => {
+  for (const [header, expected] of [
+    [undefined, false],
+    ["0", false],
+    ["1", true],
+  ]) {
+    const w = world();
+    const headers = { authorization: "Bearer k" };
+    if (header !== undefined) headers["X-Blip-Trace"] = header;
+    const req = new Request("https://blip.test/api/sessions/abc/message", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content: "hello" }),
+    });
+    const res = await handleFetch(req, w.env, w.ctx);
+    assert.equal(res.status, 200, `header ${String(header)}`);
+    assert.equal(w.submits[0].args[3], expected, `header ${String(header)}`);
+    w.releaseTouch();
+    await w.promised[0];
+  }
 });
 
 await checkAsync("tier is forwarded when it is known and dropped when it is not", async () => {

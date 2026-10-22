@@ -26,6 +26,7 @@
 // list, not about this file.
 
 import { Agent } from "agents";
+import { tracing } from "cloudflare:workers";
 import { classifyContextOverflow } from "agents/harness/think";
 import type { ThinkHarness, ThinkSessionEvent } from "agents/harness/think";
 import type { ToolSet } from "ai";
@@ -44,6 +45,7 @@ import { runInSandbox } from "./sandbox-client";
 import { searchParallel } from "./search-client";
 import { buildTools, type ToolDeps } from "./tools";
 import type { Env } from "./types";
+import { tracedTurn, turnTracing } from "./observability";
 
 /**
  * One delegated task, exactly as the parent's `delegate` tool hands it over
@@ -60,6 +62,12 @@ export interface ChildRun {
   parentStreamId: string;
   /** The parent's `delegate` tool-call id, the card the child reports onto. */
   parentCallId: string;
+  /**
+   * Whether the parent's caller asked for a trace (Task 38). A child is a Durable
+   * Object of its own with no request to read, so the opt-in arrives with the work
+   * instead. Unset means no, which is what an ordinary send produces.
+   */
+  trace?: boolean;
 }
 
 /**
@@ -137,13 +145,25 @@ export class Researcher extends Agent<Env> {
       typeof input.focus === "string" && input.focus.trim()
         ? `\nFocus: ${input.focus.trim()}`
         : "";
+    // A child is not a session, so its turn is keyed by the PARENT's session id: that
+    // is the session a reader looks a delegated turn up under (Task 38). The operation
+    // id is the child's own, which is what separates it from the parent's span.
+    const sessionId = input.parentSessionId;
+    const operationId = crypto.randomUUID();
     try {
-      const result = await this.harness
-        .session(this.name)
-        .prompt(`Task: ${goal}${focus}`, {
-          source: "server",
-          operationId: crypto.randomUUID(),
-        });
+      const result = await tracedTurn({
+        tracing: input.trace ? turnTracing(this.env, tracing) : undefined,
+        agent: "Researcher",
+        sessionId,
+        operationId,
+        run: () =>
+          this.harness
+            .session(this.name)
+            .prompt(`Task: ${goal}${focus}`, {
+              source: "server",
+              operationId,
+            }),
+      });
       if (result.status !== "done") {
         throw new Error(
           `the sub-agent ended ${result.status}${

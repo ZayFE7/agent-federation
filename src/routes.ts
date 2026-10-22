@@ -7,8 +7,8 @@
 // plus dependency-free modules only (R39), and takes both DO namespaces from the
 // `env` argument instead of the classes they are bound to.
 //
-// WHAT IT OWNS (R42): the twelve shapes below and nothing else. `/api/tasks`,
-// `/api/approve`, `/api/decide`, the WebSocket upgrade and the six
+// WHAT IT OWNS (R42): the fifteen shapes below and nothing else. `/api/tasks`,
+// `/api/approve`, `/api/decide`, the WebSocket upgrade and the five
 // `/internal/vault/*` handlers keep their existing addressing in src/index.ts;
 // src/index.ts delegates here on the `/api/sessions` prefix only. `/api/plan` is
 // removed by Task 15, not by this file.
@@ -27,6 +27,7 @@
 //   DELETE /api/sessions/:id/workspace/files/<path>  { ok, output }
 //   GET    /api/sessions/:id/model             { ok, model, pinned }   (console picker)
 //   PUT    /api/sessions/:id/model             { ok, model }           ("" clears)
+//   POST   /api/sessions/:id/read              { ok }                  (Task 33, drains the badge)
 //
 // Every one of them 401s when `authed()` fails and 400s on a malformed body. A shape
 // the family does not serve, including a wrong method on a shape it does, is 404.
@@ -136,6 +137,7 @@ import { PLACEHOLDER_TITLE } from "./registry-store.ts";
 import { isSessionId } from "./session-scope.ts";
 import { safeWorkspacePath } from "./workspace-keys.ts";
 import { authed, tokenOk } from "./auth.ts";
+import { shouldTrace } from "./observability.ts";
 import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
 import type { AgentStub, ChatTier, Env, RegistryStub } from "./types";
@@ -277,7 +279,14 @@ async function submitMessage(
   }
   const tier: ChatTier | undefined =
     body.tier === "primary" || body.tier === "cheap" ? body.tier : undefined;
-  const receipt = await agentStubFor(env, id).submitTurn(body.content, tier, id);
+  // The header half of the trace gate lives here because this is the last place a
+  // Request exists: an RPC turn inside the DO has none to read (Task 38).
+  const receipt = await agentStubFor(env, id).submitTurn(
+    body.content,
+    tier,
+    id,
+    shouldTrace(request, env)
+  );
   if ("code" in receipt) {
     return fail(403, "invalid session");
   }

@@ -49,6 +49,19 @@
   "triggers": {
     "crons": ["*/10 * * * *"]
   },
+  // Tracing (plan Task 38). Without this block the platform drops every span, so the
+  // `tracing.startActiveSpan` calls in src/observability.ts would report nothing and
+  // `span.isTraced` would read false on every turn. The rate is 1 because the only
+  // spans this worker opens are the ones a caller asked for with `X-Blip-Trace: 1`.
+  //
+  // redact_query_string is NOT a preference here. The SSE stream shape accepts
+  // `?token=` because EventSource cannot set an Authorization header, so an
+  // unredacted query string would copy a bearer token into the trace store.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "redact_query_string": true
+  },
   // Public vars (non-secret). Replace ROUTER_URL with your trigger URL.
   // Local dev: .dev.vars overrides these for the keys it defines.
   // RENDER_URL is added after the Render service has its public URL.

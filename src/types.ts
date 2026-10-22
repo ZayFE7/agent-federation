@@ -103,11 +103,16 @@ export interface TurnRefusal {
 export interface AgentStub {
   /** The DO's own HTTP entry: WS upgrades and internal routes such as /internal/stream. */
   fetch(request: Request): Promise<Response>;
-  /** Durably submit one turn and return its stream id without awaiting the model (Task 23). */
+  /**
+   * Durably submit one turn and return its stream id without awaiting the model
+   * (Task 23). `trace` is the caller's answer to the `X-Blip-Trace` gate: the DO
+   * cannot read a header off an RPC call, so the route decides and says so.
+   */
   submitTurn(
     content: string,
     tier: ChatTier | undefined,
-    sessionId: string
+    sessionId: string,
+    trace: boolean
   ): Promise<TurnReceipt | TurnRefusal>;
   /** Stop one operation, or everything open in a session; false when nothing matched. */
   abortTurn(sessionId: string, operationId?: string): Promise<boolean>;

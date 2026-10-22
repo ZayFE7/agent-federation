@@ -2,8 +2,8 @@
 
 BLIP is a personal AI agent built entirely on free, no-card tiers: a Cloudflare Worker brain,
 one Durable Object per session with SQLite behind it, and a single-file web console served from
-the same Worker. The model gets four tools, `exec`, `web_search`, `schedule_task`,
-`save_workspace`, and runs inside one `ThinkHarness` loop from the `agents` SDK. Scheduled jobs
+the same Worker. The model gets five tools, `exec`, `web_search`, `schedule_task`,
+`save_workspace`, `delegate`, and runs inside one `ThinkHarness` loop from the `agents` SDK. Scheduled jobs
 fire from a self-rearming alarm.
 
 There is no build step and no framework. `ui/index.html` is plain DOM and one `EventSource`.
@@ -24,12 +24,12 @@ The frames union is the console's whole vocabulary: `text`, `reasoning`, `tool-s
 
 | Path | What it owns |
 |---|---|
-| `src/index.ts` | The non-session HTTP surface: `/health`, `/api/tasks`, `/api/approve`, `/api/decide`, six `/internal/vault/*` handlers, and the WebSocket upgrade. Delegates `/api/sessions*` to `src/routes.ts` |
-| `src/routes.ts` | The twelve `/api/sessions*` shapes, four of them workspace ones. The only part of the worker's HTTP surface an offline test can drive |
+| `src/index.ts` | The non-session HTTP surface: `/health`, `/api/tasks`, `/api/approve`, `/api/decide`, five `/internal/vault/*` handlers, and the WebSocket upgrade. Delegates `/api/sessions*` to `src/routes.ts` |
+| `src/routes.ts` | The fifteen `/api/sessions*` shapes, four of them workspace ones. The only part of the worker's HTTP surface an offline test can drive |
 | `src/agent.ts` | `FederationAgent`, the per-session DO: the harness turn path, directives, memory, scheduled jobs, approvals, workspace snapshotting, the alarm tick |
 | `src/registry.ts` + `registry-store.ts` + `registry-input.ts` | `RegistryAgent`, the session index the sidebar reads |
 | `src/harness.ts` + `harness-config.ts` | The one `ThinkHarness` instance and its options object (12 steps, recovery `{2, 1000, 120000}`, compact after 80 000 tokens) |
-| `src/tools.ts` + `capabilities.ts` | The four tool definitions and the one table every capability claim renders from |
+| `src/tools.ts` + `capabilities.ts` | The five tool definitions and the one table every capability claim renders from |
 | `src/approval.ts` + `guardrails.ts` | The gate: only `exec` can be held, and only when the command text looks risky |
 | `src/directives.ts` | `run:` / `exec:` / `execute:` / `search:`, the deterministic paths that bypass the model entirely |
 | `src/frames.ts` + `stream-hub.ts` | The wire vocabulary and the durable per-operation buffer that survives a mid-turn eviction |
@@ -44,9 +44,10 @@ The frames union is the console's whole vocabulary: `text`, `reasoning`, `tool-s
 
 ## HTTP surface
 
-Twelve session shapes are listed at the top of `src/routes.ts`: the eight the family had through
-Phase 3, plus Task 30's `GET .../workspace`, `GET .../workspace/files`, `GET .../workspace/archive`
-and `DELETE .../workspace/files/<path>`. The rest, from `src/index.ts`:
+Fifteen session shapes are listed at the top of `src/routes.ts`: the eight the family had through
+Phase 3, Task 30's four workspace shapes (`GET .../workspace`, `GET .../workspace/files`,
+`GET .../workspace/archive`, `DELETE .../workspace/files/<path>`), Task 33's `POST .../read`, and
+the per-chat picker's `GET` and `PUT .../model`. The rest, from `src/index.ts`:
 
 | Route | Auth | Returns |
 |---|---|---|
