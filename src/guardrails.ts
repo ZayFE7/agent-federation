@@ -15,6 +15,8 @@
 export function isRisky(cmd: string): boolean {
   const c = (cmd || "").toLowerCase();
   if (!c.trim()) return false;
+  // An unclosed quote hides everything after it from the windowed patterns below.
+  if (endsInsideAQuote(c)) return true;
   // NOTE: every literal below is lowercase because `c` is lowercased first.
   const patterns: RegExp[] = [
     // destructive filesystem / disk
@@ -47,6 +49,43 @@ export function isRisky(cmd: string): boolean {
     /\bcurl\b[^|;&]*-x\s*post\b[^|;&]*(send|charge|pay|order|purchase)/,
     // system file writes
     />\s*\/etc\//, /\btee\s+\/etc\//,
+    // a -c/-e payload is program text, invisible to every shell pattern above
+    /\b(python[23]?|node|perl|ruby|php|bash|zsh|ksh|dash|sh)\b[^|;&]*\s(-c\b|-e\b|--eval\b)/,
+    // decoded payload: what the shell finally ran never appeared in this string
+    /\bbase64\b[^|;&]*\s(-d\b|--decode\b)[\s\S]*\|\s*(sudo\s+)?((ba|z|k|da)?sh|eval|python[23]?|node|perl|ruby|xargs)\b/,
+    /\beval\s+\S/,
+    // exfiltration: an outbound request carrying a local file body, or local data piped into one
+    /\b(curl|wget)\b[^|;&]*\s(-f\b|--form[a-z_-]*\b|--data-binary\b|--upload-file\b|--post-file\b)/,
+    /\b(curl|wget)\b[^|;&]*\s(-d\b|--data[a-z_-]*\b|-f\b|--form[a-z_-]*\b)\s*\S*[@~]/,
+    /\|\s*(curl|wget)\b/,
   ];
-  return patterns.some((re) => re.test(c));
+  if (patterns.some((re) => re.test(c))) return true;
+  return runsADownloadedFile(c);
+}
+
+// The pipe-to-shell rule stops at the first ; & or |, so download-then-run is two harmless fragments.
+function runsADownloadedFile(c: string): boolean {
+  if (!/\b(curl|wget)\b/.test(c)) return false;
+  // a staged artifact is reached by path; a bare filename in the cwd is a different shape
+  const runsAStagedFile: RegExp[] = [
+    /\bchmod\b[^|;&]*\+x/,
+    /\b(ba|z|k)?sh\s+\.{0,2}\/\S+/,
+    /\b(python[23]?|node|perl|ruby)\s+\.{0,2}\/\S+/,
+    /\bsource\s+\.{0,2}\/\S+/,
+    /(^|[;&|]\s*)\.{0,2}\/\S+/,
+  ];
+  return runsAStagedFile.some((re) => re.test(c));
+}
+
+// A quote left open makes the rest of the command unreadable, so it cannot be cleared.
+function endsInsideAQuote(c: string): boolean {
+  let quote = "";
+  for (let i = 0; i < c.length; i++) {
+    const ch = c[i];
+    if (ch === "\\" && quote !== "'") i++;
+    else if (quote === "") {
+      if (ch === '"' || ch === "'") quote = ch;
+    } else if (ch === quote) quote = "";
+  }
+  return quote !== "";
 }

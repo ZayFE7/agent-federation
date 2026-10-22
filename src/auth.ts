@@ -48,3 +48,21 @@ export function tokenOk(request: Request, url: URL, env: Env): boolean {
   const query = (url.searchParams.get("token") ?? "").trim();
   return query.length > 0 && safeEq(query, key);
 }
+
+/**
+ * The gate for the Durable Object vault routes (`/internal/vault/*`), which push
+ * and pull the 9router sqlite blobs. Those are addressed by STATE_KEY, a separate
+ * secret from AGENT_API_KEY, so they need their own check: reaching the DO direct
+ * bypasses `authed`. Header only, no `?token=` exception, because a vault write is
+ * not an EventSource. Fails CLOSED and never throws: an unset/blank STATE_KEY
+ * rejects everything, so a `Bearer ${STATE_KEY}` template can never bake in the
+ * literal string "undefined" and compare against it. Returns a boolean.
+ */
+export function vaultAuthed(request: Request, env: Env): boolean {
+  const key = (env.STATE_KEY ?? "").trim();
+  if (!key) return false;
+  const got = (request.headers.get("Authorization") ?? "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  return safeEq(got, key);
+}

@@ -2,7 +2,7 @@ import { FederationAgent } from "./agent";
 import { RegistryAgent } from "./registry";
 import { Researcher } from "./child";
 import { fetchRouter } from "./router";
-import { authed, safeEq } from "./auth";
+import { authed, safeEq, vaultAuthed } from "./auth";
 import { MAIN_DO_NAME, isSessionId } from "./session-scope";
 import { EXPECTED_TOOLS, capabilityList } from "./capabilities";
 import { handleFetch } from "./routes";
@@ -192,12 +192,10 @@ export default {
     }
 
     // ---- State vault (9router container sync) ----
-    const vaultAuthed =
-      request.headers.get("Authorization") === `Bearer ${env.STATE_KEY}` &&
-      env.STATE_KEY.length > 0;
-
+    // Gated by STATE_KEY via vaultAuthed (Task 35), evaluated lazily inside each
+    // branch below so a non-vault request never touches that secret.
     if (url.pathname === "/internal/vault/push" && request.method === "POST") {
-      if (!vaultAuthed) {
+      if (!vaultAuthed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       let body: { key?: string; idx?: number; total?: number; dataB64?: string };
@@ -220,7 +218,7 @@ export default {
     }
 
     if (url.pathname === "/internal/vault/chunk" && request.method === "GET") {
-      if (!vaultAuthed) {
+      if (!vaultAuthed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const key = url.searchParams.get("key");
@@ -242,7 +240,7 @@ export default {
     }
 
     if (url.pathname === "/internal/vault/pull" && request.method === "GET") {
-      if (!vaultAuthed) {
+      if (!vaultAuthed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const key = url.searchParams.get("key");
@@ -262,7 +260,7 @@ export default {
     }
 
     if (url.pathname === "/internal/vault/health" && request.method === "GET") {
-      if (!vaultAuthed) {
+      if (!vaultAuthed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const key = url.searchParams.get("key");
@@ -274,7 +272,7 @@ export default {
     }
 
     if (url.pathname === "/internal/vault" && request.method === "DELETE") {
-      if (!vaultAuthed) {
+      if (!vaultAuthed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const key = url.searchParams.get("key");
