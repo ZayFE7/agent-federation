@@ -8,6 +8,14 @@
 /** Longest title this parser aims for, counted in codepoints, not UTF-16 units. */
 export const TITLE_MAX_CHARS = 40;
 
+/**
+ * Completion ceiling for the title call. Reasoning counts against it: at 60 the
+ * qwen pin returned `content: null` with `finish_reason: "length"` because the
+ * reasoning field consumed the whole budget, and only at 300 did the title
+ * arrive after 206 completion tokens. 512 keeps headroom for a longer think.
+ */
+export const TITLE_MAX_TOKENS = 512;
+
 /** How many characters of the user's first turn the title prompt receives. */
 const FIRST_MESSAGE_CHARS = 300;
 

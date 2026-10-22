@@ -50,7 +50,7 @@ import {
 import { toSqlHandle, type SqlTag } from "./sql-handle";
 import { MAIN_DO_NAME, assertSessionScope, sessionScopeOk } from "./session-scope";
 import { PLACEHOLDER_TITLE } from "./registry-store";
-import { parseTitle, titleMessages } from "./titles";
+import { TITLE_MAX_TOKENS, parseTitle, titleMessages } from "./titles";
 import {
   ensureVaultSchema,
   vaultDelete as vaultDeleteChunks,
@@ -976,7 +976,7 @@ export class FederationAgent extends Agent<Env> {
               {
                 model: this.env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP,
                 messages: titleMessages(firstMessage),
-                max_tokens: 60,
+                max_tokens: TITLE_MAX_TOKENS,
               },
               false,
               AbortSignal.timeout(20_000)

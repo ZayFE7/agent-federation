@@ -8,7 +8,8 @@
 // which is exactly the case a UTF-16 `slice(0, 40)` would split in half.
 
 import assert from "node:assert/strict";
-import { TITLE_SYSTEM, parseTitle, titleMessages } from "../src/titles.ts";
+import { readFileSync } from "node:fs";
+import { TITLE_MAX_TOKENS, TITLE_SYSTEM, parseTitle, titleMessages } from "../src/titles.ts";
 
 const ASTRAL = "\u{1F680}";
 
@@ -102,6 +103,22 @@ check("TITLE_SYSTEM pins the format the parser depends on", () => {
     TITLE_SYSTEM.includes('{"title":"..."}'),
     "TITLE_SYSTEM does not name the JSON object form"
   );
+});
+
+// ---- the completion budget ----
+
+check("TITLE_MAX_TOKENS leaves room for reasoning before content", () => {
+  assert.ok(Number.isInteger(TITLE_MAX_TOKENS), "TITLE_MAX_TOKENS is not an integer");
+  assert.ok(
+    TITLE_MAX_TOKENS >= 256,
+    `TITLE_MAX_TOKENS is ${TITLE_MAX_TOKENS}; qwen spent all 60 on reasoning and returned null content`
+  );
+});
+
+check("agent.ts spends TITLE_MAX_TOKENS rather than a small literal", () => {
+  const src = readFileSync(new URL("../src/agent.ts", import.meta.url), "utf8");
+  assert.match(src, /max_tokens: TITLE_MAX_TOKENS\b/);
+  assert.doesNotMatch(src, /max_tokens: 60\b/);
 });
 
 if (failures.length > 0) {
