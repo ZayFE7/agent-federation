@@ -81,7 +81,9 @@ check("each memory is truncated to 400 chars", () => {
 
 check("the prompt carries the persona, the hard rule and the home", () => {
   assert.match(prompt, /You are Blip/);
-  assert.match(prompt, /Never reply with a plan; act/);
+  assert.match(prompt, /say in one short sentence what you are about to do/);
+  assert.match(prompt, /take it in the same turn instead of ending with a promise/);
+  assert.match(prompt, /Never reply with a plan instead of acting/);
   assert.match(prompt, /Your sandbox home is \/home\/user/);
 });
 

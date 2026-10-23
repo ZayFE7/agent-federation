@@ -1,11 +1,11 @@
 # tests/
 
-Thirty-one offline, framework-free test files live here, all run by `npm test`. Beside them are the
+Thirty-two offline, framework-free test files live here, all run by `npm test`. Beside them are the
 runner, one shared fixture, and four live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
-31 such files.
+32 such files.
 
 ## How the suite runs
 
@@ -41,7 +41,17 @@ id). `src/child.ts` is not importable offline, so it is tested through the seams
 
 ### context.test.mjs
 Asserts every capability claim renders from the one table in `src/capabilities.ts` and that memory
-sits after the tool guidance in the assembled system prompt. Does not model the runtime prompt.
+sits after the tool guidance in the assembled system prompt, including the work rule that asks for a
+one-line preamble before the first tool call and forbids ending a turn on a promise. Does not model
+the runtime prompt.
+
+### continuation.test.mjs
+Contract tests for `src/continuation.ts`, the loop's completion guard: it catches a final sentence
+that promises an action ("I'll rerun that part"), a present-progressive one ("I'm checking..."), and
+an explicit "not yet", while refusing questions, offers, completed answers, and replies from turns
+that used no tool. Also pins the two-retry gate, the silent-stop rule, and the server-authored
+continuation instruction. Does not run a model; the live probe in `07-verification.md` is the
+end-to-end evidence.
 
 ### fake-sql.test.mjs
 Contract test for the `fake-sql.mjs` fixture: statement order, the reply log, `rows.slice()` copy
@@ -50,6 +60,7 @@ no affected-row count (the platform cursor has none, R37). Proves the fixture, n
 
 ### frames.test.mjs
 Tests the wire vocabulary in `src/frames.ts`: the tool-to-widget table, the chunk-to-frame mapping,
+the persisted-message mapping (a parked approval and a finished tool result both survive as frames),
 and the one-line SSE encoding. Does not render anything; the console is separate.
 
 ### guardrails.test.mjs

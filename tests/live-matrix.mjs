@@ -434,15 +434,19 @@ const SCENARIOS = [
           apiKey,
           signal
         );
-        const starts = frames.filter((f) => f.t === "tool-start" && f.name === "delegate");
-        const results = frames.filter(
-          (f) => f.t === "tool-result" && starts.some((s) => s.id === f.id)
+        const startIds = new Set(
+          frames.filter((f) => f.t === "tool-start" && f.name === "delegate").map((f) => f.id)
         );
-        if (starts.length < 2) throw new Error(`delegate tool-start frames: ${starts.length}`);
-        if (results.length < 2) {
-          throw new Error(`delegate tool-result frames: ${results.length} for ${starts.length} starts`);
+        const resultIds = new Set(
+          frames.filter((f) => f.t === "tool-result" && startIds.has(f.id)).map((f) => f.id)
+        );
+        if (startIds.size < 2) throw new Error(`delegate calls started: ${startIds.size}`);
+        if (resultIds.size < 2) {
+          throw new Error(`delegate calls finished: ${resultIds.size} of ${startIds.size}`);
         }
-        const reports = results.map((r) => String(r.output ?? ""));
+        const reports = [...resultIds].map((id) =>
+          String(frames.find((f) => f.t === "tool-result" && f.id === id)?.output ?? "")
+        );
         if (!reports.every((r) => /reported:/i.test(r))) {
           throw new Error(
             `a delegate result did not carry a child report; outputs: ${JSON.stringify(reports.map((r) => r.slice(0, 220)))}`
@@ -450,7 +454,7 @@ const SCENARIOS = [
         }
         return {
           ok: true,
-          detail: `${starts.length} delegate starts, ${results.length} results, first report ${JSON.stringify(reports[0].slice(0, 100))}`,
+          detail: `${startIds.size} delegate calls, ${resultIds.size} reports, first report ${JSON.stringify(reports[0].slice(0, 100))}`,
         };
       } finally {
         await cleanupSessions(ids, apiKey);
@@ -481,9 +485,13 @@ const SCENARIOS = [
         if (/step limit|too many steps|maximum steps|round limit/i.test(blob)) {
           throw new Error("the turn hit a step limit");
         }
-        const execStarts = frames.filter((f) => f.t === "tool-start" && f.name === "exec").length;
-        if (execStarts < 10) throw new Error(`only ${execStarts} exec calls in the turn`);
-        return { ok: true, detail: `${execStarts} exec calls in one turn, no step-limit string` };
+        // Each call emits two tool-start frames (input-start plus
+        // input-available), so count distinct ids, not frames.
+        const execCalls = new Set(
+          frames.filter((f) => f.t === "tool-start" && f.name === "exec").map((f) => f.id)
+        ).size;
+        if (execCalls < 10) throw new Error(`only ${execCalls} exec calls in the turn`);
+        return { ok: true, detail: `${execCalls} exec calls in one turn, no step-limit string` };
       } finally {
         await cleanupSessions(ids, apiKey);
       }

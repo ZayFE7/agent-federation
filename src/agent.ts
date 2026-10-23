@@ -24,6 +24,12 @@ import type {
 import { DEFAULT_MODEL_CHEAP, DEFAULT_MODEL_PRIMARY } from "./types";
 import { tracedTurn, turnTracing } from "./observability";
 import {
+  CONTINUATION_NUDGE,
+  NO_SUMMARY,
+  continuationInstruction,
+  shouldContinue,
+} from "./continuation";
+import {
   EXPECTED_TOOLS,
   SANDBOX_HOME,
   buildSystemPrompt,
@@ -204,6 +210,20 @@ export class FederationAgent extends Agent<Env> {
    * where `currentOp` is, so a finished turn leaves nothing behind.
    */
   private readonly tracedOps = new Set<string>();
+  /** Operations whose turn used a tool, keyed by the root op of the turn. */
+  private readonly rootUsedTools = new Set<string>();
+  /**
+   * Continuation operations mapped to the stream their caller is already
+   * reading. `continue()` starts a NEW operation, so without this map its
+   * frames would land on a stream nobody has open while the console waits on
+   * the root one.
+   */
+  private readonly continuationOps = new Map<
+    string,
+    { rootOp: string; rootStream: string; session: string; started: number }
+  >();
+  /** Continuation ops that need the "act, do not restate" nudge on their first step. */
+  private readonly continuationNudgeOps = new Set<string>();
   /**
    * Sessions this isolate has already run a command for. It only decides whether
    * to warn that a workspace may have to be rebuilt, so a wrong answer costs one
@@ -265,19 +285,99 @@ export class FederationAgent extends Agent<Env> {
       "operationId" in ev && typeof ev.operationId === "string"
         ? ev.operationId
         : this.currentOp.get(session);
+    if (eventOp && frames.some((f) => f.t === "tool-start")) {
+      this.rootUsedTools.add(this.rootOpFor(eventOp));
+    }
     if (frames.length > 0 && eventOp) {
-      this.hub.feed(streamIdFor(session, eventOp), session, frames);
+      this.hub.feed(this.streamForOp(session, eventOp), session, frames);
     }
     if (ev.type !== "operation") return;
     if (this.currentOp.get(session) === ev.status.operationId) {
       this.currentOp.delete(session);
     }
     this.tracedOps.delete(ev.status.operationId);
-    const streamId = streamIdFor(session, ev.status.operationId);
+    const operationId = ev.status.operationId;
+    const cont = this.continuationOps.get(operationId);
+    const rootOp = cont?.rootOp ?? operationId;
+    const streamId = cont?.rootStream ?? streamIdFor(session, operationId);
     if (ev.status.status === "done") {
-      this.hub.finish(streamId, session, ev.status.text ?? "");
+      const text = ev.status.text ?? "";
+      if (
+        shouldContinue({
+          status: "done",
+          text,
+          usedTools: this.rootUsedTools.has(rootOp),
+          continuations: cont?.started ?? 0,
+          isContinuation: Boolean(cont),
+        })
+      ) {
+        this.startContinuation(session, rootOp, streamId, cont?.started ?? 0, text);
+        return;
+      }
+      const finalText = text.trim() || (this.rootUsedTools.has(rootOp) ? NO_SUMMARY : "");
+      this.clearContinuation(rootOp);
+      this.hub.finish(streamId, session, finalText);
     } else if (ev.status.status === "unanswered") {
+      this.clearContinuation(rootOp);
       this.hub.fail(streamId, ev.status.reason ?? "operation ended without an answer");
+    }
+  }
+
+  /** The stream a reader is watching for this operation (a continuation inherits the root's). */
+  private streamForOp(session: string, operationId: string): string {
+    return this.continuationOps.get(operationId)?.rootStream ?? streamIdFor(session, operationId);
+  }
+
+  /** The operation a continuation belongs to, or the operation itself for a root turn. */
+  private rootOpFor(operationId: string): string {
+    return this.continuationOps.get(operationId)?.rootOp ?? operationId;
+  }
+
+  /**
+   * Start one bounded continuation after a turn ended on a promise. The new
+   * operation's frames are routed to the root's still-open stream, so the
+   * console sees one continuous turn. The model is nudged in `beforeTurn`,
+   * because `continue()` carries no user message.
+   */
+  private startContinuation(
+    session: string,
+    rootOp: string,
+    rootStream: string,
+    started: number,
+    promise: string
+  ): void {
+    const operationId = crypto.randomUUID();
+    this.continuationOps.set(operationId, {
+      rootOp,
+      rootStream,
+      session,
+      started: started + 1,
+    });
+    this.continuationNudgeOps.add(operationId);
+    // `continue()` re-runs the model with no new input, and a reasoning model
+    // tends to answer that with silence. A server-authored instruction gives it
+    // an actual next step. It lives in the harness transcript only: the console
+    // reads display rows, so this never appears as a user message.
+    const instruction = continuationInstruction(promise);
+    queueMicrotask(() => {
+      void this.harness
+        .session(session)
+        .submit(instruction, { source: "server", operationId })
+        .catch((err: unknown) => {
+          console.error(`continuation failed: ${err instanceof Error ? err.stack : String(err)}`);
+          this.clearContinuation(rootOp);
+          this.hub.fail(rootStream, `continuation failed: ${String(err).slice(0, 200)}`);
+        });
+    });
+  }
+
+  /** Drop every in-memory record for one root turn. */
+  private clearContinuation(rootOp: string): void {
+    this.rootUsedTools.delete(rootOp);
+    for (const [op, rec] of this.continuationOps) {
+      if (rec.rootOp !== rootOp) continue;
+      this.continuationOps.delete(op);
+      this.continuationNudgeOps.delete(op);
     }
   }
 
@@ -285,7 +385,7 @@ export class FederationAgent extends Agent<Env> {
   private emitToolProgress(session: string, toolCallId: string, p: ToolProgress): void {
     const operationId = this.currentOp.get(session);
     if (!operationId) return;
-    this.hub.feed(streamIdFor(session, operationId), session, [
+    this.hub.feed(this.streamForOp(session, operationId), session, [
       {
         t: "tool-progress",
         id: toolCallId,
@@ -647,11 +747,30 @@ export class FederationAgent extends Agent<Env> {
         // stop more faithfully than the harness result below.
       }
     }
+    // A continuation is a separate operation on the root's stream; stopping the
+    // turn must stop it too, or Stop would leave the retry running unseen.
+    const rootStream = operationId ? this.streamForOp(sessionId, operationId) : undefined;
+    const extra = [...this.continuationOps.entries()].filter(
+      ([, rec]) => rec.session === sessionId && (!rootStream || rec.rootStream === rootStream)
+    );
+    let stopped = false;
     try {
-      return await this.harness.session(sessionId).abort(operationId);
+      stopped = await this.harness.session(sessionId).abort(operationId);
     } catch {
-      return false;
+      stopped = false;
     }
+    for (const [op] of extra) {
+      try {
+        if (await this.harness.session(sessionId).abort(op)) stopped = true;
+      } catch {
+        // A finished continuation needs no abort.
+      }
+    }
+    if (stopped) {
+      if (operationId) this.clearContinuation(this.rootOpFor(operationId));
+      else for (const [, rec] of extra) this.clearContinuation(rec.rootOp);
+    }
+    return stopped;
   }
 
   /**
@@ -892,8 +1011,15 @@ export class FederationAgent extends Agent<Env> {
     // The console's picker can put this session on another model id. Unset means
     // follow the worker's pinned var, so a cleared session still runs.
     const override = getModelOverride(this.db(), turn.session);
+    const base = buildSystemPrompt(memories, capabilitiesText(EXPECTED_TOOLS), SANDBOX_HOME);
+    // `continue()` has no user message, so the first step of a continuation is
+    // told in the system prompt what its own last message failed to do.
+    const system =
+      turn.step === 0 && this.continuationNudgeOps.has(turn.operationId)
+        ? `${base}\n\n${CONTINUATION_NUDGE}`
+        : base;
     return {
-      system: buildSystemPrompt(memories, capabilitiesText(EXPECTED_TOOLS), SANDBOX_HOME),
+      system,
       ...(override ? { model: createPrimaryModel(this.env, override) } : {}),
     };
   }
@@ -1357,7 +1483,7 @@ export class FederationAgent extends Agent<Env> {
         goal: input.goal,
         focus: input.focus,
         parentSessionId: session,
-        parentStreamId: streamIdFor(session, operationId),
+        parentStreamId: this.streamForOp(session, operationId),
         parentCallId: input.parentCallId,
         trace: this.tracedOps.has(operationId),
       });

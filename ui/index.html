@@ -338,6 +338,7 @@ const hasKey=()=>!!key();
 let KEYBAD=false,KEYASK=false,KEYWARNED=false;
 const api=async(path,init={})=>{const h=Object.assign({},init.headers,{authorization:"Bearer "+key()});const r=await fetch(path,Object.assign({},init,{headers:h}));if(r.status===401&&!KEYWARNED){KEYWARNED=true;setKey("That key was rejected. Paste the current agent key.")}return r};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function toolCmd(f){const raw=String(f.input||"");if(!raw)return"";try{const j=JSON.parse(raw);return String(j.cmd||j.query||j.title||j.instructions||j.goal||raw)}catch(e){return raw}}
 const md=s=>{let x=esc(s),tok=[],tokInl=[];
 x=x.replace(/```[\s\S]*?```/g,m=>{tok.push("<pre><code>"+m.replace(/^```[^\n]*\n?/,"").replace(/\n?```$/,"").replace(/\n$/,"")+"</code></pre>");return"\u0000"+(tok.length-1)+"\u0000"});
 x=x.replace(/`([^`\n]+)`/g,(m,c)=>{tokInl.push("<code>"+c+"</code>");return"\u0000I"+(tokInl.length-1)+"\u0000"});
@@ -429,17 +430,18 @@ function slots(){let thr=$("thr");if(!thr){$("scr").innerHTML='<div class="thr" 
 function mk(tag,cls,html){const n=document.createElement(tag);if(cls)n.className=cls;if(html!=null)n.innerHTML=html;return n}
 function teardown(){const L=LIVE;if(!L)return;clearTimeout(L.timer);clearTimeout(L.esTimer);if(L.es){L.es.onerror=null;L.es.onmessage=null;L.es.close()}if(L.working&&L.working.parentNode)L.working.remove();LIVE=null}
 function saveLive(){const L=LIVE;if(!L||!L.streamId)return;try{localStorage.setItem(LIVE_KEY,JSON.stringify({sessionId:L.sessionId,streamId:L.streamId,operationId:L.operationId,at:Date.now()}))}catch(e){}}
-function beginLive(sid){teardown();const s=slots();const work=mk("div","wr",'<span class="tpk"><i></i><i></i><i></i></span><span>Working</span><button type="button" onclick="stopTurn()">Stop</button>');s.lv.appendChild(work);LIVE={sessionId:sid,operationId:null,streamId:null,text:"",node:null,working:work,host:s.lv,cw:s.cw,tools:new Map(),timer:0,es:null,esTimer:0,parked:false};busy=true;cur="think";upd()}
+function beginLive(sid){teardown();const s=slots();const work=mk("div","wr",'<span class="tpk"><i></i><i></i><i></i></span><span>Working</span><button type="button" onclick="stopTurn()">Stop</button>');s.lv.appendChild(work);LIVE={sessionId:sid,operationId:null,streamId:null,text:"",seg:"",node:null,working:work,host:s.lv,cw:s.cw,tools:new Map(),timer:0,es:null,esTimer:0,parked:false};busy=true;cur="think";upd()}
 function ensureText(){const L=LIVE;if(!L)return null;if(!L.node){L.node=mk("div","m a streaming nw","");L.host.insertBefore(L.node,L.working||L.cw)}return L.node}
-function appendText(d){const L=LIVE;if(!L||!d)return;L.text+=String(d);const n=ensureText();clearTimeout(L.timer);L.timer=setTimeout(()=>{if(LIVE!==L||!n.isConnected)return;n.innerHTML=md(L.text)},120);keepEnd()}
+function appendText(d){const L=LIVE;if(!L||!d)return;L.text+=String(d);L.seg+=String(d);const n=ensureText();const seg=L.seg;clearTimeout(L.timer);L.timer=setTimeout(()=>{if(LIVE!==L||!n.isConnected)return;n.innerHTML=md(seg)},120);keepEnd()}
 function toolLine(t,text){if(!text)return;const d=document.createElement("div");d.textContent=String(text);t.term.appendChild(d);while(t.term.childNodes.length>60)t.term.firstChild.remove();t.term.scrollTop=t.term.scrollHeight}
 function mountTool(f){const L=LIVE;if(!L||!f.id)return;if(L.tools.has(f.id))return updateTool(f);const card=document.createElement("div");card.className="tcard";card.innerHTML='<div class="tch"><span>'+esc(f.label||f.name||"Tool")+'</span><span class="tst">running</span></div><div class="tbody"><div class="cmd"></div><div class="term"></div><div class="pr"><i></i></div><pre></pre></div>';
-const cmd=card.querySelector(".cmd");if(f.input)cmd.textContent=String(f.input);
+const cmd=card.querySelector(".cmd");if(f.input)cmd.textContent=toolCmd(f);
 card.querySelector(".tch").addEventListener("click",()=>card.classList.toggle("open"));
-L.node=null;L.host.insertBefore(card,L.working||L.cw);
+L.node=null;L.seg="";L.host.insertBefore(card,L.working||L.cw);
 L.tools.set(f.id,{card,term:card.querySelector(".term"),pre:card.querySelector("pre"),st:card.querySelector(".tst"),cmd,pr:card.querySelector(".pr")});
 if(f.state&&S[f.state]){cur=f.state;upd()}keepEnd()}
 function updateTool(f){const L=LIVE;if(!L)return;const t=L.tools.get(f.id);if(!t)return mountTool(f);
+if(f.t==="tool-start"&&f.input)t.cmd.textContent=toolCmd(f).slice(0,400);
 if(f.phase==="input"){if(f.tail)t.cmd.textContent=String(f.tail).slice(-240);return}
 if(f.message)toolLine(t,f.message);if(f.tail)toolLine(t,f.tail);
 if(typeof f.fraction==="number"&&isFinite(f.fraction))t.pr.firstChild.style.width=Math.max(4,Math.min(100,f.fraction*100))+"%";keepEnd()}
@@ -447,12 +449,15 @@ function settleTool(f){const L=LIVE;if(!L)return;if(!L.tools.has(f.id))mountTool
 t.card.classList.add("settled",f.ok?"ok":"bad");t.st.textContent=f.ok?"done":"failed";
 if(f.output!=null)t.pre.textContent=String(f.output);
 if(!f.ok)t.card.classList.add("open");keepEnd()}
-function finishLive(reply){const L=LIVE;if(!L)return;clearTimeout(L.timer);const text=reply||L.text;
-if(text){if(L.node){L.node.innerHTML=md(text);L.node.classList.remove("streaming")}else{L.node=mk("div","m a",md(text));L.host.insertBefore(L.node,L.working||L.cw)}LOG.push(["a",text])}
+function finishLive(reply){const L=LIVE;if(!L)return;clearTimeout(L.timer);
+if(L.node){L.node.innerHTML=md(L.seg);L.node.classList.remove("streaming")}
+else if(!L.text&&reply){L.node=mk("div","m a",md(String(reply)));L.host.insertBefore(L.node,L.working||L.cw)}
+L.host.querySelectorAll(".m.a.streaming").forEach(n=>n.classList.remove("streaming"));
+const text=String(reply||L.text||"");if(text)LOG.push(["a",text]);
 teardown();clearLive();PENDING=null;busy=false;cur="success";upd();loadTasks();refreshSessionsSoon();if(tab=="docs")loadWs()}
 function failLive(msg){const L=LIVE;if(!L)return;clearTimeout(L.timer);
 if(L.parked){teardown();clearLive();busy=false;cur="approve";upd();return}
-const text="[error] "+(msg||"The stream ended with an error.");L.text=text;const n=ensureText();if(n)n.innerHTML=md(text);
+const text="[error] "+(msg||"The stream ended with an error.");L.text=text;L.seg=text;const n=ensureText();if(n)n.innerHTML=md(text);
 teardown();clearLive();busy=false;cur="error";upd();loadTasks();refreshSessionsSoon()}
 function applyFrame(f){const L=LIVE;if(!L||!f)return;
 if(f.t==="text")return appendText(f.d);

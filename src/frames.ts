@@ -164,30 +164,65 @@ function partCommand(name: string, part: Record<string, unknown>): string {
   return name;
 }
 
+/** A persisted tool output can be a string or an object; the card wants text. */
+function outputText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
 /**
- * A parked call is announced by persisting a message whose part is
- * `approval-requested`; the harness never emits a `tool-approval-request` chunk.
- * Without this mapping the gate holds the turn and the console shows nothing.
+ * Persisted message parts carry two things the chunk stream can miss: a parked
+ * call (`approval-requested`, which the harness never emits as a chunk) and the
+ * final state of a tool whose result arrived as a message. Without these
+ * mappings the approve card never appears and a finished Shell card stays on
+ * "running" forever.
  */
-function framesFromParkedMessage(message: unknown): StreamFrame[] {
+function framesFromMessage(message: unknown): StreamFrame[] {
   const m = asRecord(message);
   const parts = Array.isArray(m?.parts) ? m.parts : [];
   const frames: StreamFrame[] = [];
   for (const raw of parts) {
     const part = asRecord(raw);
-    if (!part || text(part.state) !== "approval-requested") continue;
+    if (!part) continue;
+    const state = text(part.state);
     const toolCallId = text(part.toolCallId);
-    const approval = asRecord(part.approval);
-    const id = text(approval?.id) || (toolCallId ? `approval:${toolCallId}` : "");
-    if (!toolCallId || !id) continue;
-    const name = partToolName(part);
-    frames.push({
-      t: "approval",
-      id,
-      toolCallId,
-      label: widgetFor(name).label,
-      cmd: partCommand(name, part),
-    });
+    if (state === "approval-requested") {
+      const approval = asRecord(part.approval);
+      const id = text(approval?.id) || (toolCallId ? `approval:${toolCallId}` : "");
+      if (!toolCallId || !id) continue;
+      const name = partToolName(part);
+      frames.push({
+        t: "approval",
+        id,
+        toolCallId,
+        label: widgetFor(name).label,
+        cmd: partCommand(name, part),
+      });
+      continue;
+    }
+    if (!toolCallId) continue;
+    if (state === "output-available") {
+      frames.push({
+        t: "tool-result",
+        id: toolCallId,
+        name: "",
+        ok: true,
+        output: outputText(part.output),
+      });
+    } else if (state === "output-error") {
+      frames.push({
+        t: "tool-result",
+        id: toolCallId,
+        name: "",
+        ok: false,
+        output: text(part.errorText),
+      });
+    }
   }
   return frames;
 }
@@ -198,7 +233,7 @@ export function framesFromEvent(ev: ThinkSessionEvent): StreamFrame[] {
   if (!e) return [];
   if (e.type === "chunk") return framesFromChunk(e.chunk as UIMessageChunk);
   if (e.type === "run-start") return [{ t: "state", state: "think", verb: "Thinking" }];
-  if (e.type === "message") return framesFromParkedMessage(e.message);
+  if (e.type === "message") return framesFromMessage(e.message);
   return [];
 }
 

@@ -166,17 +166,57 @@ check("framesFromEvent turns a parked message part into an approval frame", () =
   ]);
 });
 
-check("framesFromEvent ignores messages with no parked part", () => {
+check("framesFromEvent ignores messages with no tool state", () => {
   assert.deepEqual(
     framesFromEvent({ type: "message", message: { parts: [{ type: "text", text: "hi" }] } }),
     []
   );
+});
+
+check("a persisted tool result becomes a settled tool-result frame", () => {
   assert.deepEqual(
     framesFromEvent({
       type: "message",
-      message: { parts: [{ type: "tool-exec", toolCallId: "tc1", state: "output-available" }] },
+      message: {
+        parts: [
+          {
+            type: "tool-exec",
+            toolCallId: "tc1",
+            state: "output-available",
+            output: "exit 0 (success)",
+          },
+        ],
+      },
     }),
-    []
+    [{ t: "tool-result", id: "tc1", name: "", ok: true, output: "exit 0 (success)" }]
+  );
+});
+
+check("a persisted object output is stringified for the card", () => {
+  assert.deepEqual(
+    framesFromEvent({
+      type: "message",
+      message: {
+        parts: [
+          { type: "tool-exec", toolCallId: "tc3", state: "output-available", output: { exit: 0 } },
+        ],
+      },
+    }),
+    [{ t: "tool-result", id: "tc3", name: "", ok: true, output: '{"exit":0}' }]
+  );
+});
+
+check("a persisted tool error becomes a failed tool-result frame", () => {
+  assert.deepEqual(
+    framesFromEvent({
+      type: "message",
+      message: {
+        parts: [
+          { type: "tool-exec", toolCallId: "tc2", state: "output-error", errorText: "blocked" },
+        ],
+      },
+    }),
+    [{ t: "tool-result", id: "tc2", name: "", ok: false, output: "blocked" }]
   );
 });
 
