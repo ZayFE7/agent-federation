@@ -335,7 +335,8 @@ delegate:{n:"Sub-agents",c:"#A78BFA",ic:"tools",v:["Delegating","Spawning helper
 const $=i=>document.getElementById(i),D=document.documentElement;
 const key=()=>(localStorage.getItem("blip_key")||"").trim();
 const hasKey=()=>!!key();
-const api=(path,init={})=>{const h=Object.assign({},init.headers,{authorization:"Bearer "+key()});return fetch(path,Object.assign({},init,{headers:h}))};
+let KEYBAD=false,KEYASK=false,KEYWARNED=false;
+const api=async(path,init={})=>{const h=Object.assign({},init.headers,{authorization:"Bearer "+key()});const r=await fetch(path,Object.assign({},init,{headers:h}));if(r.status===401&&!KEYWARNED){KEYWARNED=true;setKey("That key was rejected. Paste the current agent key.")}return r};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const md=s=>{let x=esc(s),tok=[],tokInl=[];
 x=x.replace(/```[\s\S]*?```/g,m=>{tok.push("<pre><code>"+m.replace(/^```[^\n]*\n?/,"").replace(/\n?```$/,"").replace(/\n$/,"")+"</code></pre>");return"\u0000"+(tok.length-1)+"\u0000"});
@@ -409,7 +410,7 @@ const rel=t=>{const d=Date.now()-Number(t);if(!t||!isFinite(d)||d<60000)return"j
 // a 24.0 MiB save look like it went over it.
 const fmtB=n=>{const x=Number(n)||0;return x>=1048576?(x/1048576).toFixed(x>=10485760?0:1)+" MiB":x>=1024?(x/1024).toFixed(x>=10240?0:1)+" KiB":x+" B"};
 const row=s=>{const on=s.id===state.sessionId;const u=Number(s.unread)||0;return`<button class="th2" ${on&&tab=="chat"?'aria-current="true"':""} onclick="pick('${s.id}')"><span>${esc(s.title||"Untitled")}<small>${esc(rel(s.updated_at))}</small></span>${u?`<em aria-label="${u} unread">${u>9?"9+":u}</em>`:""}</button>`+(on?`<div class="sact"><button onclick="renameSession('${s.id}')">Rename</button><button onclick="deleteSession('${s.id}')">Delete</button></div>`:"")};
-const lst=q=>{if(!hasKey())return`<div class="se"><p>No chats yet. Add your agent key to load them.</p><button class="sm" onclick="setKey()">Set key</button></div>`;if(!state.sessions.length)return`<div class="se"><p>No chats yet.</p><button class="sm" onclick="newChat()">New chat</button></div>`;q=(q||"").toLowerCase();const rows=state.sessions.filter(s=>String(s.title||"").toLowerCase().includes(q));return rows.length?rows.map(row).join(""):`<div class="se"><p>No chats match.</p></div>`};
+const lst=q=>{if(!hasKey())return`<div class="se"><p>No chats yet. Add your agent key to load them.</p><button class="sm" onclick="setKey()">Set key</button></div>`;if(KEYBAD)return`<div class="se"><p>Your stored key was rejected. Paste the current agent key.</p><button class="sm" onclick="setKey()">Set key</button></div>`;if(!state.sessions.length)return`<div class="se"><p>No chats yet.</p><button class="sm" onclick="newChat()">New chat</button></div>`;q=(q||"").toLowerCase();const rows=state.sessions.filter(s=>String(s.title||"").toLowerCase().includes(q));return rows.length?rows.map(row).join(""):`<div class="se"><p>No chats match.</p></div>`};
 const renderList=()=>{const tl=$("tl2");if(tl)tl.innerHTML=lst($("sq")?$("sq").value:"")};
 const sideHTML=()=>`<div class="sh"><b class="logo">Blip</b></div><div id="tl2">${lst()}</div><details class="dem"><summary>Preview every state</summary><div class="chips">${Object.keys(S).map(k=>`<button class="chip" data-k="${k}" style="--c:${T(k)}" aria-pressed="${k==cur&&tab=="chat"}" onclick="st('${k}')"><i></i>${S[k].n}</button>`).join("")}</div></details><div class="sf"><button class="ib" aria-label="Switch light or dark" onclick="theme()">${ic("sun")}</button><label class="sp">${ic("search")}<input id="sq" placeholder="Search" aria-label="Search chats" oninput="$('tl2').innerHTML=lst(this.value)"></label><button class="ib" aria-label="New chat" onclick="newChat()">${ic("plus")}</button></div>`;
 function upd(){const s=S[cur];D.style.setProperty("--t",s.c);t0=Date.now();vi=0;$("pi").innerHTML=ic(s.ic);$("ring").style.setProperty("--pp",s.i?(s.i-.5)*25+"%":"0%");pose(cur);
@@ -488,7 +489,7 @@ LOG=j.messages.map(m=>[m.role==="user"?"u":"a",String(m.content||"")])}else LOG=
 // Task 33: opening the chat is what clears its badge. Fire and forget: a failed
 // drain only means the pill is still there on the next reload, never a lost reply.
 async function readSession(id){const s=state.sessions.find(x=>x.id===id);if(s&&s.unread){s.unread=0;renderList()}try{await api("/api/sessions/"+id+"/read",{method:"POST"})}catch(e){}}
-async function loadSessions(){if(!hasKey())return;try{const r=await api("/api/sessions");const j=await r.json();if(!j.ok)return;state.sessions=Array.isArray(j.sessions)?j.sessions:[];renderList()}catch(e){}}
+async function loadSessions(){if(!hasKey())return;try{const r=await api("/api/sessions");if(r.status===401){KEYBAD=true;renderList();return}const j=await r.json();if(!j.ok)return;KEYBAD=false;state.sessions=Array.isArray(j.sessions)?j.sessions:[];renderList()}catch(e){}}
 async function newSession(){if(!hasKey()){setKey();return null}const r=await api("/api/sessions",{method:"POST",headers:{"content-type":"application/json"},body:"{}"});const j=await r.json();if(!j.ok||!j.session||!j.session.id)return null;await loadSessions();await openSession(j.session.id);return j.session}
 function newChat(){newSession().catch(()=>{})}
 let tsq1=0,tsq2=0;
@@ -502,7 +503,7 @@ async function deleteSession(id){if(!confirm("Delete this chat? Its files are ke
 const also=!!(id===state.sessionId&&WS&&WS.saved&&confirm("This chat also saved "+WS.files+" file"+(WS.files==1?"":"s")+" ("+fmtB(WS.bytes)+"). Delete those too? Nothing can bring them back."));
 try{const r=await api("/api/sessions/"+id,{method:"DELETE",headers:{"content-type":"application/json"},body:JSON.stringify(also?{confirm_body:true}:{})});const j=await r.json().catch(()=>({}));if(!j.ok)return;
 if(also&&j.workspace!=="deleted")alert("The chat is deleted. Its files are not, and still take up storage.");state.sessions=state.sessions.filter(s=>s.id!==id);if(state.sessionId!==id){renderList();return}teardown();clearLive();const next=state.sessions.find(s=>s.id==="main")||state.sessions[0];if(next){await openSession(next.id);return}state.sessionId=null;localStorage.removeItem("blip.session");LOG=[];busy=false;cur="idle";tab="chat";render()}catch(e){}}
-function setKey(){const k=prompt("Agent API key (stored in this browser only):");if(!k||!k.trim())return;localStorage.setItem("blip_key",k.trim());bootLoad()}
+function setKey(msg){if(KEYASK)return;KEYASK=true;const k=prompt(msg||"Agent API key (stored in this browser only):");KEYASK=false;if(!k||!k.trim())return;localStorage.setItem("blip_key",k.trim());KEYBAD=false;location.reload()}
 // Model picker: one override per chat, stored by the agent, so a swap survives a
 // reload and a different browser. "Pinned" means no override: the worker's var.
 const MODS=["cf/@cf/qwen/qwen3.8-27b"];
