@@ -19,9 +19,9 @@
 
 @property --t{syntax:"<color>";inherits:true;initial-value:#FFD66B}
 @property --pp{syntax:"<percentage>";inherits:true;initial-value:0%}
-:root{--t:#FFD66B;transition:--t .7s ease;--bt:#FFD66B;--bg:#F2F0F9;--s1:#fff;--s2:#F8F7FC;--s3:#E9E6F4;--ln:rgba(36,27,58,.09);--ink:#241B3A;--mu:#756C8C;--td:color-mix(in srgb,var(--t) 50%,#241B3A);--sh1:0 1px 2px rgba(60,40,120,.06),0 8px 22px -10px rgba(60,40,120,.18);--sh2:0 2px 4px rgba(60,40,120,.05),0 24px 48px -20px rgba(60,40,120,.3);--f:"Bricolage Grotesque",ui-rounded,"SF Pro Rounded",system-ui,sans-serif;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#120D1D;--s1:#1B1429;--s2:#231A36;--s3:#33274C;--ln:rgba(255,255,255,.09);--ink:#F5F0FF;--mu:#A196BD;--td:color-mix(in srgb,var(--t) 72%,#fff);--sh1:inset 0 1px 0 rgba(255,255,255,.05),0 8px 24px -10px rgba(0,0,0,.6);--sh2:inset 0 1px 0 rgba(255,255,255,.05),0 24px 48px -20px rgba(0,0,0,.7)}}
-:root[data-theme="dark"]{--bg:#120D1D;--s1:#1B1429;--s2:#231A36;--s3:#33274C;--ln:rgba(255,255,255,.09);--ink:#F5F0FF;--mu:#A196BD;--td:color-mix(in srgb,var(--t) 72%,#fff);--sh1:inset 0 1px 0 rgba(255,255,255,.05),0 8px 24px -10px rgba(0,0,0,.6);--sh2:inset 0 1px 0 rgba(255,255,255,.05),0 24px 48px -20px rgba(0,0,0,.7)}
+:root{--t:#FFD66B;transition:--t .7s ease;--bt:#FFD66B;--bg:#F2F0F9;--s1:#fff;--s2:#F8F7FC;--s3:#E9E6F4;--ln:rgba(36,27,58,.09);--ink:#241B3A;--mu:#756C8C;--mt:#675E7F;--er:#A3243F;--ok:#1F7A55;--gm:#241B3A;--gp:45%;--td:color-mix(in srgb,var(--t) 50%,#241B3A);--sh1:0 1px 2px rgba(60,40,120,.06),0 8px 22px -10px rgba(60,40,120,.18);--sh2:0 2px 4px rgba(60,40,120,.05),0 24px 48px -20px rgba(60,40,120,.3);--f:"Bricolage Grotesque",ui-rounded,"SF Pro Rounded",system-ui,sans-serif;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#120D1D;--s1:#1B1429;--s2:#231A36;--s3:#33274C;--ln:rgba(255,255,255,.09);--ink:#F5F0FF;--mu:#A196BD;--mt:#A196BD;--er:#FF9DAC;--ok:#5FD8A6;--gm:#fff;--gp:72%;--td:color-mix(in srgb,var(--t) 72%,#fff);--sh1:inset 0 1px 0 rgba(255,255,255,.05),0 8px 24px -10px rgba(0,0,0,.6);--sh2:inset 0 1px 0 rgba(255,255,255,.05),0 24px 48px -20px rgba(0,0,0,.7)}}
+:root[data-theme="dark"]{--bg:#120D1D;--s1:#1B1429;--s2:#231A36;--s3:#33274C;--ln:rgba(255,255,255,.09);--ink:#F5F0FF;--mu:#A196BD;--mt:#A196BD;--er:#FF9DAC;--ok:#5FD8A6;--gm:#fff;--gp:72%;--td:color-mix(in srgb,var(--t) 72%,#fff);--sh1:inset 0 1px 0 rgba(255,255,255,.05),0 8px 24px -10px rgba(0,0,0,.6);--sh2:inset 0 1px 0 rgba(255,255,255,.05),0 24px 48px -20px rgba(0,0,0,.7)}
 *{box-sizing:border-box}html,body{height:100%}
 body{margin:0;overflow:hidden;background:var(--bg);color:var(--ink);font:500 15px/1.45 var(--f);font-optical-sizing:auto;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
 body:before{content:"";position:fixed;inset:0;background:radial-gradient(60% 30% at 50% 0%,color-mix(in srgb,var(--t) 20%,transparent),transparent 75%);pointer-events:none}
@@ -127,16 +127,44 @@ details.dem{margin-top:12px}details.dem summary{font-size:13px;font-weight:700;c
 .tgl{position:relative;width:50px;height:30px;flex:none}.tgl input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;z-index:1;cursor:pointer}.tgl i{position:absolute;inset:0;border-radius:99px;background:var(--s3);transition:background .3s}
 .tgl i:after{content:"";position:absolute;left:3px;top:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:transform .35s cubic-bezier(.3,1.5,.5,1)}.tgl input:checked+i{background:var(--t)}.tgl input:checked+i:after{transform:translateX(20px)}.tgl input:disabled+i{opacity:.6}
 .tpk{display:inline-flex;gap:5px;padding:6px 2px}.tpk i{width:7px;height:7px;border-radius:50%;background:var(--t);opacity:.4;animation:tpb 1.1s ease-in-out infinite}.tpk i:nth-child(2){animation-delay:.15s}.tpk i:nth-child(3){animation-delay:.3s}@keyframes tpb{0%,100%{transform:translateY(0);opacity:.35}50%{transform:translateY(-4px);opacity:1}}
-.tcard{border-radius:18px;border:1px solid var(--ln);background:var(--s1);overflow:hidden;margin:4px 0;animation:in .45s cubic-bezier(.34,1.3,.64,1) both;max-width:min(86%,540px);min-width:0;overflow-wrap:break-word;align-self:flex-start}
-.tcard.ok{border-color:color-mix(in srgb,#5FD8A6 55%,var(--ln))}.tcard.bad{border-color:color-mix(in srgb,#FF6B81 55%,var(--ln))}
-.tcard .tch{display:flex;align-items:center;gap:8px;padding:9px 14px;font-weight:700;font-size:13px;border-bottom:1px solid var(--ln);background:color-mix(in srgb,var(--t) 12%,transparent)}
-.tcard .cmd{padding:8px 14px 0;font-family:ui-monospace,monospace;font-size:12px;color:var(--t)}
-.tcard pre{margin:6px 0 0;padding:8px 14px 12px;font-family:ui-monospace,monospace;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;color:var(--mu)}
-.tcard .tch{cursor:pointer}.tcard .tch .tst{margin-left:auto;font-size:11.5px;font-weight:700;color:var(--mu)}
-.tcard.settled .tbody{display:none}.tcard.settled.open .tbody{display:block}
-.tcard .term{padding:6px 14px 2px;color:var(--mu);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;max-height:110px;overflow:auto;white-space:pre-wrap;word-break:break-word}
-.tcard .term:empty{display:none}
-.tcard .pr{margin:4px 14px 10px}.tcard .pr i{width:32%;animation:pw 1.5s ease-in-out infinite}.tcard.settled .pr{display:none}
+.tcard{border:1px solid transparent;border-radius:18px;margin:4px 0;animation:in .45s cubic-bezier(.34,1.3,.64,1) both;max-width:min(86%,540px);min-width:0;overflow-wrap:break-word;align-self:flex-start}
+.tcard.on{background:var(--s1);border-color:var(--ln);box-shadow:var(--sh1)}
+.tcard .tch{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:6px 12px 6px 8px;border:0;border-radius:17px;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.tcard:not(.on) .tch:hover{background:var(--s2)}
+.tcard .tch:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.ti{flex:none;display:grid;place-items:center;width:30px;height:30px;border-radius:10px;background:color-mix(in srgb,var(--a) 20%,transparent);color:color-mix(in srgb,var(--a) var(--gp),var(--gm))}
+.wic{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tnm{flex:none;font-weight:700;font-size:13px}
+.tcm{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--mt);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.tst{flex:none;display:flex;align-items:center;gap:5px;font-weight:700;font-size:11.5px;color:var(--mt)}
+.tst .wic{width:14px;height:14px}
+.tst.ok .wic:first-child{color:var(--ok)}
+.ch{color:var(--mu)}.tcard.op .ch,.gt.op .ch{transform:rotate(90deg)}
+.xp{padding:3px 9px;border-radius:99px;color:var(--er);background:color-mix(in srgb,#FF6B81 14%,transparent)}
+.tcard .pg{height:3px;margin:0 12px 10px;border-radius:99px;background:var(--s3);overflow:hidden}
+.tcard .pg i{display:block;height:100%;border-radius:99px;background:color-mix(in srgb,var(--a) 70%,var(--ink))}
+.tcard .pg.ind i{width:32%;animation:wg-pw 1.5s ease-in-out infinite alternate}
+@keyframes wg-pw{to{transform:translateX(212%)}}
+.tcard .tbody{display:none}
+.tcard.op .tbody{display:block}
+.tcard .bd{padding:0 8px 8px}
+.tm{border-radius:14px;background:#1B1426;color:#F5F0FF;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden}
+.tm p{margin:0;padding:8px 14px 0;overflow-wrap:anywhere}
+.tm.shell p:before{content:"$ ";opacity:.5}
+.tm pre{margin:0;padding:8px 14px 12px;max-height:160px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+.gt{border:2px solid #FF7A6B;border-radius:18px;background:var(--s1);box-shadow:var(--sh1);overflow:hidden;margin:4px 0;max-width:min(86%,540px);min-width:0;align-self:flex-start;animation:in .45s cubic-bezier(.34,1.3,.64,1) both}
+.gt h4{display:flex;align-items:center;gap:8px;margin:0;padding:10px 14px;font-size:13px;font-weight:700;background:color-mix(in srgb,#FF7A6B 18%,transparent);border-bottom:1px solid var(--ln)}
+.gt small{display:block;padding:8px 14px 0;color:var(--mt);font-size:12.5px}
+.gt .tm{margin:10px 12px 0}
+.gt .ac{display:flex;gap:8px;padding:12px}
+.bt{flex:1;min-height:44px;border:1px solid var(--ln);border-radius:15px;background:var(--s2);color:var(--ink);font:700 14px var(--f);cursor:pointer}
+.bt.p{background:var(--ink);color:var(--s1);border-color:var(--ink)}
+.bt:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.bt:disabled{opacity:.5;cursor:default}
+.gt.rs{border:1px dashed var(--mu);box-shadow:none;background:transparent}
+.gt.rs h4{background:var(--s2)}
+.gt.rs .tm{margin:10px 12px 12px;opacity:.7}
+@media (prefers-reduced-motion:reduce){.tcard .pg.ind i{animation:none;width:100%;opacity:.35}}
 .wr{display:flex;align-items:center;gap:10px;align-self:flex-start;padding:3px 4px;font-size:12.5px;font-weight:600;color:var(--mu)}
 .wr button{border:1px solid var(--ln);background:var(--s1);box-shadow:var(--sh1);border-radius:99px;padding:5px 13px;font-size:12px;font-weight:700;color:var(--ink)}
 /* rig */
@@ -215,7 +243,17 @@ details.dem{margin-top:12px}details.dem summary{font-size:13px;font-weight:700;c
 @keyframes pls2{50%{transform:scale(1.4)}}@keyframes perk{50%{transform:rotate(calc(var(--ed)*-3deg))}}
 @keyframes wk{40%,60%{transform:scaleY(.08)}}@keyframes flick{30%{transform:rotate(calc(var(--ed)*14deg))}60%{transform:rotate(calc(var(--ed)*-4deg))}}
 
-.avc .shd{display:none}.who.big .avc .shd{display:block}</style></head><body><div class="app" id="app"><nav class="rail" id="rail" role="tablist"></nav><aside class="side" id="side" aria-label="Chats"></aside>
+.avc .shd{display:none}.who.big .avc .shd{display:block}</style></head><body><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="w-sh" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4M12 17h7"/></symbol>
+<symbol id="w-se" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></symbol>
+<symbol id="w-sc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></symbol>
+<symbol id="w-sn" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></symbol>
+<symbol id="w-de" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v1a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-1M12 12.5v3"/></symbol>
+<symbol id="w-ch" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+<symbol id="w-ck" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+<symbol id="w-lk" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+<symbol id="w-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+</defs></svg><div class="app" id="app"><nav class="rail" id="rail" role="tablist"></nav><aside class="side" id="side" aria-label="Chats"></aside>
 <main class="main"><header class="hd" id="hd"><button class="ib mob" aria-label="Chats" data-i="menu" onclick="side(1)"></button>
 <div class="who" id="who"><div class="av" id="av" role="button" tabindex="0" aria-label="Blip. Tap for a closer look." onclick="peek()" onkeydown="if(event.key=='Enter')peek()"><i class="ring" id="ring"></i><div class="avc" id="avc"></div></div><div class="nm" id="nm">Blip</div><div class="pill" id="pill"><i class="pi" id="pi"></i><b id="verb"></b><em id="clk"></em></div></div>
 <select class="mps" id="mps" aria-label="Model for this chat" onchange="pickModel(this.value)" hidden></select>
@@ -317,7 +355,7 @@ success:{n:"Done",c:"#5FD8A6",ic:"task",v:["Done","All set"],say:"Done.",st:"Com
 error:{n:"Error",c:"#FF6B81",ic:"ask",v:["Hit a snag","Failed"],say:"Something failed.",st:"See the reply for details",i:2,pv:stpv("Last action failed")},
 sleep:{n:"Background",c:"#8E86B8",ic:"idle",v:["Working in the background","Still on it"],say:"Working in the background."}};
 const card=k=>{if(!S[k].pv&&!S[k].ask)return"";const s=S[k],h=`<div class="ch"><div class="ico">${ic(s.ic)}</div><div><b>${s.n}</b><small>${s.st||s.say}</small></div><span class="live">Live</span></div>`;
-return s.ask?`<div class="card ask">${h}<div class="pv"><b style="font-size:18px">The agent needs your approval.</b><div class="q">${PENDING?`<code style="display:block;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,monospace;font-size:13px;color:var(--ink)">$ ${esc(PENDING.cmd)}</code>`:"A high-risk command is waiting to run."}</div></div><div class="acts"><button class="btn" onclick="decide(false)">Deny</button><button class="btn p" onclick="decide(true)" ${PENDING?"":"disabled"}>Approve</button></div></div>`:`<div class="card">${h}<div class="pv">${s.pv()}</div></div>`};
+return s.ask?`<div class="card ask">${h}<div class="pv"><b style="font-size:18px">The agent needs your approval.</b><div class="q">${PENDING?`<code style="display:block;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,monospace;font-size:13px;color:var(--ink)">$ ${esc(PENDING.cmd)}</code>`:"A high-risk command is waiting to run."}</div></div><div class="acts"><small style="color:var(--mu);font-size:12px">Use the approval card in the chat.</small></div></div>`:`<div class="card">${h}<div class="pv">${s.pv()}</div></div>`};
 Object.assign(S,{
 wave:{n:"Hello",c:"#FFD66B",ic:"idle",v:["Hello","Good to see you"],say:"Hey! What are we getting done?"},
 listen:{n:"Listening",c:"#67E8F9",ic:"mic",v:["Listening","Catching that"],say:"Listening.",st:"Voice not connected yet",i:1,pv:stpv("Voice input not connected yet")},
@@ -339,6 +377,13 @@ let KEYBAD=false,KEYASK=false,KEYWARNED=false;
 const api=async(path,init={})=>{const h=Object.assign({},init.headers,{authorization:"Bearer "+key()});const r=await fetch(path,Object.assign({},init,{headers:h}));if(r.status===401&&!KEYWARNED){KEYWARNED=true;setKey("That key was rejected. Paste the current agent key.")}return r};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function toolCmd(f){const raw=String(f.input||"");if(!raw)return"";try{const j=JSON.parse(raw);return String(j.cmd||j.query||j.title||j.instructions||j.goal||raw)}catch(e){return raw}}
+const TOOL_META={exec:{a:"#FF7EB6",i:"w-sh",l:"Shell"},web_search:{a:"#4FD1E8",i:"w-se",l:"Search"},schedule_task:{a:"#A3E635",i:"w-sc",l:"Schedule"},save_workspace:{a:"#2DD4BF",i:"w-sn",l:"Snapshot"},delegate:{a:"#A78BFA",i:"w-de",l:"Delegate"}};
+const toolMeta=n=>TOOL_META[n]||{a:"#FF7EB6",i:"w-sh",l:"Tool"};
+const toolDone=()=>'<svg class="wic"><use href="#w-ck"></use></svg><span>Done</span><svg class="wic ch"><use href="#w-ch"></use></svg>';
+function toolExit(out){const n=/exit (\d+)/i.exec(String(out||""))?.[1];return '<span class="xp">'+(n?"Exit "+n:"Failed")+'</span><svg class="wic ch"><use href="#w-ch"></use></svg>'}
+function tmHTML(cmd,out,name){return '<div class="tm'+(name==="exec"?" shell":"")+'">'+(cmd?'<p>'+esc(cmd)+'</p>':"")+(out?'<pre>'+esc(out)+'</pre>':"")+'</div>'}
+const deniedHTML=cmd=>'<div class="gt rs"><h4 style="color:var(--er)"><svg class="wic"><use href="#w-x"></use></svg>Denied, command did not run</h4>'+tmHTML(cmd,"","exec")+'</div>';
+function toolCardHTML(t){const m=toolMeta(t.name),ok=t.ok!==false;return '<div class="tcard'+(ok?"":" op")+'" style="--a:'+m.a+'"><button class="tch" aria-expanded="'+(ok?"false":"true")+'" onclick="this.parentNode.classList.toggle(\'op\');this.setAttribute(\'aria-expanded\',this.parentNode.classList.contains(\'op\'))"><span class="ti"><svg class="wic"><use href="#'+m.i+'"></use></svg></span><span class="tnm">'+esc(m.l)+'</span><span class="tcm">'+esc(t.cmd||"")+'</span><span class="tst'+(ok?" ok":"")+'">'+(ok?toolDone():toolExit(t.output))+'</span></button><div class="tbody"><div class="bd">'+tmHTML(t.cmd||"",t.output||"",t.name)+'</div></div></div>'}
 const md=s=>{let x=esc(s),tok=[],tokInl=[];
 x=x.replace(/```[\s\S]*?```/g,m=>{tok.push("<pre><code>"+m.replace(/^```[^\n]*\n?/,"").replace(/\n?```$/,"").replace(/\n$/,"")+"</code></pre>");return"\u0000"+(tok.length-1)+"\u0000"});
 x=x.replace(/`([^`\n]+)`/g,(m,c)=>{tokInl.push("<code>"+c+"</code>");return"\u0000I"+(tokInl.length-1)+"\u0000"});
@@ -374,8 +419,7 @@ sp("--la",la+"deg");sp("--ra",ra+"deg");sp("--w",w+"deg");sp("--wd",wd+"s");sp("
 MXE.querySelectorAll(".pp").forEach(p=>p.classList.toggle("on",p.classList.contains("pr-"+j)))}
 const insp=()=>{const s=S[cur];return`<h3>Live activity</h3>${card(cur)||`<div class="row" style="--t:${s.c}"><div class="ico">${ic(s.ic)}</div><div class="grow"><b>${s.n}</b><small>${s.say}</small></div></div>`}<h3>While you were away</h3>${LG.length?`<div class="tl">${LG.map(a=>`<div style="--t:${T(a[0])}">${a[2]}<small>${a[1]}</small></div>`).join("")}</div>`:`<p style="color:var(--mu);font-size:13px">Nothing yet. Blip will log what happens while you are away.</p>`}`};
 const scrollEnd=()=>{const e=$("scr");setTimeout(()=>e.scrollTo({top:e.scrollHeight,behavior:"smooth"}),80)};
-const toolCard=t=>`<div class="tcard ${t.ok?"ok":"bad"}"><div class="tch">${t.ok?"&#10003;":"&#10007;"} ${String(t.name||"tool").replace(/</g,"&lt;")}</div>${t.cmd?`<div class="cmd">$ ${String(t.cmd).replace(/</g,"&lt;")}</div>`:""}${t.output?`<pre>${String(t.output).replace(/</g,"&lt;")}</pre>`:""}</div>`;
-const SC={chat:()=>{const rows=LOG.length?LOG.map(([r,t],i)=>r==="t"?toolCard(t):`<div class="m ${r}${i>=NF?" nw":""}">${md(t)}</div>`).join(""):`<p style="color:var(--mu);text-align:center;padding:48px 0;font-size:14.5px">Say hi to Blip, or ask it to do something.</p>`;return`<div class="thr" id="thr"><div class="dv">Today</div>${rows}<div id="live"></div><div class="inl" id="cardw"></div></div>`},
+const SC={chat:()=>{const rows=LOG.length?LOG.map(([r,t],i)=>r==="t"?toolCardHTML(t):r==="g"?deniedHTML(t.cmd):`<div class="m ${r}${i>=NF?" nw":""}">${md(t)}</div>`).join(""):`<p style="color:var(--mu);text-align:center;padding:48px 0;font-size:14.5px">Say hi to Blip, or ask it to do something.</p>`;return`<div class="thr" id="thr"><div class="dv">Today</div>${rows}<div id="live"></div><div class="inl" id="cardw"></div></div>`},
 tasks:()=>{const live=TASKS.filter(t=>t.status!=="done"),done=TASKS.filter(t=>t.status==="done").slice(-4).reverse();
 const rows=live.map(t=>`<div class="row" style="--t:${T(awayState(t.title))}"><div class="ico">${ic(S[awayState(t.title)].ic)}</div><div class="grow"><b>${t.title.replace(/</g,"&lt;")}</b><small>${t.status==="running"?"Running now":"Scheduled · "+(t.due_at?new Date(t.due_at).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"soon")}</small>${t.status==="running"?`<div class="pr"><i style="width:60%"></i></div>`:""}</div></div>`).join("");
 const away=done.map(t=>`<div style="--t:${T(awayState(t.title))}">${t.title.replace(/</g,"&lt;")}<small>${t.due_at?new Date(t.due_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):""}</small></div>`).join("");
@@ -428,27 +472,44 @@ const keepEnd=()=>{if(!nearEnd())return;const e=$("scr");e.scrollTop=e.scrollHei
 const clearLive=()=>{try{localStorage.removeItem(LIVE_KEY)}catch(e){}};
 function slots(){let thr=$("thr");if(!thr){$("scr").innerHTML='<div class="thr" id="thr"><div class="dv">Today</div><div id="live"></div><div class="inl" id="cardw"></div></div>';thr=$("thr")}let lv=$("live");if(!lv){lv=document.createElement("div");lv.id="live";thr.insertBefore(lv,$("cardw")||null)}let cw=$("cardw");if(!cw){cw=document.createElement("div");cw.className="inl";cw.id="cardw";thr.appendChild(cw)}return{thr,lv,cw}}
 function mk(tag,cls,html){const n=document.createElement(tag);if(cls)n.className=cls;if(html!=null)n.innerHTML=html;return n}
-function teardown(){const L=LIVE;if(!L)return;clearTimeout(L.timer);clearTimeout(L.esTimer);if(L.es){L.es.onerror=null;L.es.onmessage=null;L.es.close()}if(L.working&&L.working.parentNode)L.working.remove();LIVE=null}
+function teardown(){stopLiveStream();LIVE=null}
+function stopLiveStream(){const L=LIVE;if(!L)return;clearTimeout(L.timer);clearTimeout(L.esTimer);if(L.es){L.es.onerror=null;L.es.onmessage=null;L.es.close();L.es=null}if(L.working&&L.working.parentNode)L.working.remove();L.working=null}
 function saveLive(){const L=LIVE;if(!L||!L.streamId)return;try{localStorage.setItem(LIVE_KEY,JSON.stringify({sessionId:L.sessionId,streamId:L.streamId,operationId:L.operationId,at:Date.now()}))}catch(e){}}
-function beginLive(sid){teardown();const s=slots();const work=mk("div","wr",'<span class="tpk"><i></i><i></i><i></i></span><span>Working</span><button type="button" onclick="stopTurn()">Stop</button>');s.lv.appendChild(work);LIVE={sessionId:sid,operationId:null,streamId:null,text:"",seg:"",node:null,working:work,host:s.lv,cw:s.cw,tools:new Map(),timer:0,es:null,esTimer:0,parked:false};busy=true;cur="think";upd()}
+function beginLive(sid){teardown();const s=slots();const work=mk("div","wr",'<span class="tpk"><i></i><i></i><i></i></span><span>Working</span><button type="button" onclick="stopTurn()">Stop</button>');s.lv.appendChild(work);LIVE={sessionId:sid,operationId:null,streamId:null,text:"",seg:"",node:null,working:work,host:s.lv,cw:s.cw,tools:new Map(),gate:null,denied:new Set(),timer:0,es:null,esTimer:0,parked:false};busy=true;cur="think";upd()}
 function ensureText(){const L=LIVE;if(!L)return null;if(!L.node){L.node=mk("div","m a streaming nw","");L.host.insertBefore(L.node,L.working||L.cw)}return L.node}
 function appendText(d){const L=LIVE;if(!L||!d)return;L.text+=String(d);L.seg+=String(d);const n=ensureText();const seg=L.seg;clearTimeout(L.timer);L.timer=setTimeout(()=>{if(LIVE!==L||!n.isConnected)return;n.innerHTML=md(seg)},120);keepEnd()}
-function toolLine(t,text){if(!text)return;const d=document.createElement("div");d.textContent=String(text);t.term.appendChild(d);while(t.term.childNodes.length>60)t.term.firstChild.remove();t.term.scrollTop=t.term.scrollHeight}
-function mountTool(f){const L=LIVE;if(!L||!f.id)return;if(L.tools.has(f.id))return updateTool(f);const card=document.createElement("div");card.className="tcard";card.innerHTML='<div class="tch"><span>'+esc(f.label||f.name||"Tool")+'</span><span class="tst">running</span></div><div class="tbody"><div class="cmd"></div><div class="term"></div><div class="pr"><i></i></div><pre></pre></div>';
-const cmd=card.querySelector(".cmd");if(f.input)cmd.textContent=toolCmd(f);
-card.querySelector(".tch").addEventListener("click",()=>card.classList.toggle("open"));
-L.node=null;L.seg="";L.host.insertBefore(card,L.working||L.cw);
-L.tools.set(f.id,{card,term:card.querySelector(".term"),pre:card.querySelector("pre"),st:card.querySelector(".tst"),cmd,pr:card.querySelector(".pr")});
+function mountTool(f){const L=LIVE;if(!L||!f.id)return;if(L.tools.has(f.id))return updateTool(f);
+const m=toolMeta(f.name),card=document.createElement("div");card.className="tcard on";card.style.setProperty("--a",m.a);
+card.innerHTML='<button class="tch" aria-expanded="false"><span class="ti"><svg class="wic"><use href="#'+m.i+'"></use></svg></span><span class="tnm">'+esc(f.label||m.l)+'</span><span class="tcm"></span><span class="tst"><span class="ts">Starting</span></span></button><div class="pg ind"><i></i></div><div class="tbody"><div class="bd"></div></div>';
+const t={card,hd:card.querySelector(".tch"),cm:card.querySelector(".tcm"),st:card.querySelector(".ts"),pg:card.querySelector(".pg"),bd:card.querySelector(".bd"),name:f.name||"",cmd:"",open:false};
+t.hd.addEventListener("click",()=>{if(!t.bd.childElementCount)return;t.open=!t.open;card.classList.toggle("op",t.open);t.hd.setAttribute("aria-expanded",String(t.open))});
+L.node=null;L.seg="";L.host.insertBefore(card,L.working||L.cw);L.tools.set(f.id,t);
+if(f.input){t.cmd=toolCmd(f);t.cm.textContent=t.cmd}
 if(f.state&&S[f.state]){cur=f.state;upd()}keepEnd()}
 function updateTool(f){const L=LIVE;if(!L)return;const t=L.tools.get(f.id);if(!t)return mountTool(f);
-if(f.t==="tool-start"&&f.input)t.cmd.textContent=toolCmd(f).slice(0,400);
-if(f.phase==="input"){if(f.tail)t.cmd.textContent=String(f.tail).slice(-240);return}
-if(f.message)toolLine(t,f.message);if(f.tail)toolLine(t,f.tail);
-if(typeof f.fraction==="number"&&isFinite(f.fraction))t.pr.firstChild.style.width=Math.max(4,Math.min(100,f.fraction*100))+"%";keepEnd()}
-function settleTool(f){const L=LIVE;if(!L)return;if(!L.tools.has(f.id))mountTool(f);const t=L.tools.get(f.id);if(!t)return;
-t.card.classList.add("settled",f.ok?"ok":"bad");t.st.textContent=f.ok?"done":"failed";
-if(f.output!=null)t.pre.textContent=String(f.output);
-if(!f.ok)t.card.classList.add("open");keepEnd()}
+if(f.t==="tool-start"&&f.input){t.cmd=toolCmd(f);t.cm.textContent=t.cmd.slice(0,400);return}
+if(f.phase==="input"){t.st.textContent="Preparing";t.cm.textContent="Preparing command";t.pg.className="pg ind";return}
+t.st.textContent=f.phase==="restoring"?"Restoring":"Running";
+if(f.message)t.cm.textContent=String(f.message);
+if(typeof f.fraction==="number"&&isFinite(f.fraction)){t.pg.className="pg";t.pg.firstElementChild.style.width=Math.max(4,Math.min(100,f.fraction*100))+"%"}
+else {t.pg.className="pg ind";t.pg.firstElementChild.style.width=""}
+keepEnd()}
+function settleTool(f){const L=LIVE;if(!L)return;if(L.denied&&L.denied.has(f.id)){const d=L.tools.get(f.id);if(d){d.card.style.display="none"}return}
+if(!L.tools.has(f.id))mountTool(f);const t=L.tools.get(f.id);if(!t)return;
+if(t.card.dataset.gated){delete t.card.dataset.gated;t.card.style.display=""}
+t.output=String(f.output||"");if(t.pg)t.pg.remove();
+t.bd.innerHTML=tmHTML(t.cmd,t.output,t.name);
+const ok=f.ok!==false;
+if(ok){t.card.classList.remove("on","op");t.card.querySelector(".tst").className="tst ok";t.card.querySelector(".tst").innerHTML=toolDone();t.open=false;t.hd.setAttribute("aria-expanded","false")}
+else{t.card.classList.add("on","op");t.card.querySelector(".tst").className="tst";t.card.querySelector(".tst").innerHTML=toolExit(t.output);t.open=true;t.hd.setAttribute("aria-expanded","true")}
+keepEnd()}
+function mountGate(f){const L=LIVE;if(!L)return;const t=L.tools.get(f.toolCallId);if(t){t.card.dataset.gated="1";t.card.style.display="none"}
+const g=document.createElement("div");g.className="gt";g.innerHTML='<h4><svg class="wic"><use href="#w-lk"></use></svg>Needs your OK</h4><small>This command will not run until you approve it.</small>'+tmHTML(f.cmd,"","exec")+'<div class="ac"><button class="bt" onclick="gate(false)">Deny</button><button class="bt p" onclick="gate(true)">Approve</button></div>';
+L.gate=g;L.host.insertBefore(g,L.working||L.cw);PENDING={toolCallId:f.toolCallId,cmd:f.cmd};L.parked=true;cur="approve";upd()}
+function gate(approve){const L=LIVE;if(!L)return;const g=L.gate;
+if(g){g.querySelectorAll("button").forEach(b=>b.disabled=true);if(!approve){g.className="gt rs";g.innerHTML='<h4 style="color:var(--er)"><svg class="wic"><use href="#w-x"></use></svg>Denied, command did not run</h4>'+tmHTML(PENDING?PENDING.cmd:"","","exec")}}
+if(!approve&&PENDING){L.denied.add(PENDING.toolCallId)}
+decide(approve)}
 function finishLive(reply){const L=LIVE;if(!L)return;clearTimeout(L.timer);
 if(L.node){L.node.innerHTML=md(L.seg);L.node.classList.remove("streaming")}
 else if(!L.text&&reply){L.node=mk("div","m a",md(String(reply)));L.host.insertBefore(L.node,L.working||L.cw)}
@@ -456,7 +517,7 @@ L.host.querySelectorAll(".m.a.streaming").forEach(n=>n.classList.remove("streami
 const text=String(reply||L.text||"");if(text)LOG.push(["a",text]);
 teardown();clearLive();PENDING=null;busy=false;cur="success";upd();loadTasks();refreshSessionsSoon();if(tab=="docs")loadWs()}
 function failLive(msg){const L=LIVE;if(!L)return;clearTimeout(L.timer);
-if(L.parked){teardown();clearLive();busy=false;cur="approve";upd();return}
+if(L.parked){stopLiveStream();clearLive();busy=false;cur="approve";upd();return}
 const text="[error] "+(msg||"The stream ended with an error.");L.text=text;L.seg=text;const n=ensureText();if(n)n.innerHTML=md(text);
 teardown();clearLive();busy=false;cur="error";upd();loadTasks();refreshSessionsSoon()}
 function applyFrame(f){const L=LIVE;if(!L||!f)return;
@@ -465,10 +526,10 @@ if(f.t==="reasoning"){if(cur!=="think"){cur="think";upd()}return}
 if(f.t==="tool-start")return mountTool(f);
 if(f.t==="tool-progress")return updateTool(f);
 if(f.t==="tool-result")return settleTool(f);
-if(f.t==="approval"){PENDING={toolCallId:f.toolCallId,cmd:f.cmd};L.parked=true;cur="approve";upd();return}
+if(f.t==="approval")return mountGate(f);
 if(f.t==="state"){if(f.state&&S[f.state]){cur=f.state;upd()}return}
 if(f.t==="step")return;
-if(f.t==="done")return finishLive(f.reply);
+if(f.t==="done"){if(L.parked){stopLiveStream();clearLive();busy=false;cur="approve";upd();return}return finishLive(f.reply)}
 if(f.t==="error")return failLive(f.message)}
 function connectStream(streamId){const L=LIVE;if(!L||!streamId)return;L.streamId=streamId;
 const url="/api/sessions/"+encodeURIComponent(L.sessionId)+"/stream/"+encodeURIComponent(streamId)+"?token="+encodeURIComponent(key());
@@ -563,7 +624,7 @@ await loadWs();
 // row here rather than show a file that is gone.
 if(MF&&MF.files.some(f=>String(f.path)===p))MF={files:MF.files.filter(f=>String(f.path)!==p),truncated:!!MF.truncated};
 if(tab=="docs")render()}catch(e){alert("network: "+e)}}
-async function decide(approve){if(!PENDING)return;const toolCallId=PENDING.toolCallId,cmd=PENDING.cmd;PENDING=null;try{const r=await api("/api/approve",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId:state.sessionId,toolCallId,approved:approve})});const j=await r.json();LOG.push(["a",(approve?"[approved] ":"[denied] ")+cmd]);if(j.output)LOG.push(["t",{name:"exec",cmd,output:j.output,ok:j.ok}]);if(j.reply)LOG.push(["a",j.reply]);NF=LOG.length-1;cur=(j.state&&S[j.state])?j.state:"idle";busy=false;renderThread();upd();refreshSessionsSoon()}catch(e){LOG.push(["a","[network] "+e]);cur="error";busy=false;renderThread();upd()}}
+async function decide(approve){if(!PENDING)return;const toolCallId=PENDING.toolCallId,cmd=PENDING.cmd;PENDING=null;try{const r=await api("/api/approve",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId:state.sessionId,toolCallId,approved:approve})});const j=await r.json();if(approve)LOG.push(["a","[approved] "+cmd]);else LOG.push(["g",{cmd}]);if(j.output)LOG.push(["t",{name:"exec",cmd,output:j.output,ok:j.ok}]);if(j.reply)LOG.push(["a",j.reply]);NF=LOG.length-1;cur=(j.state&&S[j.state])?j.state:"idle";busy=false;renderThread();upd();refreshSessionsSoon()}catch(e){LOG.push(["a","[network] "+e]);cur="error";busy=false;renderThread();upd()}}
 let lv="";function tick(){const s=S[cur],e=Math.floor((Date.now()-t0)/1000),v=s.v[vi%s.v.length]+(s.i?"…":"");if(v!=lv){lv=v;$("verb").innerHTML=`<span class="vb">${v}</span>`}$("clk").textContent=s.i?Math.floor(e/60)+":"+String(e%60).padStart(2,"0"):""}
 function theme(){D.dataset.theme=D.dataset.theme=="dark"?"light":"dark"}
 document.querySelectorAll("[data-i]").forEach(b=>b.innerHTML=ic(b.dataset.i));
