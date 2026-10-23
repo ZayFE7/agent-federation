@@ -1,7 +1,7 @@
 # tests/
 
 Thirty-two offline, framework-free test files live here, all run by `npm test`. Beside them are the
-runner, one shared fixture, and four live-only scripts that `npm test` never runs.
+runner, one shared fixture, and five live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
@@ -18,8 +18,9 @@ The count is whatever is on disk, not a number baked into a file: `run-all.mjs` 
 - An offline test runs on plain Node. Node 22.6+ strips the TypeScript types from a `../src/*.ts`
   import at load, so the tests that import a `.ts` module need nothing else; those modules are kept
   dependency-free by design so they stay loadable this way.
-- The live scripts (`live-matrix.mjs`, `live-stream.mjs`, `live-probe.sh`, `router-probe.mjs`) do not
-  end in `.test.mjs`, so they are outside the glob and `npm test` makes no network call.
+- The live scripts (`live-matrix.mjs`, `live-stream.mjs`, `live-probe.sh`, `router-probe.mjs`,
+  `capture-ui.mjs`) do not end in `.test.mjs`, so they are outside the glob and `npm test` makes no
+  network call.
 
 Run any single file directly with `node tests/<file>.test.mjs`. Every file exits 0 on success and
 prints every failure then exits 1 otherwise.
@@ -228,6 +229,13 @@ reach the real `e2b` data plane; the sandbox is an injected port.
   first-text latency (budget 12 s from submit), frame count, tool starts versus results, and terminal
   frames (exactly one). Passes only when all four hold. Not in the glob.
 - `live-probe.sh`, `router-probe.mjs`: live-only probes. Not in the glob.
+- `capture-ui.mjs`: the visual QA harness. Drives an installed Chrome over CDP at 1440x900,
+  834x1112 and 390x844, in both themes, and writes one PNG per console screen. It reads the key from
+  `agent_key.local` into the throwaway browser profile only, never prints it, and opens real sessions
+  read-only. The chat-with-widgets, populated Tasks, populated Files and connection-error shots are
+  synthetic DOM states built by calling the console's own mount functions; they send no request and
+  create nothing. `--out` chooses the output folder, `--url` the origin. Not in the glob, and not a
+  substitute for a live turn: the send, stream and settle path is tested by an actual `run:` message.
 
 ## Coverage gaps worth knowing
 
