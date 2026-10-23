@@ -1,7 +1,7 @@
 # tests/
 
 Thirty-one offline, framework-free test files live here, all run by `npm test`. Beside them are the
-runner, one shared fixture, and three live-only scripts that `npm test` never runs.
+runner, one shared fixture, and four live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
@@ -18,8 +18,8 @@ The count is whatever is on disk, not a number baked into a file: `run-all.mjs` 
 - An offline test runs on plain Node. Node 22.6+ strips the TypeScript types from a `../src/*.ts`
   import at load, so the tests that import a `.ts` module need nothing else; those modules are kept
   dependency-free by design so they stay loadable this way.
-- The live scripts (`live-matrix.mjs`, `live-probe.sh`, `router-probe.mjs`) do not end in
-  `.test.mjs`, so they are outside the glob and `npm test` makes no network call.
+- The live scripts (`live-matrix.mjs`, `live-stream.mjs`, `live-probe.sh`, `router-probe.mjs`) do not
+  end in `.test.mjs`, so they are outside the glob and `npm test` makes no network call.
 
 Run any single file directly with `node tests/<file>.test.mjs`. Every file exits 0 on success and
 prints every failure then exits 1 otherwise.
@@ -206,9 +206,16 @@ reach the real `e2b` data plane; the sandbox is an injected port.
 - `run-all.mjs`: the harness described above.
 - `fake-sql.mjs`: an in-memory `SqlHandle` fake the pure-store tests seed through, contract-tested by
   `fake-sql.test.mjs`. No `src/` module imports it; it is a test fixture by design.
-- `live-matrix.mjs`: a smoke matrix against a deployed brain over the durable stream (ping, a
-  deterministic `run:` tool turn, the capability answer, freeform generation). It requires `BLIP_URL`
-  with no default host and a real key in `.dev.vars`; it never prints the key. Not in the glob.
+- `live-matrix.mjs`: nine probes against a deployed brain over the durable stream. Four are one turn
+  (ping, a deterministic `run:` tool turn, the capability answer, freeform generation); five are
+  scenarios (session isolation, workspace survival across the four-VM cap's eviction, a model-emitted
+  approval hold and resume, two delegated sub-agents, and a ten-call build). It requires `BLIP_URL`
+  with no default host and a real key in `.dev.vars`, never prints the key, and cleans up the sessions
+  it creates with `{confirm_body:true}`. `BLIP_ONLY=7,8` narrows it to those probe ids while keeping
+  the same assertions. Not in the glob.
+- `live-stream.mjs`: one model turn, and the four numbers that make "streaming works" measurable:
+  first-text latency (budget 12 s from submit), frame count, tool starts versus results, and terminal
+  frames (exactly one). Passes only when all four hold. Not in the glob.
 - `live-probe.sh`, `router-probe.mjs`: live-only probes. Not in the glob.
 
 ## Coverage gaps worth knowing

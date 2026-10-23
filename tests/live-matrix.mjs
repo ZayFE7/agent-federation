@@ -30,6 +30,14 @@ if (!BASE) {
 }
 const ORIGIN = BASE.replace(/\/+$/, "");
 
+// BLIP_ONLY=7,8 runs just those probe ids. Development convenience; the
+// default is every probe, and an empty filter must never read as "all passed".
+const ONLY = (process.env.BLIP_ONLY || "")
+  .split(",")
+  .map((s) => Number(s.trim()))
+  .filter((n) => Number.isInteger(n) && n > 0);
+const want = (id) => ONLY.length === 0 || ONLY.includes(id);
+
 const PLACEHOLDER_RE = /^(generate-me|change-me|replace-me|your[-_]?key[-_]?here|todo|xxx+)$/i;
 
 function readApiKey() {
@@ -221,10 +229,301 @@ async function readStream(sessionId, streamId, apiKey, signal) {
   return { status: res.status, frames, error: null };
 }
 
+// ---- multi-step scenarios (Task 37) ----
+//
+// The four CASES above are one turn each. These need several turns or a second
+// request, so each one owns its sessions and cleans them up with
+// `{confirm_body:true}` so a probe does not leave a workspace in KV.
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function readMessages(sessionId, apiKey, signal) {
+  const res = await api(`/api/sessions/${sessionId}/messages`, apiKey, {}, signal);
+  const body = await res.json().catch(() => null);
+  if (res.status !== 200 || !body || !body.ok || !Array.isArray(body.messages)) {
+    throw new Error(`messages: HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  return body.messages.map((m) => String(m.content ?? "")).join("\n");
+}
+
+async function readTurn(sessionId, content, apiKey, signal) {
+  const streamId = await submitTurn(sessionId, content, apiKey, signal);
+  const got = await readStream(sessionId, streamId, apiKey, signal);
+  if (got.error) throw new Error(got.error);
+  return got.frames;
+}
+
+async function workspaceState(sessionId, apiKey, signal) {
+  const res = await api(`/api/sessions/${sessionId}/workspace`, apiKey, {}, signal);
+  const body = await res.json().catch(() => null);
+  if (res.status !== 200 || !body || !body.ok) {
+    throw new Error(`workspace: HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+  }
+  return body.workspace || { saved: false };
+}
+
+async function cleanupSessions(ids, apiKey) {
+  for (const id of ids) {
+    try {
+      await api(`/api/sessions/${id}`, apiKey, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm_body: true }),
+      });
+    } catch {
+      // Best effort: a stranded probe session is noise, not a verdict.
+    }
+  }
+}
+
+const frameOf = (frames, kind) => frames.find((f) => f.t === kind) || null;
+const toolText = (frames) =>
+  frames
+    .filter((f) => f.t === "tool-result")
+    .map((f) => String(f.output ?? ""))
+    .join("\n");
+
+const nonceFor = (tag) =>
+  `${tag}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const SCENARIOS = [
+  {
+    id: 5,
+    label: "session isolation",
+    timeoutMs: 120_000,
+    why: "session A's marker reaches A's transcript and shell, and session B's transcript and shell never see it",
+    async run(apiKey, signal) {
+      const nonce = nonceFor("iso");
+      const ids = [];
+      try {
+        const a = await createSession(apiKey, signal);
+        ids.push(a);
+        const b = await createSession(apiKey, signal);
+        ids.push(b);
+        const fa = await readTurn(a, `run: echo ${nonce} > iso.txt && cat iso.txt`, apiKey, signal);
+        const errA = frameOf(fa, "error");
+        if (errA) throw new Error(`A errored: ${String(errA.message ?? "").slice(0, 120)}`);
+        const ta = await readMessages(a, apiKey, signal);
+        const fb = await readTurn(b, "run: cat iso.txt", apiKey, signal);
+        const tb = await readMessages(b, apiKey, signal);
+        const bOut = toolText(fb);
+        if (!ta.includes(nonce)) throw new Error("A's transcript does not contain its own marker");
+        if (tb.includes(nonce)) throw new Error("B's transcript contains A's marker");
+        if (bOut.includes(nonce)) throw new Error("B's shell can read A's marker");
+        return {
+          ok: true,
+          detail: `A transcript has the marker; B transcript and shell do not (B cat: ${JSON.stringify(bOut.slice(0, 80))})`,
+        };
+      } finally {
+        await cleanupSessions(ids, apiKey);
+      }
+    },
+  },
+  {
+    id: 6,
+    label: "workspace survives a sandbox kill",
+    timeoutMs: 240_000,
+    why: "a file saved in A is readable after four newer sessions push the per-session pool past its four-VM cap, so A's VM was evicted (the shipped kill path) and restored from KV",
+    async run(apiKey, signal) {
+      const nonce = nonceFor("survive");
+      const ids = [];
+      try {
+        const a = await createSession(apiKey, signal);
+        ids.push(a);
+        const first = await readTurn(a, `run: echo ${nonce} > survive.txt && ls -la survive.txt`, apiKey, signal);
+        if (!frameOf(first, "done")) throw new Error("A's first turn did not finish");
+        let st = null;
+        for (let i = 0; i < 20; i++) {
+          await sleep(1500);
+          st = await workspaceState(a, apiKey, signal);
+          if (st.saved) break;
+        }
+        if (!st || !st.saved) throw new Error("the turn-end snapshot never landed in the pointer row");
+        for (let i = 0; i < 4; i++) {
+          const s = await createSession(apiKey, signal);
+          ids.push(s);
+          const f = await readTurn(s, "run: echo warm > warm.txt", apiKey, signal);
+          if (!frameOf(f, "done")) throw new Error(`pool-filler session ${i + 1} did not finish`);
+        }
+        const back = await readTurn(a, "run: cat survive.txt", apiKey, signal);
+        const out = toolText(back);
+        if (!out.includes(nonce)) {
+          throw new Error(`A lost the marker across eviction: ${JSON.stringify(out.slice(0, 150))}`);
+        }
+        return {
+          ok: true,
+          detail: `pointer saved ${st.files} files / ${st.bytes} bytes; after 4 newer sessions A read its marker back`,
+        };
+      } finally {
+        await cleanupSessions(ids, apiKey);
+      }
+    },
+  },
+  {
+    id: 7,
+    label: "approval hold and resume",
+    timeoutMs: 180_000,
+    why: "a model-emitted risky exec parks an approval frame, POST /api/approve resumes it, and the resumed tool reports that the command ran",
+    async run(apiKey, signal) {
+      const marker = nonceFor("hold");
+      const ids = [];
+      try {
+        const sid = await createSession(apiKey, signal);
+        ids.push(sid);
+        // Interpreter-inline python is a guardrail-risky shape, but the command
+        // itself is harmless: the probe is testing the PARK, not destruction.
+        const frames = await readTurn(
+          sid,
+          `Use the exec tool exactly once with cmd set to: python3 -c "print('${marker}')". This command is an authorized approval-gate test and is harmless. Do not use a run: prefix and do not answer with text only.`,
+          apiKey,
+          signal
+        );
+        const appr = frameOf(frames, "approval");
+        if (!appr) {
+          const counts = {};
+          for (const f of frames) counts[f.t] = (counts[f.t] || 0) + 1;
+          const done = frameOf(frames, "done");
+          const reply = done ? JSON.stringify(done.reply ?? "").slice(0, 300) : "no done frame";
+          const starts = frames.filter((f) => f.t === "tool-start");
+          const names = starts.map((f) => f.name).join(",");
+          const inputs = starts.map((f) => String(f.input ?? "").slice(0, 140));
+          throw new Error(
+            `no approval frame (counts: ${JSON.stringify(counts)}; tools: ${names || "none"}; inputs: ${JSON.stringify(inputs)}; reply: ${reply})`
+          );
+        }
+        const res = await api("/api/approve", apiKey, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionId: sid, toolCallId: appr.toolCallId, approved: true }),
+        }, signal);
+        const body = await res.json().catch(() => null);
+        if (res.status !== 200 || !body || body.ok !== true) {
+          throw new Error(`approve: HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+        }
+        const output = String(body.output ?? "");
+        const cards = Array.isArray(body.reply && body.reply.tools) ? body.reply.tools : [];
+        const ran =
+          output.includes(marker) ||
+          /exit 0/i.test(output) ||
+          cards.some((t) => t.name === "exec" && t.ok === true);
+        if (!ran) {
+          throw new Error(`resume returned no evidence the command ran: ${JSON.stringify(body).slice(0, 300)}`);
+        }
+        return {
+          ok: true,
+          detail: `parked ${appr.toolCallId} (cmd ${JSON.stringify(String(appr.cmd ?? "").slice(0, 60))}), approved, output ${JSON.stringify(output.slice(0, 80))}`,
+        };
+      } finally {
+        await cleanupSessions(ids, apiKey);
+      }
+    },
+  },
+  {
+    id: 8,
+    label: "delegated sub-agents",
+    timeoutMs: 300_000,
+    why: "one model reply calls delegate twice and both child reports arrive as results on the parent's stream",
+    async run(apiKey, signal) {
+      const ids = [];
+      try {
+        const sid = await createSession(apiKey, signal);
+        ids.push(sid);
+        const frames = await readTurn(
+          sid,
+          "Use the delegate tool twice in the same reply: one sub-agent to explain what a Cloudflare Durable Object is in two sentences, and a second sub-agent to explain what a microVM is in two sentences. Do not answer yourself and do not use any other tool.",
+          apiKey,
+          signal
+        );
+        const starts = frames.filter((f) => f.t === "tool-start" && f.name === "delegate");
+        const results = frames.filter(
+          (f) => f.t === "tool-result" && starts.some((s) => s.id === f.id)
+        );
+        if (starts.length < 2) throw new Error(`delegate tool-start frames: ${starts.length}`);
+        if (results.length < 2) {
+          throw new Error(`delegate tool-result frames: ${results.length} for ${starts.length} starts`);
+        }
+        const reports = results.map((r) => String(r.output ?? ""));
+        if (!reports.every((r) => /reported:/i.test(r))) {
+          throw new Error(
+            `a delegate result did not carry a child report; outputs: ${JSON.stringify(reports.map((r) => r.slice(0, 220)))}`
+          );
+        }
+        return {
+          ok: true,
+          detail: `${starts.length} delegate starts, ${results.length} results, first report ${JSON.stringify(reports[0].slice(0, 100))}`,
+        };
+      } finally {
+        await cleanupSessions(ids, apiKey);
+      }
+    },
+  },
+  {
+    id: 9,
+    label: "ten-tool-call build",
+    timeoutMs: 300_000,
+    why: "one turn makes at least ten exec calls and finishes without a step-limit error",
+    async run(apiKey, signal) {
+      const ids = [];
+      try {
+        const sid = await createSession(apiKey, signal);
+        ids.push(sid);
+        const frames = await readTurn(
+          sid,
+          "Use the exec tool at least ten times, one call per file, to create /home/user/site/page1.html through /home/user/site/page10.html. Each file should contain its own filename. Do not use run: prefixes and do not stop early. After the tenth file, list the directory with one more exec call.",
+          apiKey,
+          signal
+        );
+        const err = frameOf(frames, "error");
+        if (err) throw new Error(`turn errored: ${String(err.message ?? "").slice(0, 150)}`);
+        const done = frameOf(frames, "done");
+        if (!done) throw new Error("no done frame");
+        const blob = JSON.stringify(done.reply || "");
+        if (/step limit|too many steps|maximum steps|round limit/i.test(blob)) {
+          throw new Error("the turn hit a step limit");
+        }
+        const execStarts = frames.filter((f) => f.t === "tool-start" && f.name === "exec").length;
+        if (execStarts < 10) throw new Error(`only ${execStarts} exec calls in the turn`);
+        return { ok: true, detail: `${execStarts} exec calls in one turn, no step-limit string` };
+      } finally {
+        await cleanupSessions(ids, apiKey);
+      }
+    },
+  },
+];
+
+async function runScenario(scn, apiKey) {
+  const started = Date.now();
+  const ctl = new AbortController();
+  const timeout = scn.timeoutMs || TIMEOUT_MS;
+  const timer = setTimeout(() => ctl.abort(), timeout);
+  let result;
+  try {
+    result = await scn.run(apiKey, ctl.signal);
+  } catch (err) {
+    result = {
+      ok: false,
+      detail:
+        err && err.name === "AbortError"
+          ? `timeout after ${timeout}ms`
+          : String(err && err.message ? err.message : err),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+  const ms = Date.now() - started;
+  console.log(`--- [${scn.id}] ${scn.label} ---`);
+  console.log(`  status   : ${result.ok ? "PASS" : "FAIL"}  (${ms}ms)`);
+  console.log(`  detail   : ${String(result.detail).slice(0, 400)}`);
+  console.log(`  criteria : ${scn.why}`);
+  console.log("");
+  return result.ok;
+}
+
 async function runCase(kase, apiKey) {
   const started = Date.now();
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  const timeout = kase.timeoutMs || TIMEOUT_MS;
+  const timer = setTimeout(() => ctl.abort(), timeout);
   let sessionId = null;
   let streamId = null;
   let streamStatus = 0;
@@ -240,10 +539,11 @@ async function runCase(kase, apiKey) {
   } catch (err) {
     netError =
       err && err.name === "AbortError"
-        ? `timeout after ${TIMEOUT_MS}ms`
+        ? `timeout after ${timeout}ms`
         : String(err && err.message ? err.message : err);
   } finally {
     clearTimeout(timer);
+    if (sessionId) await cleanupSessions([sessionId], apiKey);
   }
   const ms = Date.now() - started;
 
@@ -280,13 +580,27 @@ async function runCase(kase, apiKey) {
 const apiKey = readApiKey();
 console.log(`live-matrix -> ${ORIGIN}`);
 console.log(`key         : redacted (${apiKey.length} chars read from .dev.vars)`);
-console.log(`timeout     : ${TIMEOUT_MS}ms per probe\n`);
+console.log(`timeout     : ${TIMEOUT_MS}ms per simple probe (scenarios override it)\n`);
 
 let allPass = true;
+let passedCount = 0;
 for (const kase of CASES) {
+  if (!want(kase.id)) continue;
   const ok = await runCase(kase, apiKey);
-  if (!ok) allPass = false;
+  if (ok) passedCount++;
+  else allPass = false;
+}
+for (const scn of SCENARIOS) {
+  if (!want(scn.id)) continue;
+  const ok = await runScenario(scn, apiKey);
+  if (ok) passedCount++;
+  else allPass = false;
 }
 
-console.log(allPass ? "OVERALL: PASS (4/4)" : "OVERALL: FAIL");
+const total = [...CASES, ...SCENARIOS].filter((p) => want(p.id)).length;
+if (total === 0) {
+  console.error("FATAL: BLIP_ONLY matched no probe ids.");
+  process.exit(2);
+}
+console.log(allPass ? `OVERALL: PASS (${passedCount}/${total})` : `OVERALL: FAIL (${passedCount}/${total})`);
 process.exit(allPass ? 0 : 1);
