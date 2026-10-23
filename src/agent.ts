@@ -259,8 +259,14 @@ export class FederationAgent extends Agent<Env> {
   private mirrorEvent(session: string, ev: ThinkSessionEvent): void {
     if (ev.type === "run-start") this.currentOp.set(session, ev.operationId);
     const frames = framesFromEvent(ev);
-    if (frames.length > 0 && (ev.type === "chunk" || ev.type === "run-start")) {
-      this.hub.feed(streamIdFor(session, ev.operationId), session, frames);
+    // A parked call arrives as a `message` event, not a chunk, so the feed
+    // cannot be chunk-only or the approve card never reaches the console.
+    const eventOp =
+      "operationId" in ev && typeof ev.operationId === "string"
+        ? ev.operationId
+        : this.currentOp.get(session);
+    if (frames.length > 0 && eventOp) {
+      this.hub.feed(streamIdFor(session, eventOp), session, frames);
     }
     if (ev.type !== "operation") return;
     if (this.currentOp.get(session) === ev.status.operationId) {
@@ -1338,7 +1344,15 @@ export class FederationAgent extends Agent<Env> {
     }
     this.childInFlight.add(input.name);
     try {
-      const child = await this.dynamicAgents.get(Researcher, input.name);
+      let child;
+      try {
+        child = await this.dynamicAgents.get(Researcher, input.name);
+      } catch (err) {
+        // A facet boot failure otherwise survives only as a tool-output string;
+        // the stack is the difference between a routing bug and a platform limit.
+        console.error(`facet get failed: ${err instanceof Error ? err.stack : String(err)}`);
+        throw err;
+      }
       const report = await child.research({
         goal: input.goal,
         focus: input.focus,
@@ -1348,6 +1362,9 @@ export class FederationAgent extends Agent<Env> {
         trace: this.tracedOps.has(operationId),
       });
       return report.text;
+    } catch (err) {
+      console.error(`child run failed: ${err instanceof Error ? err.stack : String(err)}`);
+      throw err;
     } finally {
       this.childInFlight.delete(input.name);
       // One facet per goal is a Durable Object, and nothing reuses it: the child

@@ -118,6 +118,12 @@ export class Researcher extends Agent<Env> {
       approve: () => false,
     });
     this.lifecycle.use(this.harness);
+    // A facet cannot set a physical alarm, and the harness re-arms its wake
+    // job on every submission. The turn is driven in-invoke by the harness's
+    // own ensureDrive, so disabling the local alarm costs only crash recovery
+    // for a bounded child the parent is awaiting anyway. Without this, every
+    // delegate call fails with "Facets currently cannot set alarms."
+    void this.lifecycle.disableAlarms().catch(() => {});
   }
 
   /**
@@ -178,6 +184,12 @@ export class Researcher extends Agent<Env> {
         );
       }
       return { child: this.name, text };
+    } catch (err) {
+      // An RPC hop keeps only the message, so the facet logs its own stack.
+      console.error(
+        `Researcher research failed: ${err instanceof Error ? err.stack : String(err)}`
+      );
+      throw err;
     } finally {
       // The last frames are the ones a caller that returns immediately would
       // drop, so the hop chain is drained before the report goes back.

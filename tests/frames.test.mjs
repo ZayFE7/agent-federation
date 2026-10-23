@@ -144,6 +144,42 @@ check("framesFromEvent maps chunk events and ignores unmapped ones", () => {
   assert.deepEqual(framesFromEvent({ type: "transcript" }), []);
 });
 
+check("framesFromEvent turns a parked message part into an approval frame", () => {
+  const frames = framesFromEvent({
+    type: "message",
+    operationId: "op1",
+    message: {
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-exec",
+          toolCallId: "tc9",
+          state: "approval-requested",
+          approval: { id: "approval:tc9" },
+          input: { cmd: "rm -rf /tmp/x" },
+        },
+      ],
+    },
+  });
+  assert.deepEqual(frames, [
+    { t: "approval", id: "approval:tc9", toolCallId: "tc9", label: "Shell", cmd: "rm -rf /tmp/x" },
+  ]);
+});
+
+check("framesFromEvent ignores messages with no parked part", () => {
+  assert.deepEqual(
+    framesFromEvent({ type: "message", message: { parts: [{ type: "text", text: "hi" }] } }),
+    []
+  );
+  assert.deepEqual(
+    framesFromEvent({
+      type: "message",
+      message: { parts: [{ type: "tool-exec", toolCallId: "tc1", state: "output-available" }] },
+    }),
+    []
+  );
+});
+
 if (failures.length > 0) {
   for (const failure of failures) console.error("  FAIL " + failure);
   console.error(`frames: ${failures.length} failed`);

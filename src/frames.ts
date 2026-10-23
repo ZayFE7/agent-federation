@@ -147,12 +147,58 @@ export function framesFromChunk(chunk: UIMessageChunk): StreamFrame[] {
   }
 }
 
+/** Tool name from a persisted UI part: `tool-exec` -> `exec`, dynamic-tool -> toolName. */
+function partToolName(part: Record<string, unknown>): string {
+  const type = text(part.type);
+  if (type === "dynamic-tool") return text(part.toolName);
+  return type.startsWith("tool-") ? type.slice(5) : "";
+}
+
+/** The command-ish field the pending card shows, read from the part's input. */
+function partCommand(name: string, part: Record<string, unknown>): string {
+  const input = asRecord(part.input);
+  for (const key of ["cmd", "query", "title", "task"]) {
+    const value = text(input?.[key]);
+    if (value) return value;
+  }
+  return name;
+}
+
+/**
+ * A parked call is announced by persisting a message whose part is
+ * `approval-requested`; the harness never emits a `tool-approval-request` chunk.
+ * Without this mapping the gate holds the turn and the console shows nothing.
+ */
+function framesFromParkedMessage(message: unknown): StreamFrame[] {
+  const m = asRecord(message);
+  const parts = Array.isArray(m?.parts) ? m.parts : [];
+  const frames: StreamFrame[] = [];
+  for (const raw of parts) {
+    const part = asRecord(raw);
+    if (!part || text(part.state) !== "approval-requested") continue;
+    const toolCallId = text(part.toolCallId);
+    const approval = asRecord(part.approval);
+    const id = text(approval?.id) || (toolCallId ? `approval:${toolCallId}` : "");
+    if (!toolCallId || !id) continue;
+    const name = partToolName(part);
+    frames.push({
+      t: "approval",
+      id,
+      toolCallId,
+      label: widgetFor(name).label,
+      cmd: partCommand(name, part),
+    });
+  }
+  return frames;
+}
+
 /** Map a harness session event. Chunks carry the live content; the rest is state. */
 export function framesFromEvent(ev: ThinkSessionEvent): StreamFrame[] {
   const e = asRecord(ev);
   if (!e) return [];
   if (e.type === "chunk") return framesFromChunk(e.chunk as UIMessageChunk);
   if (e.type === "run-start") return [{ t: "state", state: "think", verb: "Thinking" }];
+  if (e.type === "message") return framesFromParkedMessage(e.message);
   return [];
 }
 
