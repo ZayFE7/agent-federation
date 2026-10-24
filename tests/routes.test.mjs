@@ -852,10 +852,32 @@ await checkAsync("PUT model lands the id on the session DO and echoes it", async
     world.ctx
   );
   assert.equal(res.status, 200, `expected 200, got ${res.status}`);
-  assert.deepEqual(await res.json(), { ok: true, model: "cf/x/y" });
+  assert.deepEqual(await res.json(), {
+    ok: true,
+    model: "cf/x/y",
+    provider: "deployment",
+  });
   assert.deepEqual(world.fed.models, [
-    { name: "abc", method: "setModel", args: ["abc", "cf/x/y"], arity: 2 },
+    { name: "abc", method: "setModel", args: ["abc", "cf/x/y", "deployment"], arity: 3 },
   ]);
+});
+
+await checkAsync("PUT model carries a provider id through to the session DO", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/abc/model", "PUT", {
+      body: JSON.stringify({ model: "model-a", provider: "my_provider" }),
+    }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    ok: true,
+    model: "model-a",
+    provider: "my_provider",
+  });
+  assert.deepEqual(world.fed.models[0].args, ["abc", "model-a", "my_provider"]);
 });
 
 await checkAsync("PUT model with an empty string clears the override, it is not a 400", async () => {
@@ -866,8 +888,16 @@ await checkAsync("PUT model with an empty string clears the override, it is not 
     world.ctx
   );
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true, model: null });
-  assert.deepEqual(world.fed.models[0].args, ["abc", null], "clear means null, never ''");
+  assert.deepEqual(await res.json(), {
+    ok: true,
+    model: null,
+    provider: "deployment",
+  });
+  assert.deepEqual(
+    world.fed.models[0].args,
+    ["abc", null, "deployment"],
+    "clear means null, never ''"
+  );
 });
 
 await checkAsync("PUT model refuses a spacey or overlong id BEFORE addressing the DO", async () => {

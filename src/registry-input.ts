@@ -109,3 +109,27 @@ export function parseModelId(
   }
   return { ok: true, model: value };
 }
+
+export const MAX_PROVIDER_ID_CHARS = 32;
+const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+/**
+ * The per-chat model picker also names a provider. An absent provider means the
+ * deployment router, so a body from the old console keeps working.
+ */
+export function parseModelPick(
+  body: unknown
+): { ok: true; provider: string; model: string | null } | { ok: false; error: string } {
+  const base = parseModelId(body);
+  if (!base.ok) return base;
+  const raw = (body as Record<string, unknown>).provider;
+  if (raw === undefined || raw === null || raw === "") {
+    return { ok: true, provider: "deployment", model: base.model };
+  }
+  if (typeof raw !== "string") return { ok: false, error: "provider must be a string" };
+  const provider = raw.trim().toLowerCase();
+  if (!provider || provider.length > MAX_PROVIDER_ID_CHARS || !PROVIDER_ID_RE.test(provider)) {
+    return { ok: false, error: "provider has unsupported characters" };
+  }
+  return { ok: true, provider, model: base.model };
+}

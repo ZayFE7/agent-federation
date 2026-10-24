@@ -35,6 +35,19 @@ import {
   type SessionRow,
 } from "./registry-store";
 import { MAIN_DO_NAME } from "./session-scope";
+import {
+  deleteProviderRow,
+  ensureModelSchema,
+  getProviderRow,
+  listProviderRows,
+  readModelDefault,
+  upsertProviderRow,
+  writeModelDefault,
+  type ModelDefault,
+  type ModelProvider,
+} from "./model-store";
+import { normalizeProviderId, type ProviderInput } from "./model-input";
+import { decryptSecret, encryptSecret } from "./model-secrets";
 
 /**
  * Boot seed for the conversation that already exists.
@@ -111,6 +124,7 @@ export class RegistryAgent extends Agent<Env> {
       // the composite index the sidebar's only query needs (R54). Nothing here
       // creates schema, so this guard and onStart() cannot disagree about it.
       ensureRegistrySchema(handle);
+      ensureModelSchema(handle);
       this.schemaReady = true;
     }
     return handle;
@@ -195,6 +209,118 @@ export class RegistryAgent extends Agent<Env> {
   async touch(id: string, opts?: { unreadDelta?: number }): Promise<void> {
     touchSession(this.db(), id, Date.now(), opts);
   }
+
+  private modelSecret(): string {
+    return (this.env.AGENT_API_KEY ?? "").trim();
+  }
+
+  private async providerFromRow(row: {
+    id: string;
+    name: string;
+    base_url: string;
+    api_key_enc: string;
+    models_json: string;
+  }): Promise<ModelProvider> {
+    let models: string[] = [];
+    try {
+      const parsed = JSON.parse(row.models_json);
+      if (Array.isArray(parsed)) {
+        models = parsed.filter((value): value is string => typeof value === "string");
+      }
+    } catch {
+      models = [];
+    }
+    return {
+      id: row.id,
+      name: row.name,
+      baseUrl: row.base_url,
+      apiKey: await decryptSecret(this.modelSecret(), row.api_key_enc),
+      models,
+    };
+  }
+
+  /** Full provider configs, including plaintext keys. Never send this to a browser. */
+  async modelSettings(): Promise<{
+    providers: ModelProvider[];
+    default: ModelDefault | null;
+  }> {
+    const providers = await Promise.all(
+      listProviderRows(this.db()).map((row) => this.providerFromRow(row))
+    );
+    return { providers, default: readModelDefault(this.db()) };
+  }
+
+  async saveModelProvider(
+    id: string | null,
+    input: ProviderInput
+  ): Promise<ModelProvider | null> {
+    const providerId =
+      normalizeProviderId(id) ??
+      `p_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const existing = getProviderRow(this.db(), providerId);
+    let apiKeyEnc = existing?.api_key_enc ?? "";
+    if (input.clearKey) apiKeyEnc = "";
+    else if (input.apiKey) {
+      try {
+        apiKeyEnc = await encryptSecret(this.modelSecret(), input.apiKey);
+      } catch {
+        return null;
+      }
+    }
+    const now = Date.now();
+    upsertProviderRow(this.db(), {
+      id: providerId,
+      name: input.name,
+      base_url: input.baseUrl,
+      api_key_enc: apiKeyEnc,
+      models_json: JSON.stringify(input.models),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    });
+    return {
+      id: providerId,
+      name: input.name,
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey ?? (existing ? await decryptSecret(this.modelSecret(), existing.api_key_enc) : ""),
+      models: input.models,
+    };
+  }
+
+  async deleteModelProvider(id: string): Promise<boolean> {
+    const providerId = normalizeProviderId(id);
+    if (!providerId || !getProviderRow(this.db(), providerId)) return false;
+    deleteProviderRow(this.db(), providerId);
+    return true;
+  }
+
+  async modelDefault(): Promise<ModelDefault | null> {
+    return readModelDefault(this.db());
+  }
+
+  async setModelDefault(provider: string, model: string): Promise<boolean> {
+    const rawProvider = typeof provider === "string" ? provider.trim().toLowerCase() : "";
+    const modelId = typeof model === "string" ? model.trim() : "";
+    if (!modelId) return false;
+    if (rawProvider === "deployment") {
+      writeModelDefault(this.db(), { provider: "deployment", model: modelId });
+      return true;
+    }
+    const providerId = normalizeProviderId(rawProvider);
+    if (!providerId) return false;
+    const row = getProviderRow(this.db(), providerId);
+    if (!row) return false;
+    let models: string[] = [];
+    try {
+      const parsed = JSON.parse(row.models_json);
+      if (Array.isArray(parsed)) models = parsed.filter((v): v is string => typeof v === "string");
+    } catch {
+      return false;
+    }
+    if (!models.includes(modelId)) return false;
+    writeModelDefault(this.db(), { provider: providerId, model: modelId });
+    return true;
+  }
+
 
   /**
    * HTTP surface for the worker proxy, under /registry/... only.

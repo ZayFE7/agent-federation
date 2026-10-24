@@ -132,7 +132,7 @@
 // Task 8 (R75), and why ./workspace-keys joined them in Task 30: that module imports
 // NOTHING either, which is the property its own test pins. A sixth value import has to
 // clear that rule first.
-import { idFromSegment, limitFrom, parseModelId, readJson } from "./registry-input.ts";
+import { idFromSegment, limitFrom, parseModelPick, readJson } from "./registry-input.ts";
 import { PLACEHOLDER_TITLE } from "./registry-store.ts";
 import { isSessionId } from "./session-scope.ts";
 import { safeWorkspacePath } from "./workspace-keys.ts";
@@ -432,12 +432,12 @@ async function writeSessionModel(
   env: Env,
   id: string
 ): Promise<Response> {
-  const parsed = parseModelId(await readJson(request));
+  const parsed = parseModelPick(await readJson(request));
   if (!parsed.ok) return fail(400, parsed.error);
-  if (!(await agentStubFor(env, id).setModel(id, parsed.model))) {
+  if (!(await agentStubFor(env, id).setModel(id, parsed.model, parsed.provider))) {
     return fail(403, "wrong session");
   }
-  return json({ ok: true, model: parsed.model });
+  return json({ ok: true, model: parsed.model, provider: parsed.provider });
 }
 
 async function readSessionModel(env: Env, id: string): Promise<Response> {

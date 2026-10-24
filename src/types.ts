@@ -4,6 +4,23 @@
 
 import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
+import type { ModelDefault, ModelProvider } from "./model-store";
+import type { ProviderInput } from "./model-input";
+
+/** One model selection: a provider row plus a model id inside it. */
+export interface ModelChoice {
+  provider: string;
+  model: string;
+}
+
+/** What the per-chat picker needs, without exposing any provider keys. */
+export interface ModelChoiceInfo {
+  model: string | null;
+  provider: string;
+  pinned: string;
+  defaultProvider: string | null;
+  defaultModel: string | null;
+}
 
 /** Router lane. Agent uses primary|cheap; jev is reserved for the router's third lane. */
 export type Tier = "primary" | "cheap" | "jev";
@@ -164,9 +181,9 @@ export interface AgentStub {
   /** Task 30: remove one file from a live workspace and re-snapshot it. */
   deleteWorkspaceFile(sessionId: string, path: string): Promise<WorkspaceDeleteResult>;
   /** Console model picker: false means the session id does not belong to this DO. */
-  setModel(sessionId: string, model: string | null): Promise<boolean>;
+  setModel(sessionId: string, model: string | null, provider?: string): Promise<boolean>;
   /** Console model picker: the override for this session plus the pinned fallback. */
-  modelChoice(sessionId: string): Promise<{ model: string | null; pinned: string }>;
+  modelChoice(sessionId: string): Promise<ModelChoiceInfo>;
 }
 
 /**
@@ -218,6 +235,11 @@ export interface RegistryStub {
   remove(id: string): Promise<void>;
   touch(id: string, opts?: { unreadDelta?: number }): Promise<void>;
   exists(id: string): Promise<boolean>;
+  modelSettings(): Promise<{ providers: ModelProvider[]; default: ModelDefault | null }>;
+  modelDefault(): Promise<ModelDefault | null>;
+  saveModelProvider(id: string | null, input: ProviderInput): Promise<ModelProvider | null>;
+  deleteModelProvider(id: string): Promise<boolean>;
+  setModelDefault(provider: string, model: string): Promise<boolean>;
 }
 
 /**

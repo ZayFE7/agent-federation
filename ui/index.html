@@ -385,6 +385,24 @@ button:disabled{cursor:default}
 .block{margin-top:18px}
 .blabel{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 8px;font-size:12px;font-weight:700;color:var(--mt)}
 .panel{border:1px solid var(--ln);border-radius:13px;background:var(--s1);overflow:hidden}
+.mset{display:flex;flex-direction:column;gap:10px;margin-top:12px;padding:14px 16px;border:1px solid var(--ln);border-radius:13px;background:var(--s1)}
+.mrow{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.minfo{min-width:0}
+.minfo b{display:block;font-size:14px;font-weight:800}
+.minfo small{display:block;margin-top:3px;color:var(--mt);font-size:12px;line-height:1.45;overflow-wrap:anywhere}
+.mmodel{display:flex;flex-wrap:wrap;gap:6px}
+.mmodel code{padding:3px 7px;border:1px solid var(--ln);border-radius:7px;background:var(--s2);font:11.5px/1.4 var(--mono);overflow-wrap:anywhere}
+.mact{display:flex;flex-wrap:wrap;gap:6px;flex:none}
+.mact .btn{min-height:32px;padding:0 10px;font-size:12px}
+.msel{width:100%;min-height:42px;padding:0 11px;border:1px solid var(--ln2);border-radius:10px;background:var(--s2);color:var(--ink);font-size:13px;outline:0}
+.msel:focus{border-color:var(--ink)}
+.mnote{margin-top:14px;color:var(--mu);font-size:11.5px;line-height:1.55}
+.dlg textarea{display:block;width:100%;margin-top:6px;padding:9px 11px;border:1px solid var(--ln2);border-radius:9px;background:var(--s2);outline:0;font:12.5px/1.5 var(--mono);resize:vertical}
+.dlg textarea:focus{border-color:var(--ink)}
+.dlg .chk{display:flex;align-items:flex-start;gap:8px;margin-top:12px;color:var(--mt);font-size:12.5px;line-height:1.4}
+.dlg .chk input{margin:2px 0 0;flex:none;accent-color:var(--er)}
+.dlg .err[hidden]{display:none}
+@media (max-width:560px){.mrow{flex-direction:column}.mact{width:100%}.mact .btn{flex:1}}
 .loading{display:flex;align-items:center;gap:9px;padding:18px;color:var(--mt);font-size:13px}
 .loading i{width:6px;height:6px;border-radius:50%;background:var(--t);animation:pls 1s infinite}
 .loading i:nth-child(2){animation-delay:.15s}.loading i:nth-child(3){animation-delay:.3s}
@@ -588,6 +606,10 @@ dialog::backdrop{background:rgba(20,10,40,.52)}
 .eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
 
 .eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
+
+.eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
+
+.eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
 </style>
 </head>
 <body>
@@ -667,6 +689,8 @@ delegate:{e:"wide",m:"smile",p:[125,-125,12,.7,0,-3,-4,0,1],b:["bob",1.2]}});
 
 
 
+
+
 const MXSVG=`<svg id="mx" viewBox="-20 20 280 210" data-s="idle" data-e="n" data-m="smile" role="img" aria-label="Blip the agent mascot">
 <defs><radialGradient id="gb" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#FFF3C4"/><stop offset=".45" stop-color="#FFD66B"/><stop offset="1" stop-color="#EBA93A"/></radialGradient>
 <radialGradient id="ge" cx=".4" cy=".3" r=".8"><stop offset="0" stop-color="#3A2C57"/><stop offset="1" stop-color="#1B1426"/></radialGradient>
@@ -721,6 +745,7 @@ menu:"M4 7h16M4 12h16M4 17h16",plus:"M12 5v14M5 12h14",send:"M12 19V5M6 11l6-6 6
 chat:"M4 5h16v11H9l-5 4z",task:"M5 5h14v14H5zM8.5 12l2.5 2.5 4.5-5",
 doc:"M7 3h7l4 4v14H7zM14 3v4h4M10 12h5M10 16h5",
 tools:"M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+gear:"M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1",
 search:"M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l4 4",close:"M6 6l12 12M18 6L6 18",
 chev:"M7 10l5 5 5-5",right:"M9 6l6 6-6 6",
 sun:"M12 8a4 4 0 100 8 4 4 0 000-8zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4",
@@ -759,7 +784,7 @@ let html="";const P=t=>inl(t).replace(/\n/g,"<br>");for(const b of out){if(b.raw
 return html.replace(/\u0000I(\d+)\u0000/g,(m,i)=>tokInl[+i]).replace(/\u0000(\d+)\u0000/g,(m,i)=>tok[+i])};
 let cur="idle",tab="chat",vi=0,LOG=[],MXE,pkt,NF=99,busy=false;
 
-const state={sessions:[],sessionId:null,model:"",pinned:""};
+const state={sessions:[],sessionId:null,model:"",pinned:"",provider:"deployment",defaultProvider:null,defaultModel:null,providers:[],deploymentModels:[],settingsLoaded:false};
 let TASKS=[],CAPS=[],PENDING=null,LIVE=null,WS=null,MF=null,WSE="",DECIDING=false;
 let SESSLOAD=false,SESSFAILED=false,TASKSFAILED=false,CAPSFAILED=false,KEYBAD=false,KEYWARNED=false,pageTab="",PREVIEW=false;
 const LOC="en-GB";
@@ -977,17 +1002,17 @@ function openKeyDialog(msg){askDialog({title:hasKey()?"Replace agent key":"Agent
 function connectKey(v){const t=String(v||"").trim();if(!t){toast("Paste the key first.");return}localStorage.setItem("blip_key",t);location.reload()}
 const setKey=openKeyDialog;
 
-function renderModel(){const w=$("modelWrap"),s=$("mps");if(!w||!s)return;if(!state.sessionId||!hasKey()){w.hidden=true;return}w.hidden=false;const v=state.model||"";
-const shortId=m=>{const x=String(m||"");const i=x.lastIndexOf("/");return i<0?x:x.slice(i+1)};
-s.innerHTML='<option value="" title="'+esc(state.pinned||"")+'">Pinned: '+esc(shortId(state.pinned)||"?")+"</option>"+MODS.map(m=>'<option value="'+esc(m)+'" title="'+esc(m)+'">'+esc(shortId(m))+"</option>").join("")+(v&&MODS.indexOf(v)<0?'<option value="'+esc(v)+'" title="'+esc(v)+'">'+esc(shortId(v))+"</option>":"")+'<option value="__x">Type another id...</option>';s.value=v;s.title=v?"Using "+v:"Pinned "+(state.pinned||"")}
-async function loadModel(id){try{const r=await api("/api/sessions/"+encodeURIComponent(id)+"/model");const j=await r.json();if(state.sessionId!==id)return;state.model=j.ok?(j.model||""):state.model||"";state.pinned=j.pinned||state.pinned||"";renderModel()}catch(e){}}
-async function pickModel(v){const id=state.sessionId;if(!id)return;if(busy||PENDING){renderModel();toast("Wait for the current turn first.");return}let m=v;if(v==="__x"){const t=await askDialog({title:"Use another model",body:"Enter a model id exactly as the router knows it. Leave it blank to follow the pinned default.",label:"Model id",value:"",placeholder:"provider/model",confirm:"Use model"});if(t===null){renderModel();return}m=t.trim()}try{const r=await api("/api/sessions/"+encodeURIComponent(id)+"/model",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({model:m})});const j=await r.json();if(!j.ok){renderModel();toast(j.error||"The agent refused that model id.");return}state.model=j.model||"";state.pinned=j.pinned||state.pinned;renderModel()}catch(e){renderModel();toast("Could not change the model.")}}
+function modelGroups(){const groups=[{id:"deployment",name:"Deployment router",models:(state.deploymentModels.length?state.deploymentModels:[state.pinned]).filter(Boolean)}];for(const p of state.providers)groups.push({id:p.id,name:p.name,models:Array.isArray(p.models)?p.models:[]});return groups}
+function renderModel(){const w=$("modelWrap"),s=$("mps");if(!w||!s)return;if(tab!=="chat"||!state.sessionId||!hasKey()){w.hidden=true;return}w.hidden=false;const cur=state.model?(state.provider||"deployment")+"|"+state.model:"";const groups=modelGroups();let html='<option value="">Default: '+esc(state.defaultModel||state.pinned||"deployment")+'</option>';for(const g of groups){if(!g.models.length)continue;html+='<optgroup label="'+esc(g.name)+'">'+g.models.map(m=>'<option value="'+esc(g.id+"|"+m)+'">'+esc(m)+'</option>').join("")+'</optgroup>'}if(cur&&!groups.some(g=>g.id===state.provider&&g.models.includes(state.model)))html+='<option value="'+esc(cur)+'">'+esc(state.model)+'</option>';html+='<option value="__x">Custom model id...</option>';s.innerHTML=html;s.value=cur;s.title=cur?("Using "+cur):("Default "+(state.defaultModel||state.pinned||""))}
+async function loadModel(id){try{const r=await api("/api/sessions/"+encodeURIComponent(id)+"/model");const j=await r.json();if(state.sessionId!==id)return;state.model=j.ok?(j.model||""):state.model||"";state.provider=j.provider||"deployment";state.pinned=j.pinned||state.pinned||"";state.defaultProvider=j.defaultProvider||state.defaultProvider;state.defaultModel=j.defaultModel||state.defaultModel;renderModel()}catch(e){}}
+async function loadModelSettings(){if(!hasKey())return;try{const r=await api("/api/settings/models");const j=await r.json();if(!j.ok)return;state.providers=Array.isArray(j.providers)?j.providers:[];state.defaultProvider=j.default?j.default.provider:null;state.defaultModel=j.default?j.default.model:null;state.deploymentModels=Array.isArray(j.deployment&&j.deployment.models)?j.deployment.models:[];state.settingsLoaded=true;renderModel();if(tab==="settings")renderPage()}catch(e){}}
+async function pickModel(v){const id=state.sessionId;if(!id)return;if(busy||PENDING){renderModel();toast("Wait for the current turn first.");return}let provider=state.provider||"deployment",model=null;if(v==="__x"){const t=await askDialog({title:"Use another model",body:"Enter a model id for the current provider. Leave it blank to follow the default.",label:"Model id",value:"",placeholder:"provider/model",confirm:"Use model"});if(t===null){renderModel();return}model=t.trim();if(!model){renderModel();return}}else if(v!==""){const cut=v.indexOf("|");provider=cut<0?"deployment":v.slice(0,cut);model=cut<0?v:v.slice(cut+1)}try{const r=await api("/api/sessions/"+encodeURIComponent(id)+"/model",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({model:model===null?"":model,provider})});const j=await r.json();if(!j.ok){renderModel();toast(j.error||"The agent refused that model.");return}state.model=j.model||"";state.provider=j.provider||"deployment";renderModel()}catch(e){renderModel();toast("Could not change the model.")}}
 
-function renderTitle(){const s=state.sessions.find(x=>x.id===state.sessionId);const names={tasks:"Tasks",docs:"Files",tools:"Tools"};let title="Blip";
+function renderTitle(){const s=state.sessions.find(x=>x.id===state.sessionId);const names={tasks:"Tasks",docs:"Files",tools:"Tools",settings:"Settings"};let title="Blip";
 if(tab==="chat")title=hasKey()?(s?dispTitle(s.title):"New chat"):"Blip";else title=names[tab]||"Blip";
-$("nm").textContent=title;document.title=(tab==="chat"&&hasKey()&&s?dispTitle(s.title)+" · ":"")+"Blip";const m=$("modelWrap");if(m&&(!state.sessionId||!hasKey()))m.hidden=true}
+$("nm").textContent=title;document.title=(tab==="chat"&&hasKey()&&s?dispTitle(s.title)+" · ":"")+"Blip";const m=$("modelWrap");if(m&&(tab!=="chat"||!state.sessionId||!hasKey()))m.hidden=true}
 
-function navHTML(){const names={chat:["Chats","chat"],tasks:["Tasks","task"],docs:["Files","doc"],tools:["Tools","tools"]};const open=TASKS.filter(t=>t.status!=="done").length;
+function navHTML(){const names={chat:["Chats","chat"],tasks:["Tasks","task"],docs:["Files","doc"],tools:["Tools","tools"],settings:["Settings","gear"]};const open=TASKS.filter(t=>t.status!=="done").length;
 return Object.entries(names).map(([k,[label,icon]])=>`<button onclick="go('${k}')" ${tab===k?'aria-current="page"':""}>${ic(icon)}<span>${label}</span>${k==="tasks"?`<span class="cnt" id="taskbadge" ${open?"":"hidden"}>${open>9?"9+":open}</span>`:""}</button>`).join("")}
 function sideHTML(){const chips=Object.keys(S).map(k=>`<button class="chip" data-k="${k}" style="--c:${S[k].c}" aria-pressed="${tab==="chat"&&k===cur}" onclick="st('${k}')"><i></i>${esc(S[k].n)}</button>`).join("");
 return `<div class="sbrand"><span class="mark">${markSVG(28)}</span><b>Blip</b><button class="x" id="sideClose" aria-label="Close chats" onclick="side(0)">${ic("close")}</button></div>
@@ -1025,9 +1050,9 @@ if(r==="t")out+=toolCardHTML(t);else if(r==="g")out+=deniedHTML(t.cmd);else if(r
 function renderThread(){if(LIVE)return;const view=$("scr");let body="";
 if(!hasKey())body=connectHTML();else if(SESSLOAD&&!state.sessionId)body=loadingHTML("Loading your chats");else if(SESSFAILED&&!state.sessionId)body=`<div class="emptybox">${ic("alert")}<h2>Could not load your chats</h2><p>Check the connection and try again.</p><button class="btn" onclick="loadSessions()">Retry</button></div>`;else if(!LOG.length)body=welcomeHTML();else body='<h1 class="sr-only">Chat with Blip</h1>'+renderLog();
 view.innerHTML=`<div class="thr" id="thr">${body}<div id="live"></div></div>`;if(!LIVE)scrollEnd(true)}
-function renderPage(reset){const el=$("pgw");if(!el)return;const y=el.scrollTop;const fn={tasks:pTasks,docs:pFiles,tools:pTools}[tab];el.innerHTML=`<div class="pagewrap">${fn?fn():""}</div>`;el.scrollTop=(reset||pageTab!==tab)?0:y;pageTab=tab}
+function renderPage(reset){const el=$("pgw");if(!el)return;const y=el.scrollTop;const fn={tasks:pTasks,docs:pFiles,tools:pTools,settings:pSettings}[tab];el.innerHTML=`<div class="pagewrap">${fn?fn():""}</div>`;el.scrollTop=(reset||pageTab!==tab)?0:y;pageTab=tab}
 function render(){const isChat=tab==="chat";$("scr").style.display=isChat?"block":"none";$("pgw").style.display=isChat?"none":"block";$("cmpWrap").style.display=isChat&&hasKey()?"block":"none";if(!isChat)renderPage();$("side").innerHTML=sideHTML();syncTheme();renderTitle();upd()}
-function go(t){if(t===tab){side(0);return}pageTab="";tab=t;side(0);render();if(t==="tasks")loadTasks();if(t==="docs")loadWs();if(t==="tools")loadCaps();if(t==="chat"&&hasKey())requestAnimationFrame(()=>{try{$("inp").focus()}catch(e){}})}
+function go(t){if(t===tab){side(0);return}pageTab="";tab=t;side(0);render();if(t==="tasks")loadTasks();if(t==="docs")loadWs();if(t==="tools")loadCaps();if(t==="settings")loadModelSettings();if(t==="chat")renderModel();if(t==="chat"&&hasKey())requestAnimationFrame(()=>{try{$("inp").focus()}catch(e){}})}
 function side(o){if(!matchMedia("(max-width:899px)").matches&&o)return;const app=$("app"),sd=$("side"),main=$("main"),insp=$("insp");const wasOpen=app.classList.contains("dr");
 if(o){const active=document.activeElement;app.dataset.returnFocus=active&&active.id?active.id:"";app.classList.add("dr");sd.setAttribute("role","dialog");sd.setAttribute("aria-modal","true");if(main)main.inert=true;if(insp)insp.inert=true;setTimeout(()=>{try{$("sideClose")&&$("sideClose").focus()}catch(e){}},60)}
 else{app.classList.remove("dr");sd.removeAttribute("role");sd.removeAttribute("aria-modal");if(main)main.inert=false;if(insp)insp.inert=false;if(wasOpen&&matchMedia("(max-width:899px)").matches)setTimeout(()=>{try{$("menuBtn")&&$("menuBtn").focus()}catch(e){}},60)}
@@ -1127,9 +1152,28 @@ const capRow=c=>{const v=V[c.id]||["tools","idle"];return `<div class="cap${c.wi
 let body="";if(wired.length)body+=`<div class="capgroup"><div class="blabel"><span>Available now</span><span>${wired.length}</span></div>${wired.map(capRow).join("")}</div>`;if(off.length)body+=`<div class="capgroup"><div class="blabel"><span>Not connected</span><span>${off.length}</span></div>${off.map(capRow).join("")}</div>`;
 return head+body}
 
+function defaultKey(){const model=state.defaultModel||state.pinned||(state.deploymentModels[0]||"");return (state.defaultProvider||"deployment")+"|"+model}
+function pSettings(){const head=`<div class="phead"><div><h1>Models</h1><p class="psub">Providers, model IDs and the default for new chats.</p></div><div class="facts"><button class="btn" onclick="loadModelSettings()">${ic("reload")}Refresh</button><button class="btn p" onclick="providerDialog()">${ic("plus")}Add provider</button></div></div>`;
+if(!hasKey())return head+`<div class="emptybox">${ic("key")}<h2>Connect your agent</h2><p>Model settings are stored by the agent. Add the key first.</p><button class="btn p" onclick="openKeyDialog()">Connect</button></div>`;
+if(!state.settingsLoaded)return head+loadingHTML("Reading model settings");
+const groups=modelGroups();const defKey=defaultKey();let def=`<option value=""${defKey.endsWith("|")?" selected":""}>Deployment pin</option>`;for(const g of groups){if(!g.models.length)continue;def+=`<optgroup label="${esc(g.name)}">`+g.models.map(m=>`<option value="${esc(g.id+"|"+m)}"${defKey===g.id+"|"+m?" selected":""}>${esc(m)}</option>`).join("")+"</optgroup>"}
+const dep=`<div class="mset"><div class="mrow"><div class="minfo"><b>Deployment router</b><small>The pinned provider from the Worker. Its URL and key stay in deployment secrets and are never shown here.</small></div><span class="spill done">Built in</span></div><div class="mmodel">${esc(state.pinned||"Not loaded")}</div></div>`;
+const cards=state.providers.map(p=>`<div class="mset"><div class="mrow"><div class="minfo"><b>${esc(p.name)}</b><small>${esc(p.baseUrl)} · ${p.hasKey?esc(p.keyHint):"No API key saved"}</small></div><div class="mact"><button class="btn" onclick="testProvider('${esc(p.id)}')">Test</button><button class="btn" onclick="providerDialog('${esc(p.id)}')">Edit</button><button class="btn d" onclick="removeProvider('${esc(p.id)}')">Remove</button></div></div><div class="mmodel">${p.models.map(m=>`<code>${esc(m)}</code>`).join(" ")}</div></div>`).join("");
+const empty=state.providers.length?"":`<div class="emptybox">${ic("tools")}<h2>No custom providers</h2><p>Add an OpenAI-compatible provider, give it one or more model IDs, and choose a default.</p><button class="btn p" onclick="providerDialog()">Add provider</button></div>`;
+return head+`<div class="mset"><div class="mrow"><div class="minfo"><b>Default model</b><small>New chats use this. Any chat can override it from its header.</small></div></div><select class="msel" onchange="saveDefaultModel(this.value)">${def}</select></div>`+dep+cards+empty+`<div class="mnote">Provider keys are encrypted before storage and never returned to this browser. Changing the agent key later makes saved provider keys unreadable, so re-enter them after a key rotation.</div>`}
+
+function providerDialog(id){const p=id?state.providers.find(x=>x.id===id):null;if(id&&!p)return;const d=$("dlg");if(d.open)d.close();d.innerHTML=`<form class="dlg" novalidate><h2>${p?"Edit provider":"Add provider"}</h2><p>OpenAI-compatible endpoints only. The base URL is normalized to end in /v1.</p><label class="fl">Name<input id="pName" type="text" value="${esc(p?p.name:"")}" placeholder="My provider" autocomplete="off"></label><label class="fl">Base URL<input id="pUrl" type="text" value="${esc(p?p.baseUrl:"")}" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false"></label><label class="fl">API key<input id="pKey" type="password" placeholder="${p&&p.hasKey?"Saved "+esc(p.keyHint):"Optional for local endpoints"}" autocomplete="off"></label><label class="fl">Model IDs, one per line<textarea id="pModels" rows="4" spellcheck="false" placeholder="provider/model-a\nprovider/model-b">${esc(p?p.models.join("\n"):"")}</textarea></label>${p&&p.hasKey?`<label class="chk"><input type="checkbox" id="pClear"><span>Remove the saved key</span></label>`:""}<div class="err" id="pErr" hidden></div><div class="dacts"><button type="button" class="btn" id="pNo">Cancel</button><button type="submit" class="btn p">${p?"Save provider":"Add provider"}</button></div></form>`;
+const form=d.querySelector("form"),err=$("pErr");let done=false;const fin=()=>{if(done)return;done=true;if(d.open)d.close()};
+$("pNo").onclick=fin;d.oncancel=e=>{e.preventDefault();fin()};d.onclose=()=>{done=true};
+form.onsubmit=async e=>{e.preventDefault();const name=$("pName").value.trim(),baseUrl=$("pUrl").value.trim(),apiKey=$("pKey").value,models=$("pModels").value.split(/[\n,]+/).map(x=>x.trim()).filter(Boolean);if(!name||!baseUrl||!models.length){err.hidden=false;err.textContent="Name, base URL and at least one model ID are required.";return}err.hidden=true;const body={name,baseUrl,models};if(apiKey.trim())body.apiKey=apiKey.trim();if($("pClear")&&$("pClear").checked)body.clearKey=true;try{const r=await api("/api/settings/providers"+(p?"/"+encodeURIComponent(p.id):""),{method:p?"PUT":"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok){err.hidden=false;err.textContent=j.error||("Could not save ("+r.status+").");return}fin();await loadModelSettings();if(tab==="settings")renderPage();toast(p?"Provider updated.":"Provider added.")}catch(ex){err.hidden=false;err.textContent="Could not reach the agent."}};
+d.showModal();requestAnimationFrame(()=>{try{$("pName").focus()}catch(e){}})}
+async function removeProvider(id){const p=state.providers.find(x=>x.id===id);if(!p)return;const r=await confirmDialog({title:"Remove provider?",body:`"${p.name}" and its model list will be removed. Its API key is deleted.`,confirm:"Remove provider",danger:true});if(!r.ok)return;try{const res=await api("/api/settings/providers/"+encodeURIComponent(id),{method:"DELETE"});const j=await res.json().catch(()=>({}));if(!res.ok||!j.ok){toast(j.error||"Could not remove the provider.");return}await loadModelSettings();renderPage();toast("Provider removed.")}catch(e){toast("Could not remove the provider.")}}
+async function testProvider(id){try{const r=await api("/api/settings/test",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id})});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok){toast(j.error||"The provider test failed.");return}toast(`Provider answered in ${j.latencyMs} ms.`)}catch(e){toast("Could not test the provider.")}}
+async function saveDefaultModel(value){let provider="deployment",model=state.pinned||state.deploymentModels[0]||"";if(value){const cut=value.indexOf("|");provider=cut<0?"deployment":value.slice(0,cut);model=cut<0?value:value.slice(cut+1)}if(!model){toast("Choose a model first.");return}try{const r=await api("/api/settings/default",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({provider,model})});const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok){toast(j.error||"Could not save the default.");return}state.defaultProvider=provider;state.defaultModel=model;toast("Default model saved.");renderModel()}catch(e){toast("Could not save the default.")}}
+
 async function bootLoad(){try{const th=localStorage.getItem("blip.theme");if(th==="dark"||th==="light")D.dataset.theme=th}catch(e){}
 syncTheme();if(!hasKey()){SESSLOAD=false;SESSFAILED=false;renderThread();render();return}
-SESSLOAD=true;SESSFAILED=false;renderThread();render();await loadSessions();SESSLOAD=false;loadTasks();loadCaps();
+SESSLOAD=true;SESSFAILED=false;renderThread();render();await loadSessions();SESSLOAD=false;loadTasks();loadCaps();loadModelSettings();
 const ids=state.sessions.map(s=>s.id);let stored=null;try{stored=localStorage.getItem("blip.session")}catch(e){}
 const id=(stored&&ids.includes(stored))?stored:(ids.includes("main")?"main":ids[0]);
 if(id)await openSession(id);else{state.sessionId=null;try{localStorage.removeItem("blip.session")}catch(e){}LOG=[];renderThread();render()}}

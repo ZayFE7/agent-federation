@@ -62,3 +62,20 @@ export function createCheapModel(env: Env): LanguageModel {
 export function createPrimaryModel(env: Env, modelId?: string | null): LanguageModel {
   return createRouterModel(env, modelId || (env.MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY));
 }
+
+/**
+ * A provider the owner added in Settings. Its base URL already ends in `/v1`,
+ * validated by src/model-input.ts, and the SDK appends `/chat/completions`.
+ */
+export function createCustomModel(
+  provider: { baseUrl: string; apiKey: string },
+  modelId: string
+): LanguageModel {
+  const instance = createOpenAICompatible({
+    name: "blip-provider",
+    baseURL: provider.baseUrl,
+    apiKey: provider.apiKey || "none",
+    includeUsage: true,
+  });
+  return instance.chatModel(modelId);
+}

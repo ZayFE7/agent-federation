@@ -6,6 +6,7 @@ import { authed, safeEq, vaultAuthed } from "./auth";
 import { MAIN_DO_NAME, isSessionId } from "./session-scope";
 import { EXPECTED_TOOLS, capabilityList } from "./capabilities";
 import { handleFetch } from "./routes";
+import { handleSettings } from "./settings-routes";
 import { DEFAULT_MODEL_CHEAP } from "./types";
 import type { AgentStub, Env } from "./types";
 
@@ -55,6 +56,11 @@ export default {
       const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
       return stub.fetch(request);
     }
+
+    // Model provider settings and the global default live outside the session
+    // family, so they have their own authenticated handler.
+    const settingsResponse = await handleSettings(request, env);
+    if (settingsResponse) return settingsResponse;
 
     // The /api/sessions* family lives in src/routes.ts, which is the only part of
     // this worker an offline Node test can import (R42). The prefix is the whole

@@ -15,7 +15,9 @@ import type {
   ChatRequest,
   ChatTier,
   Env,
+  ModelChoiceInfo,
   PendingApprovalResult,
+  RegistryStub,
   ToolRun,
   TurnReceipt,
   TurnRefusal,
@@ -71,7 +73,7 @@ import { summarizeConversation } from "./compact";
 import { runInSandbox } from "./sandbox-client";
 import { searchParallel as searchParallelWeb } from "./search-client";
 import { parseDirective } from "./directives";
-import { createPrimaryModel } from "./provider";
+import { createPrimaryModel, createCustomModel } from "./provider";
 import { buildHarness } from "./harness";
 import { MAX_STEPS_CHAT } from "./harness-config";
 import { Researcher } from "./child";
@@ -109,6 +111,7 @@ import {
   quoteShellArg,
   safeWorkspacePath,
 } from "./workspace-keys";
+import type { ModelDefault, ModelProvider } from "./model-store";
 
 /**
  * The two registry RPCs the title fiber calls (Task 9). A local shape rather
@@ -302,6 +305,12 @@ export class FederationAgent extends Agent<Env> {
   /** One in-flight answer per parked approval; a second click must not submit twice. */
   private readonly approving = new Set<string>();
   private schemaReady = false;
+  /** Provider settings are global and change rarely; five seconds keeps a turn cheap. */
+  private modelSettingsCache: {
+    at: number;
+    providers: ModelProvider[];
+    default: ModelDefault | null;
+  } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -1044,6 +1053,43 @@ export class FederationAgent extends Agent<Env> {
     return turn;
   }
 
+  /** Cached global provider settings. A registry miss falls back to the env pin. */
+  private async loadModelSettings(force = false): Promise<{
+    providers: ModelProvider[];
+    default: ModelDefault | null;
+  }> {
+    const cache = this.modelSettingsCache;
+    if (!force && cache && Date.now() - cache.at < 5_000) {
+      return { providers: cache.providers, default: cache.default };
+    }
+    try {
+      const settings = await this.registryStub<RegistryStub>().modelSettings();
+      this.modelSettingsCache = {
+        at: Date.now(),
+        providers: settings.providers,
+        default: settings.default,
+      };
+      return settings;
+    } catch {
+      if (cache) return { providers: cache.providers, default: cache.default };
+      return { providers: [], default: null };
+    }
+  }
+
+  /** The concrete model for one provider choice, or undefined for the env pin. */
+  private async modelForChoice(
+    choice: { provider: string; model: string } | null
+  ): Promise<ReturnType<typeof createPrimaryModel> | undefined> {
+    if (!choice) return undefined;
+    if (choice.provider === "deployment") {
+      return createPrimaryModel(this.env, choice.model);
+    }
+    const settings = await this.loadModelSettings();
+    const provider = settings.providers.find((item) => item.id === choice.provider);
+    if (!provider) return undefined;
+    return createCustomModel(provider, choice.model);
+  }
+
   /**
    * `beforeTurn` runs before EVERY model call of a turn, so recall is per step,
    * not per turn. It never writes: reads only, and a failed hop degrades to no
@@ -1070,9 +1116,13 @@ export class FederationAgent extends Agent<Env> {
         memories = [];
       }
     }
-    // The console's picker can put this session on another model id. Unset means
-    // follow the worker's pinned var, so a cleared session still runs.
+    // The console's picker can put this session on another provider or model.
+    // With no override, the global default wins; with neither, the env pin stays.
     const override = getModelOverride(this.db(), turn.session);
+    const choice =
+      override ??
+      (await this.loadModelSettings()).default;
+    const model = await this.modelForChoice(choice);
     const base = buildSystemPrompt(memories, capabilitiesText(EXPECTED_TOOLS), SANDBOX_HOME);
     // `continue()` has no user message, so the first step of a continuation is
     // told in the system prompt what its own last message failed to do.
@@ -1082,7 +1132,7 @@ export class FederationAgent extends Agent<Env> {
         : base;
     return {
       system,
-      ...(override ? { model: createPrimaryModel(this.env, override) } : {}),
+      ...(model ? { model } : {}),
     };
   }
 
@@ -1722,18 +1772,32 @@ export class FederationAgent extends Agent<Env> {
    * false instead of throwing, because a thrown value crossing a DO RPC arrives
    * in another realm where `instanceof` cannot match it (src/session-scope.ts).
    */
-  async setModel(sessionId: string, model: string | null): Promise<boolean> {
+  async setModel(sessionId: string, model: string | null, provider?: string): Promise<boolean> {
     if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) return false;
-    setModelOverride(this.db(), sessionId, model);
+    setModelOverride(this.db(), sessionId, provider || "deployment", model);
     return true;
   }
 
-  async modelChoice(sessionId: string): Promise<{ model: string | null; pinned: string }> {
+  async modelChoice(sessionId: string): Promise<ModelChoiceInfo> {
     const pinned = this.env.MODEL_PRIMARY ?? DEFAULT_MODEL_PRIMARY;
     if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
-      return { model: null, pinned };
+      return {
+        model: null,
+        provider: "deployment",
+        pinned,
+        defaultProvider: null,
+        defaultModel: null,
+      };
     }
-    return { model: getModelOverride(this.db(), sessionId), pinned };
+    const override = getModelOverride(this.db(), sessionId);
+    const settings = await this.loadModelSettings();
+    return {
+      model: override?.model ?? null,
+      provider: override?.provider ?? settings.default?.provider ?? "deployment",
+      pinned,
+      defaultProvider: settings.default?.provider ?? null,
+      defaultModel: settings.default?.model ?? null,
+    };
   }
 
   async workspaceState(sessionId: string): Promise<WorkspaceState> {

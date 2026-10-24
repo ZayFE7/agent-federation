@@ -1,11 +1,11 @@
 # tests/
 
-Thirty-three offline, framework-free test files live here, all run by `npm test`. Beside them are the
+Thirty-four offline, framework-free test files live here, all run by `npm test`. Beside them are the
 runner, one shared fixture, and five live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
-33 such files.
+34 such files.
 
 ## How the suite runs
 
@@ -86,6 +86,12 @@ Compiles `src/memory.ts` with esbuild and drives the real exports against a live
 database: text recall ordering and the one-off prune. esbuild is located by an ordered existence
 check (env `BLIP_DEPLOY_NM`, this tree, the sibling tree). Cannot reach embedding recall; that is a
 held path (see below), so it tests the LIKE behaviour that shipped.
+
+### model-settings.test.mjs
+Tests the provider settings layer: HTTPS and private-host validation for base URLs, model id
+validation, AES-GCM round trips for provider keys, the pure provider store on real SQLite, masked
+settings responses, provider create/update routing, default validation and the per-chat provider
+parser. Does not call a real provider; the Test button is a live path.
 
 ### no-drift.test.mjs
 Proves the capability copy a user reads has one source (`src/capabilities.ts`) and never drifted back
