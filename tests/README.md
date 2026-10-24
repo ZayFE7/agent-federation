@@ -1,11 +1,11 @@
 # tests/
 
-Thirty-two offline, framework-free test files live here, all run by `npm test`. Beside them are the
+Thirty-three offline, framework-free test files live here, all run by `npm test`. Beside them are the
 runner, one shared fixture, and five live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
-32 such files.
+33 such files.
 
 ## How the suite runs
 

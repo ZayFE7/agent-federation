@@ -1,18 +1,41 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
+const E2B_API_KEY = process.env.E2B_API_KEY;
+const SBOX_TOKEN = process.env.SBOX_TOKEN;
+
+if (!E2B_API_KEY || !SBOX_TOKEN) {
+  console.error("Set E2B_API_KEY and SBOX_TOKEN in the environment before running this script.");
+  process.exit(1);
+}
+
+const cwd = process.env.BLIP_DEPLOY_DIR || process.cwd();
+const config = resolve(cwd, "deploy/sandbox-worker/wrangler.jsonc");
+if (!existsSync(config)) {
+  console.error("Run this from the deploy tree, or set BLIP_DEPLOY_DIR to that tree.");
+  process.exit(1);
+}
+
+const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
 function put(name, value) {
   const r = spawnSync(
-    "C:\\npx.cmd",
-    ["wrangler", "secret", "put", name, "-c", "deploy/sandbox-worker/wrangler.jsonc"],
+    npx,
+    ["wrangler", "secret", "put", name, "-c", config],
     {
       input: value,
       encoding: "utf8",
-      cwd: "E:/Users/Zay L/agent-federation",
+      cwd,
       stdio: ["pipe", "inherit", "inherit"],
     }
   );
-  console.log(name, "exit", r.status);
+  if (r.status !== 0) {
+    console.error(`${name} was not updated`);
+    process.exit(r.status ?? 1);
+  }
+  console.log(name, "updated");
 }
 
-put("E2B_API_KEY", "e2b_d1f3a042f9686ce66801324d5b660cad8859d428");
-put("SBOX_TOKEN", "642a40366a3176e771f714ae9bd4f079");
+put("E2B_API_KEY", E2B_API_KEY);
+put("SBOX_TOKEN", SBOX_TOKEN);
