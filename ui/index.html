@@ -153,7 +153,7 @@ button:disabled{cursor:default}
 @media (max-width:899px){
   .app{grid-template-columns:minmax(0,1fr)}
   .side{position:fixed;inset:0 auto 0 0;width:min(88vw,344px);transform:translateX(-105%);transition:transform .3s cubic-bezier(.22,1,.36,1);padding-top:calc(10px + env(safe-area-inset-top));border-right:1px solid var(--ln)}
-  .app.dr .side{transform:none;box-shadow:var(--sh2)}
+  .app.dr .side{transform:none;box-shadow:var(--sh2);z-index:60}
   .sbrand .x{display:grid}
   .nav button,.sbot button{height:44px}
   .srow{min-height:48px}
@@ -319,7 +319,7 @@ button:disabled{cursor:default}
 .gt .gbody{padding:10px 12px 12px}
 .gt .gbody p{margin:0 0 8px;font-size:12.5px;color:var(--mt);line-height:1.45}
 .gt .ac{display:flex;gap:8px;margin-top:10px}
-.bt{flex:1;min-height:40px;border:1px solid var(--ln2);border-radius:10px;background:var(--s2);color:var(--ink);font:700 13px var(--f);cursor:pointer}
+.bt{flex:1;min-height:44px;border:1px solid var(--ln2);border-radius:10px;background:var(--s2);color:var(--ink);font:700 13px var(--f);cursor:pointer}
 .bt.p{background:var(--ink);color:var(--s1);border-color:var(--ink)}
 .bt:disabled{opacity:.55;cursor:default}
 .gt.rs{border:1px dashed var(--mu);background:transparent}
@@ -580,6 +580,10 @@ dialog::backdrop{background:rgba(20,10,40,.52)}
 .eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
 
 .eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
+
+.eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
+
+.eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
 </style>
 </head>
 <body>
@@ -647,6 +651,8 @@ shop:{e:"n",m:"smile",p:[-52,52,2,2.2,0,4,0,0,0],b:["bob",1.4]},
 create:{e:"wide",m:"smile",p:[20,-100,6,1.6,-5,0,-3,0,1],b:["sway",2.8]},
 memory:{e:"happy",m:"smile",p:[-45,45,2,2.6,0,0,2,0,0],b:["sway",3.4]},
 delegate:{e:"wide",m:"smile",p:[125,-125,12,.7,0,-3,-4,0,1],b:["bob",1.2]}});
+
+
 
 
 
@@ -794,7 +800,7 @@ const deniedHTML=cmd=>'<div class="gt rs"><header><span style="color:var(--er)">
 function toolCmd(f){const raw=String(f.input||"");if(!raw)return"";try{const j=JSON.parse(raw);return String(j.cmd||j.query||j.title||j.instructions||j.goal||raw)}catch(e){return raw}}
 function toolCardHTML(t){const m=toolMeta(t.name),ok=t.ok!==false;return '<div class="tcard'+(ok?"":" on fail op")+'" style="--a:'+m.a+'"><button class="tch" aria-expanded="'+(ok?"false":"true")+'" onclick="this.parentNode.classList.toggle(\'op\');this.setAttribute(\'aria-expanded\',this.parentNode.classList.contains(\'op\'))"><span class="ti"><svg class="wic"><use href="#'+m.i+'"></use></svg></span><span class="tnm">'+esc(m.l)+'</span><span class="tcm">'+esc(t.cmd||"")+'</span><span class="tst'+(ok?" ok":"")+'">'+(ok?toolDone():toolExit(t.output))+'</span></button><div class="tbody"><div class="bd">'+tmHTML(t.cmd||"",t.output||"",t.name)+'</div></div></div>'}
 
-const MODS=["cf/@cf/qwen/qwen3.8-27b"];
+const MODS=["antigravity/gemini-3.8-flash-tiered"];
 const SUGS=[
  {icon:"search",t:"Search the web",d:"Find current facts, prices or documentation.",code:"search: latest Cloudflare Agents SDK notes",prompt:"search: latest Cloudflare Agents SDK release notes"},
  {icon:"code",t:"Run a command",d:"Use the Linux sandbox and see the output.",code:"run: ls -la",prompt:"run: ls -la"},
@@ -871,13 +877,13 @@ if(ok){t.card.classList.remove("on","op","fail");const st=t.card.querySelector("
 else{t.card.classList.add("on","fail","op");const st=t.card.querySelector(".tst");st.className="tst";st.innerHTML=toolExit(t.output);t.open=true;t.hd.setAttribute("aria-expanded","true")}
 if(atEnd)scrollEnd(true)}
 function mountGate(f){const L=LIVE;if(!L)return;const t=L.tools.get(f.toolCallId);if(t){t.card.dataset.gated="1";t.card.style.display="none"}
-const g=document.createElement("div");g.className="gt";g.setAttribute("role","alertdialog");g.setAttribute("aria-label","Approval needed");g.innerHTML=`<header>${ic("lock")}<b>Approval needed</b></header><div class="gbody"><p>Code runs freely in the sandbox. This action has real-world or persistent effects, so it runs only after you approve it.</p>${tmHTML(f.cmd,"","exec")}<div class="ac"><button class="bt" data-a="0">Deny</button><button class="bt p" data-a="1">Approve</button></div></div>`;
+const g=document.createElement("div");g.className="gt";g.setAttribute("role","group");g.setAttribute("aria-label","Approval needed");g.tabIndex=-1;g.innerHTML=`<header>${ic("lock")}<b>Approval needed</b></header><div class="gbody"><p>Code runs freely in the sandbox. This action has real-world or persistent effects, so it runs only after you approve it.</p>${tmHTML(f.cmd,"","exec")}<div class="ac"><button class="bt" data-a="0">Deny</button><button class="bt p" data-a="1">Approve</button></div></div>`;
 const b=g.querySelectorAll(".bt");b[0].onclick=()=>gate(false);b[1].onclick=()=>gate(true);
 L.gate=g;L.host.insertBefore(g,L.working||null);PENDING={toolCallId:f.toolCallId,cmd:f.cmd};L.parked=true;cur="approve";
 const wl=L.working&&L.working.querySelector(".wlab");if(wl)wl.textContent="Waiting for you";
-upd();announce("Approval needed. A command is waiting in the chat.");requestAnimationFrame(()=>{try{b[1].focus()}catch(e){}})}
+upd();announce("Approval needed. A command is waiting in the chat.");requestAnimationFrame(()=>{try{g.focus()}catch(e){}})}
 function gate(approve){const L=LIVE;if(!L||!PENDING||DECIDING)return;const g=L.gate;DECIDING=true;setSend();
-if(g){g.classList.remove("rs");g.classList.add("gw");g.setAttribute("aria-busy","true");g.innerHTML='<header>'+ic("lock")+'<b>'+(approve?"Approved":"Denied")+'</b></header><div class="gbody"><div class="gwait"><span class="gspin" aria-hidden="true"></span><span>'+(approve?"Sending your approval. Blip continues in this chat.":"Sending your decision. The command will not run.")+'</span></div>'+tmHTML(PENDING.cmd,"","exec")+'</div>'}
+if(g){g.classList.remove("rs");g.classList.add("gw");g.setAttribute("aria-busy","true");g.innerHTML='<header>'+ic("lock")+'<b>Sending</b></header><div class="gbody"><div class="gwait"><span class="gspin" aria-hidden="true"></span><span class="gwaitmsg">'+(approve?"Sending your approval":"Sending your decision")+', 0s</span></div><p>Blip is still working. This can take up to 45 seconds.</p>'+tmHTML(PENDING.cmd,"","exec")+'</div>'}
 if(!approve&&PENDING)L.denied.add(PENDING.toolCallId);
 decide(approve)}
 function resolveGate(approve,cmd,note){const L=LIVE;const g=L&&L.gate;if(!g)return;g.classList.remove("gw");g.setAttribute("aria-busy","false");g.classList.add("rs");
@@ -1068,17 +1074,21 @@ WS=p;MF=m;WSE=pe||me;if(tab==="docs")renderPage()}
 async function dlWs(){const sid=state.sessionId;if(!sid)return;try{const r=await api("/api/sessions/"+encodeURIComponent(sid)+"/workspace/archive");if(!r.ok){const j=await r.json().catch(()=>({}));toast(j.error||j.reason||("Could not download ("+r.status+")."));return}const u=URL.createObjectURL(await r.blob());const a=document.createElement("a");a.href=u;a.download="workspace-"+sid+".tar.gz";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000)}catch(e){toast("Could not download the workspace.")}}
 async function delFileAt(i){const sid=state.sessionId;if(!sid||!MF||!MF.files[i])return;const p=String(MF.files[i].path);const r=await confirmDialog({title:"Delete this file?",body:`${p} will be removed from the saved workspace.`,confirm:"Delete file",danger:true});if(!r.ok)return;try{const tail=p.split("/").map(encodeURIComponent).join("/");const res=await api("/api/sessions/"+encodeURIComponent(sid)+"/workspace/files/"+tail,{method:"DELETE"});const j=await res.json().catch(()=>({}));if(!res.ok){toast(j.error||("Delete failed ("+res.status+")."));return}await loadWs();if(MF&&MF.files.some(f=>String(f.path)===p))MF={files:MF.files.filter(f=>String(f.path)!==p),truncated:!!MF.truncated};if(tab==="docs")renderPage()}catch(e){toast("Could not delete the file.")}}
 async function decide(approve){if(!PENDING)return;const toolCallId=PENDING.toolCallId,cmd=PENDING.cmd,sid=state.sessionId;
-const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),45000);
+const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),45000),started=Date.now();
+const tick=setInterval(()=>{const el=LIVE&&LIVE.gate&&LIVE.gate.querySelector(".gwaitmsg");if(el)el.textContent=(approve?"Sending your approval":"Sending your decision")+", "+Math.round((Date.now()-started)/1000)+"s"},500);
 try{const r=await api("/api/approve",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sessionId:sid,toolCallId,approved:approve}),signal:ctl.signal});
 const j=await r.json().catch(()=>({}));
-if(!r.ok||!j.ok){if(state.sessionId!==sid)return;gateError(j.error||("The agent could not record your decision ("+r.status+")."),approve,j.state!=="not_waiting");return}
+if(!r.ok){if(state.sessionId!==sid)return;gateError(j.error||("The agent did not answer ("+r.status+")."),approve,true);return}
+if(!j.ok&&!j.state){if(state.sessionId!==sid)return;gateError(j.error||"The agent could not record your decision.",approve,true);return}
+if(j.state==="not_waiting"){if(state.sessionId!==sid)return;gateError(j.error||j.reply||"That approval is no longer waiting.",approve,false);return}
 PENDING=null;if(!approve)LOG.push(["g",{cmd}]);
+if(!j.ok){if(state.sessionId!==sid)return;if(j.reply)LOG.push(["a",String(j.reply),Date.now()]);teardown();clearLive();busy=false;cur="error";renderThread();upd();announce("The decision was recorded, but the turn did not finish.");toast("The decision was recorded. The turn stopped without finishing.");loadTasks();refreshSessionsSoon();return}
 if(j.state==="queued"&&j.streamId){if(state.sessionId!==sid)return;resolveGate(approve,cmd,approve?"Approved. Blip is continuing below.":"Denied. Blip is continuing below.");beginLive(sid);LIVE.operationId=j.operationId||null;saveLive();connectStream(j.streamId);announce(approve?"Approved. Watching the turn.":"Denied. Watching the turn.");return}
 if(state.sessionId!==sid)return;
 if(j.output!==undefined&&j.output!==null)LOG.push(["t",{name:"exec",cmd,output:j.output,ok:j.ok}]);if(j.reply)LOG.push(["a",String(j.reply),Date.now()]);
 PREVIEW=false;teardown();clearLive();busy=false;cur=(j.state&&S[j.state])?j.state:(approve?"success":"idle");renderThread();upd();scrollEnd(true);announce(approve?"Approved.":"Denied.");loadTasks();refreshSessionsSoon()
 }catch(e){if(state.sessionId!==sid)return;const slow=e&&e.name==="AbortError";gateError(slow?"The agent did not answer in time. Reload this chat to see where the turn got to.":"Could not send the decision. "+e,approve,!slow)}
-finally{clearTimeout(to);DECIDING=false;setSend()}}
+finally{clearTimeout(to);clearInterval(tick);DECIDING=false;setSend()}}
 async function loadPending(id){if(!hasKey())return;try{const r=await api("/api/sessions/"+encodeURIComponent(id)+"/approval");const j=await r.json().catch(()=>({}));if(state.sessionId!==id||LIVE||!j.ok||!j.pending)return;beginLive(id);busy=false;mountGate({toolCallId:j.pending.toolCallId,cmd:j.pending.cmd,name:j.pending.name||"exec"});setSend()}catch(e){}}
 
 function pTasks(){const open=TASKS.filter(t=>t.status!=="done"),done=TASKS.filter(t=>t.status==="done").slice(-4).reverse();const pending=open.filter(t=>t.status==="pending"&&t.due_at).sort((a,b)=>Number(a.due_at)-Number(b.due_at));const next=pending[0];const daily=pending.filter(t=>t.recurrence).length;

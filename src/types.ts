@@ -221,18 +221,12 @@ export interface RegistryStub {
 }
 
 /**
- * Fallbacks when the wrangler vars are unset. `cf/@cf/qwen/qwen3.8-27b` was
- * measured live on 2026-10-22 through the funnel `ROUTER_URL`: plain echo 200,
- * and a full tool round trip 200 with `finish_reason: "tool_calls"` and the
- * nonce returned in the tool arguments. It replaced the pair that throttled:
- * `ocf/deepseek-v4.1-flash-free` answers 429 `All credentials ... cooling down`
- * on the free tier, and that lane carries titles, compaction and `/api/decide`.
- * `gemini3.7flash` still answers on the funnel and is what the console's model
- * picker can be switched back to. Both ids resolve ONLY through the funnel;
- * the cloud `zay-router` Worker 404s `ocf/` and `cf/` prefixed names alike.
+ * Current model pin. Both lanes use the same id until a measured cheaper
+ * tool-capable lane exists; the new id is served through `ROUTER_URL`, and a
+ * live tool round trip is the acceptance test after deploy.
  */
-export const DEFAULT_MODEL_PRIMARY = "cf/@cf/qwen/qwen3.8-27b";
-export const DEFAULT_MODEL_CHEAP = "cf/@cf/qwen/qwen3.8-27b";
+export const DEFAULT_MODEL_PRIMARY = "antigravity/gemini-3.8-flash-tiered";
+export const DEFAULT_MODEL_CHEAP = "antigravity/gemini-3.8-flash-tiered";
 
 export interface Env {
   /** HTTPS URL of the Pipedream router workflow. */

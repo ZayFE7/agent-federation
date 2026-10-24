@@ -524,6 +524,19 @@ check("src/index.ts delegates the /api/sessions* family and nothing else", () =>
   }
 });
 
+check("the approve route requires an explicit session id", () => {
+  assert.doesNotMatch(
+    INDEX_SOURCE,
+    /body\.sessionId\s*\?\?\s*MAIN_DO_NAME/,
+    "an absent sessionId must not silently approve the legacy main session"
+  );
+  assert.match(
+    INDEX_SOURCE,
+    /typeof sessionId !== "string"/,
+    "the route must reject a missing or non-string sessionId"
+  );
+});
+
 // The one RPC this task adds to src/agent.ts, and the AgentStub widening that goes
 // with it. src/agent.ts cannot be imported by Node, so tsc plus this text check is
 // the only check it gets; the brief states the body verbatim.

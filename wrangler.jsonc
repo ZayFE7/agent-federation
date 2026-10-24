@@ -70,8 +70,8 @@
   // while the deepseek free tier cools down; the console's model picker overrides
   // the primary per session without a redeploy.
   "vars": {
-    "MODEL_PRIMARY": "cf/@cf/qwen/qwen3.8-27b",
-    "MODEL_CHEAP": "cf/@cf/qwen/qwen3.8-27b"
+    "MODEL_PRIMARY": "antigravity/gemini-3.8-flash-tiered",
+    "MODEL_CHEAP": "antigravity/gemini-3.8-flash-tiered"
   },
   // Secrets (never put these in vars):
   //   wrangler secret put ROUTER_KEY        (bearer for the model router)

@@ -240,6 +240,8 @@ export class FederationAgent extends Agent<Env> {
    * and a name already working cannot be started twice against one facet.
    */
   private readonly childInFlight = new Set<string>();
+  /** One in-flight answer per parked approval; a second click must not submit twice. */
+  private readonly approving = new Set<string>();
   private schemaReady = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -1240,71 +1242,84 @@ export class FederationAgent extends Agent<Env> {
       };
     }
 
-    let receipt;
-    try {
-      receipt = await session.submit(
-        { type: "approval", approvalId, approved, ...(reason ? { reason } : {}) },
-        { autoContinue: true, source: "server" }
-      );
-    } catch (err) {
-      return { ok: false, reply: String(err), state: "unanswered" };
+    const claim = `${sessionId}:${approvalId}`;
+    if (this.approving.has(claim)) {
+      return {
+        ok: false,
+        reply: "That approval is already being answered.",
+        state: "not_waiting",
+      };
     }
-
-    // The continuation is a NEW harness operation, so its frames land on a new
-    // stream. Opening it here (the hub would open it lazily on the first frame)
-    // means the id we return on timeout is already a stream the console can
-    // attach to, even when the model has not produced its first chunk yet.
-    const streamId = streamIdFor(sessionId, receipt.operationId);
+    this.approving.add(claim);
     try {
-      await this.hub.open(streamId, sessionId);
-    } catch {
-      // A failed open is not a failed decision: the transcript still continues,
-      // and the console's fallback is to reload it.
-    }
-
-    let outcome;
-    try {
-      outcome = await session.wait(receipt.operationId, AbortSignal.timeout(25_000));
-    } catch (err) {
-      const timedOut =
-        err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
-      if (timedOut) {
-        return {
-          ok: true,
-          reply: approved
-            ? "Approved. The turn is continuing."
-            : "Denied. The turn is continuing.",
-          state: "queued",
-          streamId,
-          operationId: receipt.operationId,
-        };
+      let receipt;
+      try {
+        receipt = await session.submit(
+          { type: "approval", approvalId, approved, ...(reason ? { reason } : {}) },
+          { autoContinue: true, source: "server" }
+        );
+      } catch (err) {
+        return { ok: false, reply: String(err), state: "unanswered" };
       }
-      return { ok: false, reply: String(err), state: "unanswered" };
-    }
 
-    let messages: readonly UIMessage[] = [];
-    try {
-      messages = await session.messages();
-    } catch {
-      messages = [];
+      // The continuation is a NEW harness operation, so its frames land on a new
+      // stream. Opening it here (the hub would open it lazily on the first frame)
+      // means the id we return on timeout is already a stream the console can
+      // attach to, even when the model has not produced its first chunk yet.
+      const streamId = streamIdFor(sessionId, receipt.operationId);
+      try {
+        await this.hub.open(streamId, sessionId);
+      } catch {
+        // A failed open is not a failed decision: the transcript still continues,
+        // and the console's fallback is to reload it.
+      }
+
+      let outcome;
+      try {
+        outcome = await session.wait(receipt.operationId, AbortSignal.timeout(25_000));
+      } catch (err) {
+        const timedOut =
+          err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+        if (timedOut) {
+          return {
+            ok: true,
+            reply: approved
+              ? "Approved. The turn is continuing."
+              : "Denied. The turn is continuing.",
+            state: "queued",
+            streamId,
+            operationId: receipt.operationId,
+          };
+        }
+        return { ok: false, reply: String(err), state: "unanswered" };
+      }
+
+      let messages: readonly UIMessage[] = [];
+      try {
+        messages = await session.messages();
+      } catch {
+        messages = [];
+      }
+      const projected = replyFrom({
+        status: outcome.status,
+        ...(outcome.status === "done" ? { text: outcome.text } : { reason: outcome.reason }),
+        messages,
+      });
+      await this.rememberGlobal(
+        "tool",
+        `approval ${approved ? "granted" : "denied"} for ${toolCallId}`,
+        3
+      );
+      const output = toolOutputOf(messages, toolCallId);
+      return {
+        ok: outcome.status === "done",
+        reply: projected.reply,
+        state: outcome.status,
+        ...(output ? { output: output.slice(0, 4000) } : {}),
+      };
+    } finally {
+      this.approving.delete(claim);
     }
-    const projected = replyFrom({
-      status: outcome.status,
-      ...(outcome.status === "done" ? { text: outcome.text } : { reason: outcome.reason }),
-      messages,
-    });
-    await this.rememberGlobal(
-      "tool",
-      `approval ${approved ? "granted" : "denied"} for ${toolCallId}`,
-      3
-    );
-    const output = toolOutputOf(messages, toolCallId);
-    return {
-      ok: outcome.status === "done",
-      reply: projected.reply,
-      state: outcome.status,
-      ...(output ? { output: output.slice(0, 4000) } : {}),
-    };
   }
 
   /**

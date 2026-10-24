@@ -108,8 +108,8 @@ export default {
       } catch {
         return Response.json({ error: "invalid JSON body" }, { status: 400 });
       }
-      const sessionId = body.sessionId ?? MAIN_DO_NAME;
-      if (!isSessionId(sessionId)) {
+      const sessionId = body.sessionId;
+      if (typeof sessionId !== "string" || !isSessionId(sessionId)) {
         return Response.json({ error: "valid sessionId required" }, { status: 400 });
       }
       if (typeof body.toolCallId !== "string" || body.toolCallId.length === 0) {
