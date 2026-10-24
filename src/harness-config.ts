@@ -27,7 +27,7 @@ export interface HarnessConfigDeps {
   /** Consumed by harness.observe() in src/harness.ts, never a hook. */
   onEvent: (session: string, ev: ThinkSessionEvent) => void;
   onTurnEnd: (ctx: ThinkTurnEndContext) => Promise<void>;
-  summarize: (text: string) => Promise<string>;
+  summarize: (text: string, sessionId?: string) => Promise<string>;
   /** Task 16: memory injection and the honest system prompt. */
   beforeTurn?: ThinkHarnessHooks["beforeTurn"];
   /**
@@ -100,9 +100,11 @@ export function harnessConfig(
     toolApproval: ({ toolName, input }) =>
       deps.approve ? deps.approve(toolName, input) : needsApproval(toolName, input),
     recovery: { ...RECOVERY },
-    configureSession: (session) => {
+    configureSession: (session, id) => {
       session
-        .onCompaction(createCompactFunction({ summarize: deps.summarize }))
+        .onCompaction(
+          createCompactFunction({ summarize: (text) => deps.summarize(text, id) })
+        )
         .compactAfter(COMPACT_AFTER_TOKENS);
     },
     hooks: {

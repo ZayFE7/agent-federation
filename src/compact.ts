@@ -6,6 +6,7 @@
 // move: a compaction summarize that has not answered by then is a stalled free
 // tunnel, not a slow model, and the turn should not wait on it.
 
+import { generateText, type LanguageModel } from "ai";
 import { fetchRouter } from "./router";
 import { DEFAULT_MODEL_CHEAP, type Env } from "./types";
 
@@ -14,8 +15,21 @@ const SYSTEM =
 
 export async function summarizeConversation(
   env: Env,
-  text: string
+  text: string,
+  model?: LanguageModel
 ): Promise<string> {
+  if (model) {
+    const out = await generateText({
+      model,
+      system: SYSTEM,
+      prompt: text,
+      maxOutputTokens: 800,
+      abortSignal: AbortSignal.timeout(30_000),
+    });
+    const summary = out.text.trim();
+    if (!summary) throw new Error("empty compaction summary");
+    return summary;
+  }
   const res = await fetchRouter(
     env,
     "/v1/chat/completions",

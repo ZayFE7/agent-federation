@@ -9,7 +9,7 @@ import type {
   ThinkTurnEndContext,
 } from "agents/harness/think";
 import { Streams, sseResponse } from "agents/streams";
-import type { ToolSet, UIMessage } from "ai";
+import { generateText, type ToolSet, type UIMessage } from "ai";
 import type {
   AgentReply,
   ChatRequest,
@@ -333,7 +333,7 @@ export class FederationAgent extends Agent<Env> {
       classifyError: classifyContextOverflow,
       onEvent: (session, ev) => this.mirrorEvent(session, ev),
       onTurnEnd: (turn) => this.onHarnessTurnEnd(turn),
-      summarize: (text) => summarizeConversation(env, text),
+      summarize: (text, session) => this.summarizeFor(session ?? MAIN_DO_NAME, text),
       beforeTurn: (turn) => this.beforeTurn(turn),
     });
     this.lifecycle.use(this.harness);
@@ -1090,6 +1090,23 @@ export class FederationAgent extends Agent<Env> {
     return createCustomModel(provider, choice.model);
   }
 
+  /** The session's effective selection, or null for the deployment pin. */
+  private async effectiveModelChoice(
+    sessionId: string
+  ): Promise<{ provider: string; model: string } | null> {
+    const override = getModelOverride(this.db(), sessionId);
+    if (override) return override;
+    return (await this.loadModelSettings()).default;
+  }
+
+  private async summarizeFor(sessionId: string, text: string): Promise<string> {
+    const choice = await this.effectiveModelChoice(sessionId);
+    if (!choice || choice.provider === "deployment") {
+      return summarizeConversation(this.env, text);
+    }
+    return summarizeConversation(this.env, text, await this.modelForChoice(choice));
+  }
+
   /**
    * `beforeTurn` runs before EVERY model call of a turn, so recall is per step,
    * not per turn. It never writes: reads only, and a failed hop degrades to no
@@ -1214,22 +1231,40 @@ export class FederationAgent extends Agent<Env> {
 
           let title: string;
           try {
-            const res = await fetchRouter(
-              this.env,
-              "/v1/chat/completions",
-              {
-                model: this.env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP,
-                messages: titleMessages(firstMessage),
-                max_tokens: TITLE_MAX_TOKENS,
-              },
-              false,
-              AbortSignal.timeout(20_000)
-            );
-            if (!res.ok) throw new Error(`router ${res.status}`);
-            const data = (await res.json()) as {
-              choices?: { message?: { content?: string } }[];
-            };
-            title = parseTitle(data.choices?.[0]?.message?.content ?? "", firstMessage);
+            const chosen = await this.effectiveModelChoice(id);
+            const custom = chosen && chosen.provider !== "deployment" ? chosen : null;
+            let raw = "";
+            if (custom) {
+              const model = await this.modelForChoice(custom);
+              if (model) {
+                const out = await generateText({
+                  model,
+                  messages: titleMessages(firstMessage),
+                  maxOutputTokens: TITLE_MAX_TOKENS,
+                  abortSignal: AbortSignal.timeout(30_000),
+                });
+                raw = out.text;
+              }
+            }
+            if (!raw) {
+              const res = await fetchRouter(
+                this.env,
+                "/v1/chat/completions",
+                {
+                  model: this.env.MODEL_CHEAP ?? DEFAULT_MODEL_CHEAP,
+                  messages: titleMessages(firstMessage),
+                  max_tokens: TITLE_MAX_TOKENS,
+                },
+                false,
+                AbortSignal.timeout(20_000)
+              );
+              if (!res.ok) throw new Error(`router ${res.status}`);
+              const data = (await res.json()) as {
+                choices?: { message?: { content?: string } }[];
+              };
+              raw = data.choices?.[0]?.message?.content ?? "";
+            }
+            title = parseTitle(raw, firstMessage);
           } catch {
             // The deterministic branch: the user's own words, no model attempt.
             title = parseTitle("", firstMessage);
