@@ -257,6 +257,8 @@ export type ToolProgressSink = (p: ToolProgress) => void;
 export interface ToolDeps {
   exec(cmd: string, onProgress?: ToolProgressSink): Promise<ExecResult>;
   search(query: string, onProgress?: ToolProgressSink): Promise<SearchResult[]>;
+  mcp?(server: string, tool: string, input: Record<string, unknown>): Promise<string>;
+  skill?(name: string): Promise<{ name: string; description: string; body: string } | null>;
   schedule(input: ScheduleInput, onProgress?: ToolProgressSink): Promise<string>;
   snapshot(onProgress?: ToolProgressSink): Promise<SnapshotResult>;
   /**
@@ -397,6 +399,67 @@ function webSearchTool(deps: ToolDeps) {
   );
 }
 
+/**
+ * One generic tool for every connected MCP server. The system prompt carries the
+ * server/tool catalog; this keeps the model's tool list bounded no matter how
+ * many MCP servers the owner connects.
+ */
+function mcpTool(deps: ToolDeps) {
+  return tool({
+    description:
+      "Call one tool on a connected MCP server. The system prompt lists the connected servers and their tool names. Pass the server id, the tool name, and a JSON object of arguments. Use this for email, calendars, repositories, documents, and any other external service that is connected. Read-only tools run immediately; create, update, delete, send, publish and payment tools ask for approval.",
+    inputSchema: z.object({
+      server: z.string().describe("The MCP server id from the connected integrations list."),
+      tool: z.string().describe("The MCP tool name from the connected integrations list."),
+      arguments: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe("The tool arguments as a JSON object. Use {} when the tool takes no arguments."),
+    }),
+    execute: async ({ server, tool: name, arguments: input }, options) => {
+      const onProgress = progressSink(deps, options);
+      onProgress?.({ phase: "mcp", message: `${server}/${name}`, fraction: null });
+      if (!deps.mcp) return "No MCP connections are available in this session.";
+      return deps.mcp(server, name, input ?? {});
+    },
+  });
+}
+
+/**
+ * Load one installed skill. Skills are progressive disclosure: the system prompt
+ * carries names and descriptions, and this call brings the full instructions in
+ * only when the task needs them.
+ */
+function skillTool(deps: ToolDeps) {
+  return tool({
+    description:
+      "Load one installed skill by name. The system prompt lists the installed skills and what they do. Use this when a skill matches the request, or when the user writes /skill-name. Follow the returned instructions. Arguments are optional and are passed as text to the skill.",
+    inputSchema: z.object({
+      name: z.string().describe("The skill name from the installed skills list."),
+      arguments: z
+        .string()
+        .optional()
+        .describe("Optional arguments to apply while following the skill."),
+    }),
+    execute: async ({ name, arguments: args }, options) => {
+      const onProgress = progressSink(deps, options);
+      onProgress?.({ phase: "skill", message: name, fraction: null });
+      if (!deps.skill) return "No skills are available in this session.";
+      const skill = await deps.skill(name);
+      if (!skill) return `No skill named "${name}" is installed. Check the installed skills list.`;
+      return [
+        `Skill: ${skill.name}`,
+        skill.description,
+        args ? `Arguments: ${args}` : "",
+        "",
+        skill.body,
+      ]
+        .filter((line) => line !== "")
+        .join("\n");
+    },
+  });
+}
+
 function scheduleTool(deps: ToolDeps) {
   return tool({
     description:
@@ -516,6 +579,8 @@ export function buildTools(
     lookup_online: webSearchTool,
     schedule_task: scheduleTool,
     save_workspace: saveWorkspaceTool,
+    mcp_call: mcpTool,
+    skill: skillTool,
   };
   const tools: ToolSet = {};
   for (const name of names) {

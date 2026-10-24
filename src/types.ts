@@ -22,6 +22,41 @@ export interface ModelChoiceInfo {
   defaultModel: string | null;
 }
 
+/** One connected MCP server, as the console lists it. */
+export interface McpServerView {
+  id: string;
+  name: string;
+  url: string;
+  state: string;
+  error: string | null;
+  toolCount: number;
+  authUrl: string | null;
+}
+
+/** One tool a connected MCP server exposes. */
+export interface McpToolView {
+  serverId: string;
+  serverName: string;
+  name: string;
+  description: string;
+  params: string;
+}
+
+export interface McpCatalog {
+  servers: McpServerView[];
+  tools: McpToolView[];
+}
+
+/** One installed skill without its full body. */
+export interface SkillView {
+  name: string;
+  description: string;
+}
+
+export interface SkillDefinition extends SkillView {
+  body: string;
+}
+
 /** Router lane. Agent uses primary|cheap; jev is reserved for the router's third lane. */
 export type Tier = "primary" | "cheap" | "jev";
 
@@ -184,6 +219,23 @@ export interface AgentStub {
   setModel(sessionId: string, model: string | null, provider?: string): Promise<boolean>;
   /** Console model picker: the override for this session plus the pinned fallback. */
   modelChoice(sessionId: string): Promise<ModelChoiceInfo>;
+  /** The global MCP catalog; main holds the connections. */
+  mcpServers(): Promise<McpCatalog>;
+  mcpAdd(
+    name: string,
+    url: string,
+    headers: Record<string, string>,
+    origin: string
+  ): Promise<{ ok: boolean; id?: string; state?: string; authUrl?: string | null; error?: string }>;
+  mcpRemove(id: string): Promise<boolean>;
+  mcpReconnect(
+    id: string
+  ): Promise<{ ok: boolean; state?: string; authUrl?: string | null; error?: string }>;
+  mcpCall(server: string, tool: string, input: Record<string, unknown>): Promise<string>;
+  skillCatalog(): Promise<SkillView[]>;
+  skillGet(name: string): Promise<SkillDefinition | null>;
+  skillSave(name: string, description: string, body: string): Promise<boolean>;
+  skillDelete(name: string): Promise<boolean>;
 }
 
 /**
@@ -240,6 +292,10 @@ export interface RegistryStub {
   saveModelProvider(id: string | null, input: ProviderInput): Promise<ModelProvider | null>;
   deleteModelProvider(id: string): Promise<boolean>;
   setModelDefault(provider: string, model: string): Promise<boolean>;
+  skillCatalog(): Promise<SkillView[]>;
+  skillGet(name: string): Promise<SkillDefinition | null>;
+  skillSave(name: string, description: string, body: string): Promise<boolean>;
+  skillDelete(name: string): Promise<boolean>;
 }
 
 /**

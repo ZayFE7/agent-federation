@@ -59,6 +59,18 @@ check("a non-exec tool is never gated by shell risk", () => {
   assert.equal(needsApproval("lookup_online", { cmd: "rm -rf /home/user" }), false);
 });
 
+check("read-shaped MCP tools run free and write-shaped ones ask", () => {
+  assert.equal(
+    needsApproval("mcp_call", { server: "mail", tool: "list_messages" }),
+    false
+  );
+  assert.equal(
+    needsApproval("mcp_call", { server: "mail", tool: "send_message" }),
+    true
+  );
+  assert.equal(needsApproval("mcp_call", {}), true, "a missing tool fails closed");
+});
+
 check("a missing cmd fails closed", () => {
   assert.equal(needsApproval("exec", {}), true);
 });

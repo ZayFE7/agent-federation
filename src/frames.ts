@@ -30,6 +30,8 @@ export const TOOL_WIDGET: Record<string, { label: string; state: string }> = Obj
   schedule_task: { label: "Schedule", state: "calendar" },
   save_workspace: { label: "Snapshot", state: "data" },
   delegate: { label: "Delegate", state: "delegate" },
+  mcp_call: { label: "MCP", state: "tools" },
+  skill: { label: "Skill", state: "idea" },
 });
 
 const FALLBACK_WIDGET = { label: "Tool", state: "code" };
@@ -130,13 +132,23 @@ export function framesFromChunk(chunk: UIMessageChunk): StreamFrame[] {
       const id = text(c.approvalId);
       const toolCallId = text(c.toolCallId);
       if (!id || !toolCallId) return [];
+      const rawInput = c.inputSchemaInput ?? c.approvalDescriptor;
+      let cmd = text(rawInput);
+      try {
+        const parsed = JSON.parse(text(rawInput)) as Record<string, unknown>;
+        if (typeof parsed.server === "string" && typeof parsed.tool === "string") {
+          cmd = `mcp_call ${parsed.server}/${parsed.tool}`;
+        }
+      } catch {
+        // The descriptor is not always JSON; the text form is still useful.
+      }
       return [
         {
           t: "approval",
           id,
           toolCallId,
           label: "Approval",
-          cmd: text(c.inputSchemaInput ?? c.approvalDescriptor),
+          cmd,
         },
       ];
     }

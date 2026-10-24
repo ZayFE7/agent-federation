@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { TITLE_MAX_TOKENS, TITLE_SYSTEM, parseTitle, titleMessages } from "../src/titles.ts";
+import { TITLE_MAX_TOKENS, TITLE_SYSTEM, parseTitle, provisionalTitle, titleMessages } from "../src/titles.ts";
 
 const ASTRAL = "\u{1F680}";
 
@@ -106,6 +106,17 @@ check("TITLE_SYSTEM pins the format the parser depends on", () => {
 });
 
 // ---- the completion budget ----
+
+check("a provisional title lands immediately from the user's words", () => {
+  assert.equal(provisionalTitle("run: echo hello"), "echo hello");
+  assert.equal(
+    provisionalTitle("Use Python to print the 67th prime number and the first 67 digits of pi"),
+    "Use Python to print the 67th"
+  );
+  assert.equal(provisionalTitle("```sh\necho hidden\n```"), "");
+  assert.equal(provisionalTitle("https://example.com/very/long/path"), "");
+  assert.ok(Array.from(provisionalTitle("one two three four five six seven")).length <= 40);
+});
 
 check("TITLE_MAX_TOKENS leaves room for reasoning before content", () => {
   assert.ok(Number.isInteger(TITLE_MAX_TOKENS), "TITLE_MAX_TOKENS is not an integer");

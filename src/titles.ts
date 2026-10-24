@@ -9,6 +9,24 @@
 export const TITLE_MAX_CHARS = 40;
 
 /**
+ * A write that lands before the model answers, so a session never sits as
+ * "New chat" while the title call runs. It strips directives, code fences,
+ * links and Markdown, then keeps the first six words.
+ */
+export function provisionalTitle(first: string): string {
+  const cleaned = collapseWhitespace(
+    String(first ?? "")
+      .replace(/^(?:run|exec|execute|search)\s*:\s*/i, "")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/https?:\/\/\S+/g, " ")
+      .replace(/[`#*_>]+/g, " ")
+  );
+  if (!cleaned) return "";
+  const words = cleaned.split(" ").filter(Boolean).slice(0, 6).join(" ");
+  return truncateFallback(words || cleaned);
+}
+
+/**
  * Completion ceiling for the title call. Reasoning counts against it: at 60 the
  * qwen pin returned `content: null` with `finish_reason: "length"` because the
  * reasoning field consumed the whole budget, and only at 300 did the title

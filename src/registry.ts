@@ -48,6 +48,14 @@ import {
 } from "./model-store";
 import { normalizeProviderId, type ProviderInput } from "./model-input";
 import { decryptSecret, encryptSecret } from "./model-secrets";
+import {
+  countSkills,
+  deleteSkillRow,
+  ensureSkillSchema,
+  getSkillRow,
+  listSkillRows,
+  upsertSkillRow,
+} from "./skill-store";
 
 /**
  * Boot seed for the conversation that already exists.
@@ -125,6 +133,7 @@ export class RegistryAgent extends Agent<Env> {
       // creates schema, so this guard and onStart() cannot disagree about it.
       ensureRegistrySchema(handle);
       ensureModelSchema(handle);
+      ensureSkillSchema(handle);
       this.schemaReady = true;
     }
     return handle;
@@ -319,6 +328,41 @@ export class RegistryAgent extends Agent<Env> {
     if (!models.includes(modelId)) return false;
     writeModelDefault(this.db(), { provider: providerId, model: modelId });
     return true;
+  }
+
+  async skillCatalog(): Promise<Array<{ name: string; description: string }>> {
+    return listSkillRows(this.db()).map((row) => ({
+      name: row.name,
+      description: row.description,
+    }));
+  }
+
+  async skillGet(
+    name: string
+  ): Promise<{ name: string; description: string; body: string } | null> {
+    if (typeof name !== "string" || !name) return null;
+    const row = getSkillRow(this.db(), name);
+    return row ? { name: row.name, description: row.description, body: row.body } : null;
+  }
+
+  async skillSave(name: string, description: string, body: string): Promise<boolean> {
+    if (typeof name !== "string" || !name || typeof description !== "string" || !body) return false;
+    if (!getSkillRow(this.db(), name) && countSkills(this.db()) >= 100) return false;
+    const existing = getSkillRow(this.db(), name);
+    const now = Date.now();
+    upsertSkillRow(this.db(), {
+      id: name,
+      name,
+      description,
+      body,
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    });
+    return true;
+  }
+
+  async skillDelete(name: string): Promise<boolean> {
+    return deleteSkillRow(this.db(), name);
   }
 
 

@@ -15,6 +15,9 @@ import type {
   ChatRequest,
   ChatTier,
   Env,
+  McpCatalog,
+  McpServerView,
+  McpToolView,
   ModelChoiceInfo,
   PendingApprovalResult,
   RegistryStub,
@@ -60,7 +63,7 @@ import {
 import { toSqlHandle, type SqlTag } from "./sql-handle";
 import { MAIN_DO_NAME, assertSessionScope, sessionScopeOk } from "./session-scope";
 import { PLACEHOLDER_TITLE } from "./registry-store";
-import { TITLE_MAX_TOKENS, parseTitle, titleMessages } from "./titles";
+import { TITLE_MAX_TOKENS, parseTitle, provisionalTitle, titleMessages } from "./titles";
 import {
   ensureVaultSchema,
   vaultDelete as vaultDeleteChunks,
@@ -203,6 +206,26 @@ function toolOutputOf(messages: readonly UIMessage[], toolCallId: string): strin
   return undefined;
 }
 
+/** One compact parameter list for the MCP prompt, not the whole JSON schema. */
+function mcpParams(schema: unknown): string {
+  if (!schema || typeof schema !== "object") return "";
+  const value = schema as { properties?: unknown; required?: unknown };
+  if (!value.properties || typeof value.properties !== "object") return "";
+  const required = new Set(
+    Array.isArray(value.required) ? value.required.filter((v): v is string => typeof v === "string") : []
+  );
+  return Object.entries(value.properties as Record<string, unknown>)
+    .slice(0, 8)
+    .map(([key, raw]) => {
+      const type =
+        raw && typeof raw === "object" && "type" in raw
+          ? String((raw as { type?: unknown }).type ?? "any")
+          : "any";
+      return `${key}${required.has(key) ? "" : "?"}:${type}`;
+    })
+    .join(", ");
+}
+
 /** One readable command/query line for a persisted tool card. */
 function toolInputSummary(input: unknown): string {
   if (typeof input === "string") return input.replace(/\s+/g, " ").trim().slice(0, 500);
@@ -311,6 +334,9 @@ export class FederationAgent extends Agent<Env> {
     providers: ModelProvider[];
     default: ModelDefault | null;
   } | null = null;
+  /** The MCP catalog is also global; fifteen seconds is enough for a UI edit. */
+  private mcpPromptCache: { at: number; text: string } | null = null;
+  private skillPromptCache: { at: number; text: string } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -557,6 +583,119 @@ export class FederationAgent extends Agent<Env> {
     // Cast avoids depending on version-specific DurableObjectNamespace generics; the
     // stub's methods are this class's RPC surface.
     return stub as unknown as FederationAgent;
+  }
+
+  /** The MCP connections live on main; every session reads the same catalog. */
+  private mcpCatalogLocal(): McpCatalog {
+    const state = this.getMcpServers();
+    const servers: McpServerView[] = Object.entries(state.servers).map(([id, server]) => ({
+      id,
+      name: server.name,
+      url: server.server_url,
+      state: String(server.state),
+      error: server.error,
+      toolCount: state.tools.filter((tool) => tool.serverId === id).length,
+      authUrl: server.auth_url ?? null,
+    }));
+    const tools: McpToolView[] = state.tools.map((tool) => ({
+      serverId: tool.serverId,
+      serverName: state.servers[tool.serverId]?.name ?? tool.serverId,
+      name: tool.name,
+      description: tool.description ?? "",
+      params: mcpParams(tool.inputSchema),
+    }));
+    return { servers, tools };
+  }
+
+  async mcpServers(): Promise<McpCatalog> {
+    return this.mcpCatalogLocal();
+  }
+
+  async mcpAdd(
+    name: string,
+    url: string,
+    headers: Record<string, string>,
+    origin: string
+  ): Promise<{ ok: boolean; id?: string; state?: string; authUrl?: string | null; error?: string }> {
+    if (!this.isMainInstance()) return this.mainStub().mcpAdd(name, url, headers, origin);
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 24) || "server";
+    const id = `mcp_${slug}_${crypto.randomUUID().replace(/-/g, "").slice(0, 4)}`;
+    try {
+      const result = await this.addMcpServer(name, url, {
+        id,
+        callbackHost: origin,
+        callbackPath: "/api/mcp/callback",
+        ...(Object.keys(headers).length > 0 ? { transport: { headers } } : {}),
+      });
+      return {
+        ok: true,
+        id: result.id,
+        state: String(result.state),
+        ...("authUrl" in result ? { authUrl: result.authUrl } : {}),
+      };
+    } catch (err) {
+      return { ok: false, error: String(err).slice(0, 400) };
+    }
+  }
+
+  async mcpRemove(id: string): Promise<boolean> {
+    if (!this.isMainInstance()) return this.mainStub().mcpRemove(id);
+    if (!this.getMcpServers().servers[id]) return false;
+    await this.removeMcpServer(id);
+    return true;
+  }
+
+  async mcpReconnect(
+    id: string
+  ): Promise<{ ok: boolean; state?: string; authUrl?: string | null; error?: string }> {
+    if (!this.isMainInstance()) return this.mainStub().mcpReconnect(id);
+    try {
+      const result = await this.mcp.connectToServer(id);
+      const state = String(result.state);
+      if ("authUrl" in result && result.authUrl) {
+        return { ok: true, state, authUrl: result.authUrl };
+      }
+      if (state === "connected") {
+        const discovered = await this.mcp.discoverIfConnected(id);
+        if (discovered && !discovered.success) {
+          return { ok: false, state, error: discovered.error ?? "discovery failed" };
+        }
+        return { ok: true, state: "ready" };
+      }
+      return { ok: false, state, error: "connection failed" };
+    } catch (err) {
+      return { ok: false, error: String(err).slice(0, 400) };
+    }
+  }
+
+  async mcpCall(server: string, tool: string, input: Record<string, unknown>): Promise<string> {
+    if (!this.isMainInstance()) return this.mainStub().mcpCall(server, tool, input);
+    try {
+      const result = (await this.mcp.callTool({
+        serverId: server,
+        name: tool,
+        arguments: input,
+      })) as { content?: unknown; isError?: boolean };
+      if (Array.isArray(result.content)) {
+        const text = result.content
+          .map((item) => {
+            if (item && typeof item === "object" && "text" in item) {
+              return String((item as { text?: unknown }).text ?? "");
+            }
+            return "";
+          })
+          .filter(Boolean)
+          .join("\n");
+        if (text) return `${result.isError ? "MCP error: " : ""}${text}`.slice(0, 12_000);
+      }
+      return JSON.stringify(result).slice(0, 12_000);
+    } catch (err) {
+      return `MCP call failed: ${String(err).slice(0, 800)}`;
+    }
   }
 
   /**
@@ -1107,6 +1246,78 @@ export class FederationAgent extends Agent<Env> {
     return summarizeConversation(this.env, text, await this.modelForChoice(choice));
   }
 
+  /** The compact MCP tool catalog inserted into the system prompt. */
+  private async mcpPrompt(): Promise<string> {
+    const cache = this.mcpPromptCache;
+    if (cache && Date.now() - cache.at < 15_000) return cache.text;
+    let catalog: McpCatalog;
+    try {
+      catalog = this.isMainInstance()
+        ? this.mcpCatalogLocal()
+        : await this.mainStub().mcpServers();
+    } catch {
+      catalog = { servers: [], tools: [] };
+    }
+    const usable = catalog.tools.slice(0, 40);
+    let text = "";
+    if (usable.length) {
+      const byServer = new Map<string, string[]>();
+      for (const tool of usable) {
+        const list = byServer.get(tool.serverName) ?? [];
+        const hint = tool.description
+          ? `: ${tool.description.replace(/\s+/g, " ").slice(0, 90)}`
+          : "";
+        list.push(`${tool.name}(${tool.params})${hint}`);
+        byServer.set(tool.serverName, list);
+      }
+      const lines = [...byServer.entries()].map(
+        ([server, tools]) => `- ${server}: ${tools.join("; ")}`
+      );
+      text =
+        "Connected integrations. Call them with mcp_call and pass the server id, tool name and arguments:\n" +
+        lines.join("\n") +
+        `\nServer ids: ${catalog.servers
+          .filter((server) => server.toolCount > 0)
+          .map((server) => `${server.name}=${server.id}`)
+          .join(", ")}.`;
+    }
+    this.mcpPromptCache = { at: Date.now(), text };
+    return text;
+  }
+
+  private async skillForSession(
+    name: string
+  ): Promise<{ name: string; description: string; body: string } | null> {
+    try {
+      return await this.registryStub<RegistryStub>().skillGet(name);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Names and descriptions only; the body loads through the skill tool. */
+  private async skillPrompt(): Promise<string> {
+    const cache = this.skillPromptCache;
+    if (cache && Date.now() - cache.at < 15_000) return cache.text;
+    let skills: Array<{ name: string; description: string }> = [];
+    try {
+      skills = (await this.registryStub<RegistryStub>().skillCatalog()).slice(0, 40);
+    } catch {
+      skills = [];
+    }
+    const text = skills.length
+      ? "Installed skills. Load one with the skill tool by name:\n" +
+        skills
+          .map(
+            (skill) =>
+              `- ${skill.name}: ${skill.description.replace(/\s+/g, " ").slice(0, 160)}`
+          )
+          .join("\n")
+      : "";
+    this.skillPromptCache = { at: Date.now(), text };
+    return text;
+  }
+
   /**
    * `beforeTurn` runs before EVERY model call of a turn, so recall is per step,
    * not per turn. It never writes: reads only, and a failed hop degrades to no
@@ -1141,12 +1352,15 @@ export class FederationAgent extends Agent<Env> {
       (await this.loadModelSettings()).default;
     const model = await this.modelForChoice(choice);
     const base = buildSystemPrompt(memories, capabilitiesText(EXPECTED_TOOLS), SANDBOX_HOME);
+    const mcp = await this.mcpPrompt();
+    const skills = await this.skillPrompt();
+    const withContext = [base, mcp, skills].filter(Boolean).join("\n\n");
     // `continue()` has no user message, so the first step of a continuation is
     // told in the system prompt what its own last message failed to do.
     const system =
       turn.step === 0 && this.continuationNudgeOps.has(turn.operationId)
-        ? `${base}\n\n${CONTINUATION_NUDGE}`
-        : base;
+        ? `${withContext}\n\n${CONTINUATION_NUDGE}`
+        : withContext;
     return {
       system,
       ...(model ? { model } : {}),
@@ -1229,6 +1443,11 @@ export class FederationAgent extends Agent<Env> {
           const before = await registry.get(id);
           if (!before || before.title !== PLACEHOLDER_TITLE) return;
 
+          // A provisional title lands immediately; the model refines it below if
+          // it is still the title we wrote, never a manual rename.
+          const provisional = provisionalTitle(firstMessage);
+          if (provisional) await registry.rename(id, provisional);
+
           let title: string;
           try {
             const chosen = await this.effectiveModelChoice(id);
@@ -1266,16 +1485,18 @@ export class FederationAgent extends Agent<Env> {
             }
             title = parseTitle(raw, firstMessage);
           } catch {
-            // The deterministic branch: the user's own words, no model attempt.
-            title = parseTitle("", firstMessage);
+            // The deterministic branch keeps the provisional title rather than
+            // throwing away the name the user already sees.
+            title = provisional || parseTitle("", firstMessage);
           }
           if (!title) return;
 
-          // P14: the user may have renamed while the cheap model was busy. Read
-          // the row again and skip unless it is still the placeholder; a vanished
-          // row is fail-closed, never a blind rename.
+          // P14: the user may have renamed while the title model was busy. Read
+          // the row again and replace only the title this fiber wrote.
           const after = await registry.get(id);
-          if (!after || after.title !== PLACEHOLDER_TITLE) return;
+          if (!after) return;
+          if (after.title !== provisional && after.title !== PLACEHOLDER_TITLE) return;
+          if (after.title === title) return;
           await registry.rename(id, title);
         } catch {
           // A missing REGISTRY binding, an RPC failure or an unreadable response
@@ -1638,6 +1859,8 @@ export class FederationAgent extends Agent<Env> {
     return {
       exec: (cmd, onProgress) => this.runSandbox(cmd, session, onProgress),
       search: (query) => this.searchParallel(query),
+      mcp: (server, tool, input) => this.mcpCall(server, tool, input),
+      skill: (name) => this.skillForSession(name),
       schedule: (input) => this.scheduleJob(input),
       snapshot: () => this.snapshotWorkspace(session),
       delegate: (input) => this.runChild(input, session),

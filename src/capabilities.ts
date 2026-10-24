@@ -25,6 +25,8 @@ export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
   "schedule_task",
   "save_workspace",
   "delegate",
+  "mcp_call",
+  "skill",
 ]);
 
 /**
@@ -156,7 +158,16 @@ const TABLE: readonly CapabilityDef[] = [
   {
     id: "mcp",
     label: "MCP servers",
-    detail: () => "Connect to external MCP tool servers. Not connected yet.",
+    detail: () =>
+      "Use tools from connected MCP servers through the mcp_call tool. Add or remove servers in Settings > Models.",
+    tool: "mcp_call",
+  },
+  {
+    id: "skills",
+    label: "Skills",
+    detail: () =>
+      "Load reusable instructions from installed SKILL.md skills (skill tool). Manage them in Settings. Skills can contain prompts and scripts made for Claude Code.",
+    tool: "skill",
   },
 ];
 

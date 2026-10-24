@@ -251,7 +251,14 @@ await check("no runner means no delegate tool, not a tool that always fails", ()
   // throws on every call would still tell the model it can spawn.
   const built = buildTools(deps);
   assert.equal("delegate" in built, false);
-  assert.deepEqual(Object.keys(built), ["exec", "lookup_online", "schedule_task", "save_workspace"]);
+  assert.deepEqual(Object.keys(built), [
+    "exec",
+    "lookup_online",
+    "schedule_task",
+    "save_workspace",
+    "mcp_call",
+    "skill",
+  ]);
 });
 
 await check("the fan-out refusal names the cap and the way out", () => {

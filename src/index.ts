@@ -7,6 +7,8 @@ import { MAIN_DO_NAME, isSessionId } from "./session-scope";
 import { EXPECTED_TOOLS, capabilityList } from "./capabilities";
 import { handleFetch } from "./routes";
 import { handleSettings } from "./settings-routes";
+import { handleMcp } from "./mcp-routes";
+import { handleSkills } from "./skill-routes";
 import { DEFAULT_MODEL_CHEAP } from "./types";
 import type { AgentStub, Env } from "./types";
 
@@ -56,6 +58,15 @@ export default {
       const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
       return stub.fetch(request);
     }
+
+    // MCP server management and the OAuth callback. The callback is allowed
+    // without the bearer because the provider redirect carries its own state.
+    const mcpResponse = await handleMcp(request, env);
+    if (mcpResponse) return mcpResponse;
+
+    // The global skill library.
+    const skillResponse = await handleSkills(request, env);
+    if (skillResponse) return skillResponse;
 
     // Model provider settings and the global default live outside the session
     // family, so they have their own authenticated handler.

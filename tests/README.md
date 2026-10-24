@@ -1,11 +1,11 @@
 # tests/
 
-Thirty-four offline, framework-free test files live here, all run by `npm test`. Beside them are the
+Thirty-six offline, framework-free test files live here, all run by `npm test`. Beside them are the
 runner, one shared fixture, and five live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
-34 such files.
+36 such files.
 
 ## How the suite runs
 
@@ -86,6 +86,12 @@ Compiles `src/memory.ts` with esbuild and drives the real exports against a live
 database: text recall ordering and the one-off prune. esbuild is located by an ordered existence
 check (env `BLIP_DEPLOY_NM`, this tree, the sibling tree). Cannot reach embedding recall; that is a
 held path (see below), so it tests the LIKE behaviour that shipped.
+
+### mcp.test.mjs
+Tests the MCP management routes: authentication, HTTPS and private-host refusal, header and origin
+forwarding to the main DO, the unauthenticated OAuth callback hop, list/reconnect/call/delete, and
+the exact arguments each call carries. It uses a fake main DO, not a real MCP server; the live
+DeepWiki round trip is the external evidence.
 
 ### model-settings.test.mjs
 Tests the provider settings layer: HTTPS and private-host validation for base URLs, model id
@@ -185,6 +191,11 @@ unset or blank secret and compare through `safeEq`.
 ### stream-hub.test.mjs
 Tests `src/stream-hub.ts`: one durable stream per operation, a writer acquired lazily, frames buffered
 in order until that writer exists, and a terminal state that survives a simulated eviction.
+
+### skills.test.mjs
+Tests SKILL.md parsing (frontmatter, folded descriptions, heading fallback, invalid names), the pure
+global skill store on real SQLite, and the authenticated skill routes for save, list, read and
+delete. It does not import a Claude Code plugin bundle or run skill scripts.
 
 ### submit.test.mjs
 Tests Task 23's submit-and-return message route: the response carries both ids and nothing else,

@@ -78,6 +78,15 @@ export function parkedApproval(messages: readonly MessageLike[]): ParkedApproval
  * persistent workspace delete, VM destruction); ordinary sandbox code is free.
  */
 export function needsApproval(toolName: string, input: unknown): boolean {
+  if (toolName === "mcp_call") {
+    if (!input || typeof input !== "object") return true;
+    const tool = (input as { tool?: unknown }).tool;
+    if (typeof tool !== "string" || !tool) return true;
+    // Read-shaped MCP tools run free; anything that can change remote state asks.
+    return !/^(get|list|search|read|fetch|find|query|describe|inspect|lookup|retrieve|count|download)/i.test(
+      tool
+    );
+  }
   if (toolName !== "exec") return false;
   const cmd = execCommand(input);
   return typeof cmd !== "string" || isRisky(cmd);
@@ -85,6 +94,12 @@ export function needsApproval(toolName: string, input: unknown): boolean {
 
 /** One human sentence for the approval card, including what will run. */
 export function approvalPromptFor(toolName: string, input: unknown): string {
+  if (toolName === "mcp_call") {
+    const value = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    const server = typeof value.server === "string" ? value.server : "unknown server";
+    const tool = typeof value.tool === "string" ? value.tool : "unknown tool";
+    return `Call the ${tool} tool on ${server}?`;
+  }
   if (toolName !== "exec") return `Run the ${toolName} tool?`;
   const cmd = execCommand(input);
   if (typeof cmd !== "string") {
