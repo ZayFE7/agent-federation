@@ -1,91 +1,140 @@
-// Action guardrails: classify a shell command by blast radius so the agent can
-// auto-run low-risk work but must hold high-risk work for explicit human approval.
-// Dependency-free and pure so it can be unit-tested directly (tests/guardrails.test.mjs).
+// Action guardrails for an agent that already has a disposable Linux VM.
+//
+// The sandbox is the blast radius for ordinary work. Installing packages,
+// running a shell, a Python one-liner, a downloaded installer, reading a local
+// file or deleting /tmp are all normal agent work and must run without asking
+// the owner. The gate exists only for effects that outlive the VM or leave it:
+//
+//   - recursive deletion of the persistent workspace (/home/user), except known
+//     build-output directories;
+//   - outbound publishing/pushing, payments and wallet calls, email sends;
+//   - outbound uploads of local files (curl/wget forms and body uploads);
+//   - commands that destroy the VM or its disk before the workspace can be saved.
+//
+// Deliberately conservative on those four classes and deliberately permissive
+// everywhere else. A false positive asks the owner about ordinary code, which is
+// the failure this policy exists to remove. Keep the owner's words in mind:
+// "it doesn't need my permission to run code on a temporary computer".
 
-/**
- * Classify a shell command by blast radius. High-risk = destructive, irreversible,
- * outward-facing, credential-touching, or money-spending. The MODEL must never
- * auto-run these; they are held for explicit human approval (see the exec tool in
- * agent.ts). Deliberately conservative: a false positive only asks the user, a
- * false negative lets a prompt-injected or confused model wreck something.
- *
- * Note: the deterministic "run:" prefix is the human typing the command themselves,
- * so it is already authorized and bypasses this gate.
- */
+const BUILD_OUTPUT = new Set([
+  "node_modules",
+  ".cache",
+  "dist",
+  "build",
+  ".next",
+  ".nuxt",
+  ".output",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  ".turbo",
+  ".parcel-cache",
+  "coverage",
+  ".nyc_output",
+  "tmp",
+  "temp",
+]);
+
+function stripQuotes(value: string): string {
+  return value.replace(/^['"]|['"]$/g, "");
+}
+
+function baseName(value: string): string {
+  const cleaned = stripQuotes(value).replace(/[\\/]+$/, "");
+  const parts = cleaned.split(/[\\/]/);
+  return parts[parts.length - 1] || cleaned;
+}
+
+/** True when a recursive delete target is workspace data rather than build output. */
+function isWorkspaceTarget(target: string): boolean {
+  const clean = stripQuotes(target);
+  if (!clean) return false;
+  const lower = clean.toLowerCase();
+  // The workspace root itself, the cwd, a wildcard at any level, or home.
+  if (/^(?:\*|\.\/\*|\.|\.\.|\/|~|\$home|\$\{home\})(?:\/|\/\*)?$/.test(lower)) return true;
+  // Anything outside the persistent home is disposable.
+  if (lower === "/tmp" || lower.startsWith("/tmp/")) return false;
+  if (lower.startsWith("/") && !lower.startsWith("/home/user")) return false;
+  const base = baseName(clean);
+  if (!base || base === "." || base === "..") return true;
+  if (/[*?[\]{}]/.test(base)) return true;
+  return !BUILD_OUTPUT.has(base.toLowerCase());
+}
+
+/** `rm -r` and its friends, parsed per command so a comment or a flag cannot hide the target. */
+function recursiveWorkspaceDelete(c: string): boolean {
+  for (const match of c.matchAll(/\brm\b([^;&|\n]*)/gi)) {
+    const args = match[1].replace(/\s+#.*$/, "").trim();
+    if (!args) continue;
+    const tokens = args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+    const recursive = tokens.some(
+      (token) => /^--recursive$/i.test(token) || /^-[^-]*r/i.test(token)
+    );
+    if (!recursive) continue;
+    const targets = tokens
+      .filter((token) => !token.startsWith("-") && token !== "--")
+      .map(stripQuotes);
+    if (targets.some(isWorkspaceTarget)) return true;
+  }
+  return false;
+}
+
+/** `find . -delete` and `find . -exec rm` are recursive deletes too. */
+function workspaceFindDelete(c: string): boolean {
+  if (!/\bfind\b/.test(c)) return false;
+  if (!/\s(?:-delete|-exec\s+(?:sudo\s+)?rm)\b/.test(c)) return false;
+  const match = /\bfind\s+([^\s]+)/.exec(c);
+  return match ? isWorkspaceTarget(match[1]) : false;
+}
+
+/** Interpreter calls that remove a directory tree by name. */
+function interpreterWorkspaceDelete(c: string): boolean {
+  for (const match of c.matchAll(/\bshutil\.rmtree\s*\(\s*['"]([^'"]+)['"]/gi)) {
+    if (isWorkspaceTarget(match[1])) return true;
+  }
+  for (const match of c.matchAll(
+    /\brmSync\s*\(\s*['"]([^'"]+)['"][^)]*\brecursive\s*:\s*true/gi
+  )) {
+    if (isWorkspaceTarget(match[1])) return true;
+  }
+  return false;
+}
+
+const OUTWARD: RegExp[] = [
+  /\bgit\s+push\b/,
+  /\bnpm\s+publish\b/,
+  /\byarn\s+publish\b/,
+  /\bpip\s+upload\b/,
+  /\btwine\s+upload\b/,
+  /\bgh\s+release\s+create\b/,
+  /\bsendmail\b/,
+  /\bmail\s+-s\b/,
+  /\b(wallet|stripe|paypal)\b/,
+  /\b(payment|payments|invoice|invoices|purchase)\b/,
+  /\b(curl|wget)\b[^|;&]*(?:--form[a-z_-]*\b|--data-binary\b|--upload-file\b|--post-file\b|(?:^|\s)-F\b|(?:^|\s)-T\b)/i,
+  /\b(curl|wget)\b[^|;&]*\s(?:-d\b|--data[a-z_-]*\b)\s*\S*@/i,
+  /\|\s*(curl|wget)\b/i,
+];
+
+const SYSTEM_DESTRUCTION: RegExp[] = [
+  /\bmkfs\b/,
+  /\bdd\b[^|;&]*\bof=\/dev\//,
+  />\s*\/dev\/(?:sd|nvme|hd|disk)/,
+  /:\(\)\s*\{[^}]*\|[^}]*\}\s*;\s*:/,
+  /\b(shutdown|reboot|halt|poweroff)\b/,
+  /\bchmod\s+-r\s+0?777\s+\//,
+  /\bchown\s+-r\b[^|;&]*\s\/(?=\s|$)/,
+  /\bwipefs\b/,
+];
+
 export function isRisky(cmd: string): boolean {
   const c = (cmd || "").toLowerCase();
   if (!c.trim()) return false;
-  // An unclosed quote hides everything after it from the windowed patterns below.
-  if (endsInsideAQuote(c)) return true;
-  // NOTE: every literal below is lowercase because `c` is lowercased first.
-  const patterns: RegExp[] = [
-    // destructive filesystem / disk
-    /\brm\s+-[a-z]*r/, /\brm\s+-[a-z]*f/, /\brm\s+.*--no-preserve-root/,
-    /\bmkfs\b/, /\bdd\b[^|;&]*\bof=\/dev\//, />\s*\/dev\/(sd|nvme|hd|disk)/,
-    /:\(\)\s*\{[^}]*\|[^}]*\}\s*;\s*:/, // fork bomb
-    /\bshred\b/, /\bwipefs\b/,
-    /\bchmod\s+-r\s+0?777\s+\//, /\bchown\s+-r\b[^|;&]*\s\/(\s|$)/,
-    // privilege / package removal
-    /\bsudo\b/, /\bdoas\b/,
-    /\b(apt|apt-get|yum|dnf|pacman|zypper)\s+(remove|purge|autoremove|erase)\b/,
-    // publish / push / hard VCS resets (outward-facing or history-destroying)
-    /\bnpm\s+publish\b/, /\byarn\s+publish\b/, /\bpip\s+upload\b/, /\btwine\s+upload\b/,
-    /\bgit\s+push\b/, /\bgit\s+reset\s+--hard\b/, /\bgit\s+clean\s+-[a-z]*f/,
-    /\bgit\s+branch\s+-d\b/,
-    // destructive SQL (DELETE FROM without any WHERE clause; DROP/TRUNCATE always)
-    /\b(drop\s+(table|database|schema)|truncate\s+table)\b/,
-    /\bdelete\s+from\b(?![\s\S]*\bwhere\b)/,
-    // pipe-to-shell (remote code execution)
-    /\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|k)?sh\b/,
-    // process / power control
-    /\bkill\s+-9\b/, /\bpkill\b/, /\bkillall\b/,
-    /\b(shutdown|reboot|halt|poweroff|init\s+0|init\s+6)\b/,
-    // credential / secret access
-    /\bcat\b[^|;&]*(\.env\b|\.aws\/|id_rsa|id_ed25519|\.netrc|credentials|secrets?\.(json|ya?ml)|\.pem\b)/,
-    /(\/etc\/shadow|\/etc\/sudoers)/,
-    // money / outward sends (bare "checkout" excluded: git checkout is not a payment)
-    /\b(payment|payments|invoice|invoices|wallet|purchase|stripe|paypal)\b/,
-    /\bsendmail\b/, /\bmail\s+-s\b/,
-    /\bcurl\b[^|;&]*-x\s*post\b[^|;&]*(send|charge|pay|order|purchase)/,
-    // system file writes
-    />\s*\/etc\//, /\btee\s+\/etc\//,
-    // a -c/-e payload is program text, invisible to every shell pattern above
-    /\b(python[23]?|node|perl|ruby|php|bash|zsh|ksh|dash|sh)\b[^|;&]*\s(-c\b|-e\b|--eval\b)/,
-    // decoded payload: what the shell finally ran never appeared in this string
-    /\bbase64\b[^|;&]*\s(-d\b|--decode\b)[\s\S]*\|\s*(sudo\s+)?((ba|z|k|da)?sh|eval|python[23]?|node|perl|ruby|xargs)\b/,
-    /\beval\s+\S/,
-    // exfiltration: an outbound request carrying a local file body, or local data piped into one
-    /\b(curl|wget)\b[^|;&]*\s(-f\b|--form[a-z_-]*\b|--data-binary\b|--upload-file\b|--post-file\b)/,
-    /\b(curl|wget)\b[^|;&]*\s(-d\b|--data[a-z_-]*\b|-f\b|--form[a-z_-]*\b)\s*\S*[@~]/,
-    /\|\s*(curl|wget)\b/,
-  ];
-  if (patterns.some((re) => re.test(c))) return true;
-  return runsADownloadedFile(c);
-}
-
-// The pipe-to-shell rule stops at the first ; & or |, so download-then-run is two harmless fragments.
-function runsADownloadedFile(c: string): boolean {
-  if (!/\b(curl|wget)\b/.test(c)) return false;
-  // a staged artifact is reached by path; a bare filename in the cwd is a different shape
-  const runsAStagedFile: RegExp[] = [
-    /\bchmod\b[^|;&]*\+x/,
-    /\b(ba|z|k)?sh\s+\.{0,2}\/\S+/,
-    /\b(python[23]?|node|perl|ruby)\s+\.{0,2}\/\S+/,
-    /\bsource\s+\.{0,2}\/\S+/,
-    /(^|[;&|]\s*)\.{0,2}\/\S+/,
-  ];
-  return runsAStagedFile.some((re) => re.test(c));
-}
-
-// A quote left open makes the rest of the command unreadable, so it cannot be cleared.
-function endsInsideAQuote(c: string): boolean {
-  let quote = "";
-  for (let i = 0; i < c.length; i++) {
-    const ch = c[i];
-    if (ch === "\\" && quote !== "'") i++;
-    else if (quote === "") {
-      if (ch === '"' || ch === "'") quote = ch;
-    } else if (ch === quote) quote = "";
-  }
-  return quote !== "";
+  if (recursiveWorkspaceDelete(c)) return true;
+  if (workspaceFindDelete(c)) return true;
+  if (interpreterWorkspaceDelete(c)) return true;
+  if (OUTWARD.some((re) => re.test(c))) return true;
+  if (SYSTEM_DESTRUCTION.some((re) => re.test(c))) return true;
+  return false;
 }

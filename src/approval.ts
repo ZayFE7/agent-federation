@@ -15,11 +15,67 @@ function execCommand(input: unknown): unknown {
   return undefined;
 }
 
+/** The narrow transcript part this module can read without the SDK. */
+interface PartLike {
+  type?: string;
+  toolName?: string;
+  toolCallId?: string;
+  state?: string;
+  input?: unknown;
+  approval?: { id?: string };
+}
+
+interface MessageLike {
+  parts?: readonly unknown[];
+}
+
+/** One parked call, enough for the console to re-mount its gate after a reload. */
+export interface ParkedApproval {
+  toolCallId: string;
+  approvalId: string;
+  name: string;
+  cmd: string;
+}
+
 /**
- * Fail closed on shape. Only `exec` runs a shell, so it is the only tool a
- * malformed or dangerous input can turn into blast radius; a missing or
- * non-string `cmd` is treated as needing approval rather than being sent to a
- * runner that might stringify it.
+ * The newest approval-requested tool part in a transcript. The console calls
+ * this through a read-only route when it opens a session and has no live stream
+ * receipt, so an approval that was parked before a reload is not lost.
+ */
+export function parkedApproval(messages: readonly MessageLike[]): ParkedApproval | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    for (const raw of messages[i]?.parts ?? []) {
+      const part = raw as PartLike;
+      const type = part.type ?? "";
+      const isTool = type === "dynamic-tool" || (type.startsWith("tool-") && type.length > 5);
+      if (!isTool || part.state !== "approval-requested") continue;
+      const toolCallId = part.toolCallId;
+      const approvalId = part.approval?.id;
+      if (typeof toolCallId !== "string" || !toolCallId) continue;
+      if (typeof approvalId !== "string" || !approvalId) continue;
+      const name =
+        typeof part.toolName === "string" && part.toolName
+          ? part.toolName
+          : type.startsWith("tool-")
+            ? type.slice(5)
+            : type;
+      const cmd = execCommand(part.input);
+      return {
+        toolCallId,
+        approvalId,
+        name,
+        cmd: typeof cmd === "string" ? cmd : typeof part.input === "string" ? part.input : "",
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Fail closed on shape, not on ordinary code. Only `exec` runs a shell, so it
+ * is the only tool a malformed input can turn into a runner that stringifies
+ * garbage. `isRisky` now means "critical effect" (outward, payment, upload,
+ * persistent workspace delete, VM destruction); ordinary sandbox code is free.
  */
 export function needsApproval(toolName: string, input: unknown): boolean {
   if (toolName !== "exec") return false;
@@ -34,5 +90,5 @@ export function approvalPromptFor(toolName: string, input: unknown): string {
   if (typeof cmd !== "string") {
     return "The agent asked to run a shell command without a valid command string.";
   }
-  return `Run this command in the sandbox: ${cmd}`;
+  return `This action has real-world or persistent effects: ${cmd}`;
 }

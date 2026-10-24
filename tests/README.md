@@ -32,7 +32,9 @@ what it cannot reach.
 
 ### approval.test.mjs
 Asserts only shell (`exec`) can be flagged risky and that a malformed exec input fails closed.
-Cannot reach the live approval round trip: that needs a Durable Object and is only exercised live.
+Covers ordinary code staying ungated, critical effects gating, malformed exec input failing closed,
+and `parkedApproval`, the transcript scan a reloaded console uses to re-mount its gate. Cannot reach
+the live approval round trip: that needs a Durable Object and is only exercised live.
 
 ### child.test.mjs
 Pins the sub-agent recursion guard from the outside: the child tool list in `src/capabilities.ts`,
@@ -65,7 +67,7 @@ the persisted-message mapping (a parked approval and a finished tool result both
 and the one-line SSE encoding. Does not render anything; the console is separate.
 
 ### guardrails.test.mjs
-Unit tests `isRisky` in `src/guardrails.ts` (risky commands flagged, safe ones not). Cannot catch a
+Unit tests `isRisky` in `src/guardrails.ts`: ordinary sandbox code and build-output deletes are free; outward publish/push, payments, outbound uploads, persistent workspace deletes and VM/disk destruction are critical. Cannot catch a
 semantic bypass the regex layer was never designed to see.
 
 ### harness.test.mjs
@@ -147,7 +149,8 @@ The first offline test to reach the worker's HTTP surface: it imports the real `
 drives `handleFetch()` on constructed `Request` objects against a fake `env` (a registry DO stub that
 records calls, a federation namespace stub, and a sandbox fetch port). It covers the gate order
 (401, then session-id 400 before any addressing, then registry `exists` 404 before any DO), the
-`/api/sessions*` family including Task 30's workspace reads and deletes, the stream proxy, and two
+`/api/sessions*` family including Task 30's workspace reads and deletes, the read-only
+`GET /api/sessions/:id/approval` recovery route, the stream proxy, and two
 source scans: R39 (routes.ts value-imports only dependency-free modules and takes both DO namespaces
 from `env`) and R42 (`src/index.ts` keeps its non-session handlers). Cannot prove: every agent-side
 answer is a stub, so nothing about the real DO is established, and it never opens the deploy tree.

@@ -15,6 +15,7 @@ import type {
   ChatRequest,
   ChatTier,
   Env,
+  PendingApprovalResult,
   ToolRun,
   TurnReceipt,
   TurnRefusal,
@@ -76,6 +77,7 @@ import { Researcher } from "./child";
 import { framesFromEvent, TOOL_WIDGET, type StreamFrame } from "./frames";
 import { StreamHub, streamIdFor } from "./stream-hub";
 import { messageText, replyFrom } from "./reply";
+import { parkedApproval } from "./approval";
 import {
   buildTools,
   childBusyRefusal,
@@ -138,6 +140,7 @@ interface ToolPartLike {
   toolName?: string;
   toolCallId?: string;
   state?: string;
+  input?: unknown;
   output?: unknown;
   errorText?: string;
   approval?: { id?: string };
@@ -846,7 +849,7 @@ export class FederationAgent extends Agent<Env> {
     const arg = parseDirective(content)?.arg ?? "";
 
     // The human typed this command themselves, so it is already authorized and
-    // bypasses the isRisky approval gate that guards MODEL-emitted commands.
+    // bypasses the critical-effect approval gate that guards MODEL-emitted commands.
     if (kind === "exec") {
       const cmd = arg;
       const result = await this.runSandbox(cmd, session, onProgress);
@@ -1203,7 +1206,14 @@ export class FederationAgent extends Agent<Env> {
     toolCallId: string,
     approved: boolean,
     reason?: string
-  ): Promise<{ ok: boolean; reply: string; state: string; output?: string }> {
+  ): Promise<{
+    ok: boolean;
+    reply: string;
+    state: string;
+    output?: string;
+    streamId?: string;
+    operationId?: string;
+  }> {
     if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
       return {
         ok: false,
@@ -1240,6 +1250,18 @@ export class FederationAgent extends Agent<Env> {
       return { ok: false, reply: String(err), state: "unanswered" };
     }
 
+    // The continuation is a NEW harness operation, so its frames land on a new
+    // stream. Opening it here (the hub would open it lazily on the first frame)
+    // means the id we return on timeout is already a stream the console can
+    // attach to, even when the model has not produced its first chunk yet.
+    const streamId = streamIdFor(sessionId, receipt.operationId);
+    try {
+      await this.hub.open(streamId, sessionId);
+    } catch {
+      // A failed open is not a failed decision: the transcript still continues,
+      // and the console's fallback is to reload it.
+    }
+
     let outcome;
     try {
       outcome = await session.wait(receipt.operationId, AbortSignal.timeout(25_000));
@@ -1253,6 +1275,8 @@ export class FederationAgent extends Agent<Env> {
             ? "Approved. The turn is continuing."
             : "Denied. The turn is continuing.",
           state: "queued",
+          streamId,
+          operationId: receipt.operationId,
         };
       }
       return { ok: false, reply: String(err), state: "unanswered" };
@@ -1281,6 +1305,29 @@ export class FederationAgent extends Agent<Env> {
       state: outcome.status,
       ...(output ? { output: output.slice(0, 4000) } : {}),
     };
+  }
+
+  /**
+   * The approval a reloaded console cannot see. Read-only, session-scoped, and
+   * `pending: null` when nothing is parked. It returns the same toolCallId
+   * `approveToolCall` answers, so the console re-mounts the gate it lost when
+   * the parked turn ended without a live receipt.
+   */
+  async pendingApproval(sessionId: string): Promise<PendingApprovalResult> {
+    if (!sessionScopeOk(this.ctx, (name) => this.idFor(name), sessionId)) {
+      return { ok: false, error: "This session cannot read that approval." };
+    }
+    try {
+      const parked = parkedApproval(await this.harness.session(sessionId).messages());
+      return {
+        ok: true,
+        pending: parked
+          ? { toolCallId: parked.toolCallId, name: parked.name, cmd: parked.cmd }
+          : null,
+      };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
   }
 
   /** WebSocket frames: {type:"chat"|"status", content, tier}. */

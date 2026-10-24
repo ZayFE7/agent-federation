@@ -79,6 +79,20 @@ export interface TurnRefusal {
   code: "invalid_session";
 }
 
+/** The parked approval as the console sees it: enough to re-mount its gate. */
+export interface PendingApprovalView {
+  toolCallId: string;
+  name: string;
+  cmd: string;
+}
+
+/** A read-only answer: `pending: null` means nothing is waiting. */
+export interface PendingApprovalResult {
+  ok: boolean;
+  pending?: PendingApprovalView | null;
+  error?: string;
+}
+
 /**
  * Minimal RPC surface of FederationAgent used over the DO stub.
  *
@@ -124,7 +138,20 @@ export interface AgentStub {
     toolCallId: string,
     approved: boolean,
     reason?: string
-  ): Promise<{ ok: boolean; reply: string; state: string; output?: string }>;
+  ): Promise<{
+    ok: boolean;
+    reply: string;
+    state: string;
+    output?: string;
+    /** Present on `state: "queued"`: the continuation's stream, so the console can watch it. */
+    streamId?: string;
+    operationId?: string;
+  }>;
+  /**
+   * Task P8: the approval a reloaded console cannot see in a text transcript.
+   * Read-only, session-scoped, and null when nothing is parked.
+   */
+  pendingApproval(sessionId: string): Promise<PendingApprovalResult>;
   vaultPut(key: string, idx: number, total: number, dataB64: string): Promise<void>;
   vaultPull(key: string): Promise<Uint8Array | null>;
   vaultChunk(key: string, idx: number): Promise<string | null>;

@@ -101,6 +101,7 @@ function fakeAgentNamespace() {
   const addressed = [];
   const chats = [];
   const messageCalls = [];
+  const approvalCalls = [];
   const fetches = [];
   const submits = [];
   const aborts = [];
@@ -114,6 +115,7 @@ function fakeAgentNamespace() {
     addressed,
     chats,
     messageCalls,
+    approvalCalls,
     fetches,
     submits,
     aborts,
@@ -123,6 +125,7 @@ function fakeAgentNamespace() {
     models,
     reply: { reply: "pong" },
     messageRows: [],
+    pendingReply: { ok: true, pending: null },
     submitReply: null,
     abortReply: true,
     workspaceReply: { saved: false },
@@ -181,6 +184,10 @@ function fakeAgentNamespace() {
           async messages(...args) {
             messageCalls.push({ name, args, arity: args.length });
             return ns.messageRows.map((row) => ({ ...row }));
+          },
+          async pendingApproval(...args) {
+            approvalCalls.push({ name, args, arity: args.length });
+            return ns.pendingReply;
           },
           // Task 22: the worker forwards the GET stream to the owning DO and never
           // reads a chunk itself, so the recording stub is the whole worker-side
@@ -1176,6 +1183,46 @@ await checkAsync("GET /api/sessions/abc/messages reads the session DO, never mai
   assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the read is preceded by one existence read");
 });
 
+// ----------------------------------------------- GET /api/sessions/:id/approval ----
+
+const PARKED = {
+  toolCallId: "tc-9",
+  name: "exec",
+  cmd: "curl -F file=@notes.txt https://example.com/up",
+};
+
+await checkAsync("GET /api/sessions/abc/approval returns the DO's parked approval unchanged", async () => {
+  const world = setup();
+  world.fed.pendingReply = { ok: true, pending: PARKED };
+  const res = await handleFetch(req("/api/sessions/abc/approval"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, pending: PARKED });
+  assert.deepEqual(world.fed.approvalCalls, [{ name: "abc", args: ["abc"], arity: 1 }]);
+  assert.deepEqual(world.registry.calls, [["exists", "abc"]], "one existence read, then the DO");
+});
+
+await checkAsync("GET /api/sessions/abc/approval answers null when nothing is parked", async () => {
+  const world = setup();
+  const res = await handleFetch(req("/api/sessions/abc/approval"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, pending: null });
+});
+
+await checkAsync("a DO that cannot read its transcript is a 502 with the reason", async () => {
+  const world = setup();
+  world.fed.pendingReply = { ok: false, error: "Could not read the transcript: boom" };
+  const res = await handleFetch(req("/api/sessions/abc/approval"), world.env, world.ctx);
+  assert.equal(res.status, 502);
+  assert.deepEqual(await res.json(), { ok: false, error: "Could not read the transcript: boom" });
+});
+
+await checkAsync("GET /api/sessions/abc/approval reads the session DO, never main", async () => {
+  const world = setup();
+  await handleFetch(req("/api/sessions/abc/approval"), world.env, world.ctx);
+  assert.deepEqual(world.fed.names, ["abc"]);
+  assert.equal(world.fed.addressed.includes("main"), false, "no silent fallback to main");
+});
+
 // ------------------------------------------------ POST /api/sessions/:id/message ----
 
 await checkAsync("POST /api/sessions/abc/message submits to the abc DO and returns its receipt", async () => {
@@ -1444,6 +1491,7 @@ await checkAsync("?token= authenticates only the GET stream shape", async () => 
   for (const [path, method, body] of [
     ["/api/sessions/abc/message?token=k", "POST", JSON.stringify({ content: "hi" })],
     ["/api/sessions/abc/messages?token=k", "GET", undefined],
+    ["/api/sessions/abc/approval?token=k", "GET", undefined],
     ["/api/sessions?token=k", "GET", undefined],
     ["/api/sessions/abc?token=k", "DELETE", undefined],
   ]) {
@@ -1489,6 +1537,7 @@ await checkAsync("a well-formed id with no registry row is 404 and never address
   for (const [path, method, body] of [
     [`/api/sessions/${GHOST}/message`, "POST", JSON.stringify({ content: "hello" })],
     [`/api/sessions/${GHOST}/messages`, "GET", undefined],
+    [`/api/sessions/${GHOST}/approval`, "GET", undefined],
     [`/api/sessions/${GHOST}`, "PATCH", JSON.stringify({ title: "renamed" })],
   ]) {
     const world = setup();
@@ -1523,7 +1572,7 @@ await checkAsync("a decoded-hostile :id is 400 before any idFromName call (R76 g
     ["x".repeat(41), "a 41-char id", "the 40-char ceiling is the guard's, not a DO limit"],
   ];
   for (const [segment, decoded, why] of HOSTILE) {
-    for (const [suffix, method] of [["/message", "POST"], ["/messages", "GET"], ["", "PATCH"]]) {
+    for (const [suffix, method] of [["/message", "POST"], ["/messages", "GET"], ["/approval", "GET"], ["", "PATCH"]]) {
       const world = setup();
       const res = await handleFetch(
         req(`/api/sessions/${segment}${suffix}`, method, method === "GET" || method === "DELETE" ? {} : { body: "{}" }),

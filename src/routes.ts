@@ -327,6 +327,21 @@ async function abortSession(request: Request, env: Env, id: string): Promise<Res
 }
 
 /**
+ * GET /api/sessions/:id/approval
+ *
+ * The gate a reloaded console cannot rebuild from `messages`: the parked part is
+ * in the transcript, but the live stream that knew it was waiting is gone, so the
+ * console re-mounts its Approve/Deny card from this read. Read-only and
+ * session-scoped; `pending: null` when nothing is parked. Gate 3 runs because this
+ * addresses a DO, and a name nobody created must not instantiate one.
+ */
+async function readPendingApproval(env: Env, id: string): Promise<Response> {
+  const result = await agentStubFor(env, id).pendingApproval(id);
+  if (!result.ok) return fail(502, result.error ?? "could not read the approval");
+  return json({ ok: true, pending: result.pending ?? null });
+}
+
+/**
  * GET /api/sessions/:id/stream/:streamId
  *
  * `sseResponse` runs where the Streams instance lives, so this forwards to the
@@ -636,6 +651,12 @@ export async function handleFetch(
     if (sub === "abort" && request.method === "POST") {
       if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
       return abortSession(request, env, id);
+    }
+    // The parked-approval read a reloaded console uses to re-mount its gate. Same
+    // existence gate as the transcript: no row, no DO.
+    if (sub === "approval" && request.method === "GET") {
+      if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+      return readPendingApproval(env, id);
     }
     // The model picker. Same existence gate as the transcript: an id with no
     // registry row must not instantiate a DO just to be told about its model.
