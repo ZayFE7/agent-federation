@@ -242,7 +242,7 @@ export class Researcher extends Agent<Env> {
 
   /**
    * The child's tools. `exec` runs in the PARENT session's sandbox, because that
-   * is where the files the main agent is working on live; `web_search` is the
+   * is where the files the main agent is working on live; `lookup_online` is the
    * shared client. The other two deps exist only so a future addition to
    * CHILD_TOOL_NAMES fails loudly at the call rather than silently doing the
    * wrong thing: this class must never schedule a job or snapshot a workspace.

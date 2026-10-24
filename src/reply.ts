@@ -136,7 +136,13 @@ function ladder(
   if (runs.length > 0 && runs.every((r) => !r.ok)) {
     return { state: "error", verb: "Hit a snag" };
   }
-  if (names.includes("web_search")) return { state: "search", verb: "Searched the web" };
+  if (
+    names.includes("lookup_online") ||
+    names.includes("search_web") ||
+    names.includes("web_search")
+  ) {
+    return { state: "search", verb: "Searched the web" };
+  }
   if (names.includes("exec")) return { state: "code", verb: "Ran commands" };
   if (names.includes("schedule_task")) return { state: "success", verb: "Job queued" };
   if (names.includes("save_workspace")) return { state: "files", verb: "Saved workspace" };

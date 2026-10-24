@@ -23,6 +23,9 @@ export type StreamFrame =
 /** The existing console widgets: one label and mascot pose per tool. */
 export const TOOL_WIDGET: Record<string, { label: string; state: string }> = Object.freeze({
   exec: { label: "Shell", state: "code" },
+  lookup_online: { label: "Search", state: "search" },
+  /** Legacy names kept so transcripts written before the rename still render. */
+  search_web: { label: "Search", state: "search" },
   web_search: { label: "Search", state: "search" },
   schedule_task: { label: "Schedule", state: "calendar" },
   save_workspace: { label: "Snapshot", state: "data" },

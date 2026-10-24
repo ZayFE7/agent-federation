@@ -56,7 +56,7 @@ check("an outbound upload needs approval", () => {
 });
 
 check("a non-exec tool is never gated by shell risk", () => {
-  assert.equal(needsApproval("web_search", { cmd: "rm -rf /home/user" }), false);
+  assert.equal(needsApproval("lookup_online", { cmd: "rm -rf /home/user" }), false);
 });
 
 check("a missing cmd fails closed", () => {

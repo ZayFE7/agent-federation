@@ -36,6 +36,7 @@ import {
   buildSystemPrompt,
   capabilityAnswer,
   capabilitiesText,
+  isCapabilityQuestion,
 } from "./capabilities";
 import {
   dueTasks,
@@ -197,6 +198,64 @@ function toolOutputOf(messages: readonly UIMessage[], toolCallId: string): strin
     }
   }
   return undefined;
+}
+
+/** One readable command/query line for a persisted tool card. */
+function toolInputSummary(input: unknown): string {
+  if (typeof input === "string") return input.replace(/\s+/g, " ").trim().slice(0, 500);
+  if (input && typeof input === "object") {
+    const value = input as Record<string, unknown>;
+    for (const key of ["cmd", "query", "title", "goal"]) {
+      if (typeof value[key] === "string") {
+        return String(value[key]).replace(/\s+/g, " ").trim().slice(0, 500);
+      }
+    }
+    try {
+      return JSON.stringify(input).slice(0, 500);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+/**
+ * The settled tool cards of one assistant message, serialized for the transcript.
+ * The live stream is gone after a reload; this JSON is what lets the console
+ * rebuild the same cards without replaying an operation.
+ */
+function persistedToolRuns(message: UIMessage | undefined): string | null {
+  if (!message) return null;
+  const runs: Array<{ name: string; cmd: string; output: string; ok: boolean }> = [];
+  for (const raw of message.parts ?? []) {
+    const part = raw as ToolPartLike;
+    if (!isToolPart(part)) continue;
+    if (part.state !== "output-available" && part.state !== "output-error") continue;
+    const name = toolNameOf(part);
+    if (!name) continue;
+    const output =
+      part.state === "output-error"
+        ? String(part.errorText ?? "failed")
+        : typeof part.output === "string"
+          ? part.output
+          : part.output == null
+            ? ""
+            : (() => {
+                try {
+                  return JSON.stringify(part.output);
+                } catch {
+                  return String(part.output);
+                }
+              })();
+    runs.push({
+      name,
+      cmd: toolInputSummary(part.input),
+      output: output.slice(0, 4000),
+      ok: part.state === "output-available",
+    });
+  }
+  if (runs.length === 0) return null;
+  return JSON.stringify(runs).slice(0, 24_000);
 }
 
 export class FederationAgent extends Agent<Env> {
@@ -820,9 +879,7 @@ export class FederationAgent extends Agent<Env> {
   private directKind(content: string): "exec" | "search" | "capabilities" | null {
     const directive = parseDirective(content);
     if (directive) return directive.kind;
-    if (/what can you do|what are you (able|capable)|your capabilit|help me with what/i.test(content)) {
-      return "capabilities";
-    }
+    if (isCapabilityQuestion(content)) return "capabilities";
     return null;
   }
 
@@ -861,16 +918,16 @@ export class FederationAgent extends Agent<Env> {
         `direct exec: ${cmd} -> ${result.ok ? "ok" : "fail"}`,
         2
       );
-      logMessage(sql, "assistant", output, chatTier);
+      const runs: ToolRun[] = [
+        { name: "exec", cmd, output: output.slice(0, 4000), ok: result.ok },
+      ];
+      logMessage(sql, "assistant", output, chatTier, JSON.stringify(runs));
       // The same turn-end rule as the harness path: if the sandbox ran anything,
       // the turn owes a snapshot. A command that exited non-zero may still have
       // written files, so the gate is "reached the sandbox", not "succeeded".
       if (!result.error) {
         this.ctx.waitUntil(this.snapshotWorkspace(session).then(() => {}));
       }
-      const runs: ToolRun[] = [
-        { name: "exec", cmd, output: output.slice(0, 4000), ok: result.ok },
-      ];
       return {
         reply: output,
         state: result.ok ? "idle" : "error",
@@ -891,11 +948,11 @@ export class FederationAgent extends Agent<Env> {
     } catch (err) {
       output = `web search error: ${err instanceof Error ? err.message : String(err)}`;
     }
-    logMessage(sql, "assistant", output, chatTier);
-    if (ok) await this.rememberGlobal("tool", `direct web_search: "${query}" -> ok`, 2);
     const runs: ToolRun[] = [
-      { name: "web_search", cmd: query, output: output.slice(0, 4000), ok },
+      { name: "lookup_online", cmd: query, output: output.slice(0, 4000), ok },
     ];
+    logMessage(sql, "assistant", output, chatTier, JSON.stringify(runs));
+    if (ok) await this.rememberGlobal("tool", `direct lookup_online: "${query}" -> ok`, 2);
     return {
       reply: output,
       state: ok ? "search" : "error",
@@ -918,7 +975,7 @@ export class FederationAgent extends Agent<Env> {
     streamId: string
   ): Promise<void> {
     const toolCallId = crypto.randomUUID();
-    const tool = kind === "exec" ? "exec" : kind === "search" ? "web_search" : null;
+    const tool = kind === "exec" ? "exec" : kind === "search" ? "lookup_online" : null;
     const input = parseDirective(content)?.arg ?? "";
     try {
       if (tool) {
@@ -1048,7 +1105,7 @@ export class FederationAgent extends Agent<Env> {
         : turn.status === "unanswered"
           ? `[stopped] ${turn.reason ?? "interrupted"}`
           : "[no text reply]");
-    logMessage(this.db(), "assistant", text, stashed?.tier ?? "primary");
+    logMessage(this.db(), "assistant", text, stashed?.tier ?? "primary", persistedToolRuns(turn.message));
     // R45: the exchange is the memory a later session recalls, so it goes to
     // main. A continuation after an approval has no stashed user turn, so it
     // logs the display row only.

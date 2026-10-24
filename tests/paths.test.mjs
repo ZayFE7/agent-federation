@@ -56,7 +56,7 @@ check("SANDBOX_HOME is the real E2B home", () => {
 check("EXPECTED_TOOLS is the five wired tools, frozen", () => {
   assert.deepEqual([...EXPECTED_TOOLS], [
     "exec",
-    "web_search",
+    "lookup_online",
     "schedule_task",
     "save_workspace",
     "delegate",

@@ -21,7 +21,7 @@ function check(name, fn) {
 
 check("TOOL_WIDGET maps every wired tool to a label and mascot state", () => {
   assert.deepEqual(TOOL_WIDGET.exec, { label: "Shell", state: "code" });
-  assert.deepEqual(TOOL_WIDGET.web_search, { label: "Search", state: "search" });
+  assert.deepEqual(TOOL_WIDGET.lookup_online, { label: "Search", state: "search" });
   assert.equal(TOOL_WIDGET.schedule_task.state, "calendar");
   assert.equal(TOOL_WIDGET.save_workspace.state, "data");
   assert.equal(TOOL_WIDGET.delegate.state, "delegate");
@@ -50,12 +50,12 @@ check("tool-input-start mounts a widget with the tool's state", () => {
   const out = framesFromChunk({
     type: "tool-input-start",
     toolCallId: "c1",
-    toolName: "web_search",
+    toolName: "lookup_online",
   });
   assert.equal(out.length, 1);
   assert.equal(out[0].t, "tool-start");
   assert.equal(out[0].id, "c1");
-  assert.equal(out[0].name, "web_search");
+  assert.equal(out[0].name, "lookup_online");
   assert.equal(out[0].state, "search");
   assert.equal(out[0].label, "Search");
   assert.equal(out[0].input, "");

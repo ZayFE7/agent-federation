@@ -584,6 +584,10 @@ dialog::backdrop{background:rgba(20,10,40,.52)}
 .eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
 
 .eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
+
+.eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
+
+.eyes{transform:translate(calc(var(--ex)*.18 + var(--gx)*.3 + var(--px,0px)),calc(var(--ey)*.14 + var(--gy)*.3 + var(--py,0px)))}
 </style>
 </head>
 <body>
@@ -651,6 +655,8 @@ shop:{e:"n",m:"smile",p:[-52,52,2,2.2,0,4,0,0,0],b:["bob",1.4]},
 create:{e:"wide",m:"smile",p:[20,-100,6,1.6,-5,0,-3,0,1],b:["sway",2.8]},
 memory:{e:"happy",m:"smile",p:[-45,45,2,2.6,0,0,2,0,0],b:["sway",3.4]},
 delegate:{e:"wide",m:"smile",p:[125,-125,12,.7,0,-3,-4,0,1],b:["bob",1.2]}});
+
+
 
 
 
@@ -791,7 +797,7 @@ const MK={files:"read"};
 const T=k=>S[k]?S[k].c:"#FFD66B";
 const awayState=t=>/mail|email/i.test(t)?"mail":/search|web|look/i.test(t)?"search":/code|build|script/i.test(t)?"code":/log|date|file/i.test(t)?"files":"memory";
 
-const TOOL_META={exec:{a:"#FF7EB6",i:"w-sh",l:"Shell"},web_search:{a:"#4FD1E8",i:"w-se",l:"Search"},schedule_task:{a:"#A3E635",i:"w-sc",l:"Schedule"},save_workspace:{a:"#2DD4BF",i:"w-sn",l:"Snapshot"},delegate:{a:"#A78BFA",i:"w-de",l:"Delegate"}};
+const TOOL_META={exec:{a:"#FF7EB6",i:"w-sh",l:"Shell"},lookup_online:{a:"#4FD1E8",i:"w-se",l:"Search"},search_web:{a:"#4FD1E8",i:"w-se",l:"Search"},web_search:{a:"#4FD1E8",i:"w-se",l:"Search"},schedule_task:{a:"#A3E635",i:"w-sc",l:"Schedule"},save_workspace:{a:"#2DD4BF",i:"w-sn",l:"Snapshot"},delegate:{a:"#A78BFA",i:"w-de",l:"Delegate"}};
 const toolMeta=n=>TOOL_META[n]||{a:"#FF7EB6",i:"w-sh",l:"Tool"};
 const toolDone=()=>'<svg class="wic"><use href="#w-ck"></use></svg><span>Done</span><svg class="wic cv"><use href="#w-ch"></use></svg>';
 function toolExit(out){const n=/exit (\d+)/i.exec(String(out||""))?.[1];return '<span class="xp">'+(n?"Exit "+n:"Failed")+'</span><svg class="wic cv"><use href="#w-ch"></use></svg>'}
@@ -1041,7 +1047,7 @@ try{const r=await api("/api/sessions/"+encodeURIComponent(sid)+"/message",{metho
 
 async function openSession(id){PREVIEW=false;teardown();PENDING=null;DECIDING=false;WS=null;MF=null;WSE="";state.sessionId=id;try{localStorage.setItem("blip.session",id)}catch(e){}tab="chat";pageTab="";
 try{const r=await api("/api/sessions/"+encodeURIComponent(id)+"/messages");const j=await r.json();if(state.sessionId!==id)return;
-if(j.ok&&Array.isArray(j.messages))LOG=j.messages.map(m=>[m.role==="user"?"u":"a",String(m.content||""),Number(m.created_at)||Date.now()]);else LOG=[["a","[error] "+(j.error||"Could not load this chat."),Date.now()]]}
+if(j.ok&&Array.isArray(j.messages)){LOG=[];for(const m of j.messages){const ts=Number(m.created_at)||Date.now();let tools=[];try{tools=JSON.parse(m.tools_json||"[]")}catch(e){tools=[]}if(Array.isArray(tools))for(const t of tools)if(t&&t.name)LOG.push(["t",t,ts]);LOG.push([m.role==="user"?"u":"a",String(m.content||""),ts])}}else LOG=[["a","[error] "+(j.error||"Could not load this chat."),Date.now()]]}
 catch(e){if(state.sessionId!==id)return;LOG=[["a","[network] "+e,Date.now()]]}
 busy=false;cur="idle";NF=99;teardown();render();renderThread();side(0);scrollEnd(true);const resumed=resumeLive(id);loadModel(id);readSession(id);if(!resumed)loadPending(id)}
 async function readSession(id){const s=state.sessions.find(x=>x.id===id);if(s&&s.unread){s.unread=0;renderList()}try{await api("/api/sessions/"+encodeURIComponent(id)+"/read",{method:"POST"})}catch(e){}}

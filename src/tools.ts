@@ -513,7 +513,7 @@ export function buildTools(
 ): ToolSet {
   const builders: Record<string, (d: ToolDeps) => ToolSet[string]> = {
     exec: execTool,
-    web_search: webSearchTool,
+    lookup_online: webSearchTool,
     schedule_task: scheduleTool,
     save_workspace: saveWorkspaceTool,
   };

@@ -24,6 +24,8 @@ export interface MessageRow {
   content: string;
   tier: string | null;
   created_at: number;
+  /** Serialized ToolRun[] for an assistant row, so widgets survive a reload. */
+  tools_json?: string | null;
 }
 
 export interface TaskRow {
@@ -58,8 +60,15 @@ export function ensureSchema(sql: SqlHandle): void {
     role TEXT,
     content TEXT,
     tier TEXT,
-    created_at INTEGER
+    created_at INTEGER,
+    tools_json TEXT
   )`);
+  // Databases created before tools_json existed need the column added once.
+  try {
+    sql.exec(`ALTER TABLE messages ADD COLUMN tools_json TEXT`);
+  } catch {
+    // duplicate column name: already migrated; nothing to do.
+  }
   sql.exec(`CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY,
     title TEXT,
@@ -135,21 +144,23 @@ export function logMessage(
   sql: SqlHandle,
   role: string,
   content: string,
-  tier: string
+  tier: string,
+  toolsJson?: string | null
 ): void {
   sql.exec(
-    "INSERT INTO messages (role, content, tier, created_at) VALUES (?, ?, ?, ?)",
+    "INSERT INTO messages (role, content, tier, created_at, tools_json) VALUES (?, ?, ?, ?, ?)",
     role,
     content,
     tier,
-    Date.now()
+    Date.now(),
+    toolsJson ?? null
   );
 }
 
 /** Latest messages, oldest first, for chat context. */
 export function recentMessages(sql: SqlHandle, limit = 10): MessageRow[] {
   const rows = sql.exec<MessageRow>(
-    "SELECT id, role, content, tier, created_at FROM messages ORDER BY created_at DESC, id DESC LIMIT ?",
+    "SELECT id, role, content, tier, created_at, tools_json FROM messages ORDER BY created_at DESC, id DESC LIMIT ?",
     limit
   ).results;
   return rows.reverse();

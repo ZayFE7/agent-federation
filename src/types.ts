@@ -19,7 +19,7 @@ export interface ChatMessage {
 
 /** One tool invocation the model made while producing a reply. */
 export interface ToolRun {
-  /** Tool function name, e.g. "exec" | "web_search" | "schedule_task" | "save_workspace". */
+  /** Tool function name, e.g. "exec" | "lookup_online" | "schedule_task" | "save_workspace". */
   name: string;
   /** What was invoked: the shell command, or the job title for schedule_task. */
   cmd: string;

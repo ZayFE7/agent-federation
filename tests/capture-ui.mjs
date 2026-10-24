@@ -252,9 +252,9 @@ async function syntheticTurn(options = {}) {
       mountTool({t:"tool-start", id:"cap-a", name:"exec", label:"Shell", state:"code", input:JSON.stringify({cmd:"ls -la /home/user/project"})});
       updateTool({t:"tool-progress", id:"cap-a", phase:"running", message:"Running command", fraction:null, tail:""});
       settleTool({t:"tool-result", id:"cap-a", name:"exec", ok:true, output:"exit 0 (success)\\nstdout:\\napp  package.json  src  tests\\n\\nstderr:\\n"});
-      mountTool({t:"tool-start", id:"cap-b", name:"web_search", label:"Search", state:"search", input:JSON.stringify({query:"Cloudflare Agents SDK release notes"})});
+      mountTool({t:"tool-start", id:"cap-b", name:"lookup_online", label:"Search", state:"search", input:JSON.stringify({query:"Cloudflare Agents SDK release notes"})});
       updateTool({t:"tool-progress", id:"cap-b", phase:"running", message:"Searching the web", fraction:null});
-      settleTool({t:"tool-result", id:"cap-b", name:"web_search", ok:true, output:"5 results from the last 30 days. The latest release adds durable streams."});
+      settleTool({t:"tool-result", id:"cap-b", name:"lookup_online", ok:true, output:"5 results from the last 30 days. The latest release adds durable streams."});
       mountTool({t:"tool-start", id:"cap-c", name:"exec", label:"Shell", state:"code", input:JSON.stringify({cmd:"ls /definitely-not-here"})});
       settleTool({t:"tool-result", id:"cap-c", name:"exec", ok:false, output:"exit 2 (failed)\\nstderr:\\nls: cannot access '/definitely-not-here': No such file or directory"});
       mountTool({t:"tool-start", id:"cap-d", name:"exec", label:"Shell", state:"code", input:JSON.stringify({cmd:"python3 -c \\"print('rotate the token')\\""})});

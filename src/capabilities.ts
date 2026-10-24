@@ -21,7 +21,7 @@ export const SANDBOX_HOME = "/home/user";
 // compares the built set against this; capabilitiesText keys its claims off it.
 export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
   "exec",
-  "web_search",
+  "lookup_online",
   "schedule_task",
   "save_workspace",
   "delegate",
@@ -40,7 +40,7 @@ export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
  */
 export const CHILD_TOOL_NAMES: readonly string[] = Object.freeze([
   "exec",
-  "web_search",
+  "lookup_online",
 ]);
 
 /** Persona slot; swap this string per user later. */
@@ -114,8 +114,8 @@ const TABLE: readonly CapabilityDef[] = [
     id: "web-search",
     label: "Web search",
     detail: () =>
-      "Search the live web for current facts, news, prices, and documentation (web_search tool); results come back as titles, URLs, and text excerpts to reason over and cite.",
-    tool: "web_search",
+      "Search the live web for current facts, news, prices, and documentation (lookup_online tool); results come back as titles, URLs, and text excerpts to reason over and cite.",
+    tool: "lookup_online",
   },
   {
     id: "scheduling",
@@ -192,6 +192,22 @@ export function capabilitiesText(
     .filter((c) => c.wired)
     .map((c) => `- ${c.label}: ${c.detail}`)
     .join("\n");
+}
+
+/** Only a whole, unqualified question earns the deterministic capability answer. */
+export function isCapabilityQuestion(content: string): boolean {
+  const normalized = content
+    .trim()
+    .toLowerCase()
+    .replace(/[?!.]+$/g, "")
+    .replace(/\s+/g, " ");
+  return (
+    normalized === "what can you do" ||
+    normalized === "what can you do for me" ||
+    normalized === "what are you capable of" ||
+    normalized === "what are your capabilities" ||
+    normalized === "what can you help with"
+  );
 }
 
 /**

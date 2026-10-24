@@ -8,6 +8,7 @@ import {
   capabilitiesText,
   capabilityList,
   buildSystemPrompt,
+  isCapabilityQuestion,
 } from "../src/capabilities.ts";
 
 const failures = [];
@@ -20,7 +21,7 @@ function check(name, fn) {
   }
 }
 
-const wired = capabilitiesText(["exec", "web_search"]);
+const wired = capabilitiesText(["exec", "lookup_online"]);
 
 check("wired tools are described; unwired features are absent", () => {
   assert.match(wired, /Linux sandbox/);
@@ -31,7 +32,7 @@ check("wired tools are described; unwired features are absent", () => {
 });
 
 check("adding delegate adds the multi-agent line and changes nothing else", () => {
-  const withDelegate = capabilitiesText(["exec", "web_search", "delegate"]);
+  const withDelegate = capabilitiesText(["exec", "lookup_online", "delegate"]);
   const added = withDelegate.split("\n").filter((line) => !wired.includes(line));
   assert.equal(added.length, 1);
   assert.match(added[0], /Sub-agents/);
@@ -50,6 +51,18 @@ check("unwired entries are listed but marked not wired", () => {
   assert.equal(browser.wired, false);
   const memory = capabilityList([]).find((c) => c.id === "memory");
   assert.equal(memory.wired, true, "core capabilities are always on");
+});
+
+check("only an unqualified capability question takes the deterministic answer", () => {
+  assert.equal(isCapabilityQuestion("what can you do?"), true);
+  assert.equal(isCapabilityQuestion("  What can you do  "), true);
+  assert.equal(isCapabilityQuestion("what are your capabilities"), true);
+  assert.equal(
+    isCapabilityQuestion("what can you do with your built in computer?"),
+    false,
+    "a qualified question must reach the model, not the canned list"
+  );
+  assert.equal(isCapabilityQuestion("what can you do with Python files"), false);
 });
 
 const memories = [

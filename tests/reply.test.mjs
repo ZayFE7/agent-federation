@@ -34,7 +34,7 @@ check("one text part and two tool parts yield the text and two cards", () => {
           output: "ok",
         },
         {
-          type: "tool-web_search",
+          type: "tool-lookup_online",
           toolCallId: "t2",
           state: "output-available",
           input: { query: "habits" },
@@ -47,7 +47,7 @@ check("one text part and two tool parts yield the text and two cards", () => {
   assert.equal(result.tools.length, 2);
   assert.deepEqual(
     result.tools.map((t) => t.name),
-    ["exec", "web_search"]
+    ["exec", "lookup_online"]
   );
   assert.equal(result.tools[0].cmd, "mkdir app");
   assert.equal(result.tools[0].ok, true);

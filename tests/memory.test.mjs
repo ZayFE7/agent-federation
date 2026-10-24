@@ -77,6 +77,18 @@ function check(label, cond, detail) {
 M.ensureSchema(sql);
 check("ensureSchema runs idempotent", true);
 
+// A tool card is part of the transcript, not only the live stream.
+const persistedTools = JSON.stringify([
+  { name: "lookup_online", cmd: "latest AI news", output: "3 results", ok: true },
+]);
+M.logMessage(sql, "assistant", "Here are the results", "primary", persistedTools);
+const persistedRows = M.recentMessages(sql, 1);
+check(
+  "logMessage persists tool cards on the assistant row",
+  persistedRows[0]?.tools_json === persistedTools,
+  `got ${JSON.stringify(persistedRows[0]?.tools_json)}`
+);
+
 // Seed a legacy backlog the way the OLD behavior would have left it.
 sql.exec(
   "INSERT INTO tasks (title,status,due_at,payload,created_at,recurrence) VALUES (?,?,?,?,?,?)",

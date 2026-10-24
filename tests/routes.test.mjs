@@ -1146,8 +1146,22 @@ await checkAsync("DELETE /api/sessions/abc removes the id", async () => {
 // ----------------------------------------------- GET /api/sessions/:id/messages ----
 
 const TRANSCRIPT = [
-  { id: 7, role: "user", content: "hi", tier: "cheap", created_at: 1700000000000 },
-  { id: 8, role: "assistant", content: "hello", tier: null, created_at: 1700000000500 },
+  {
+    id: 7,
+    role: "user",
+    content: "hi",
+    tier: "cheap",
+    created_at: 1700000000000,
+    tools_json: null,
+  },
+  {
+    id: 8,
+    role: "assistant",
+    content: "hello",
+    tier: null,
+    created_at: 1700000000500,
+    tools_json: '[{"name":"exec","cmd":"ls","output":"ok","ok":true}]',
+  },
 ];
 
 await checkAsync("GET /api/sessions/abc/messages returns MessageRow[] unmodified", async () => {
@@ -1167,6 +1181,7 @@ await checkAsync("GET /api/sessions/abc/messages returns MessageRow[] unmodified
     "id",
     "role",
     "tier",
+    "tools_json",
   ]);
 });
 

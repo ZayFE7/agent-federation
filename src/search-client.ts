@@ -1,6 +1,6 @@
 // The one place the brain calls Parallel Web Search.
 //
-// Moved out of src/agent.ts with Task 31 so a sub-agent's `web_search` uses the
+// Moved out of src/agent.ts with Task 31 so a sub-agent's `lookup_online` uses the
 // same endpoint, the same key check and the same failure text as the main agent's.
 // Throws with actionable text on every failure mode, because the harness records a
 // thrown tool as an error the model can read; a caller that needs a text reply (the
@@ -21,7 +21,7 @@ export async function searchParallel(
   }
   if (!q) {
     throw new Error(
-      "web_search needs a non-empty query. Retry with what you want to find."
+      "lookup_online needs a non-empty query. Retry with what you want to find."
     );
   }
   let res: Response;

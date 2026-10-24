@@ -35,7 +35,7 @@ function chunkEvent(chunk) {
 }
 
 check("CHILD_TOOL_NAMES is exactly the two read-mostly tools, and frozen", () => {
-  assert.deepEqual([...CHILD_TOOL_NAMES], ["exec", "web_search"]);
+  assert.deepEqual([...CHILD_TOOL_NAMES], ["exec", "lookup_online"]);
   assert.ok(Object.isFrozen(CHILD_TOOL_NAMES), "CHILD_TOOL_NAMES must be frozen");
 });
 

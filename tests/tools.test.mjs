@@ -70,8 +70,8 @@ await check("exec does not opt into rerun (it writes)", () => {
   assert.equal("recovery" in tools.exec, false);
 });
 
-await check("web_search opts into rerun (read-only)", () => {
-  assert.equal(tools.web_search.recovery, "rerun");
+await check("lookup_online opts into rerun (read-only)", () => {
+  assert.equal(tools.lookup_online.recovery, "rerun");
 });
 
 await check("every tool has a substantive, em-dash-free description", () => {
@@ -81,8 +81,8 @@ await check("every tool has a substantive, em-dash-free description", () => {
   }
 });
 
-await check("web_search states the default cap and the truncation path", () => {
-  const d = tools.web_search.description;
+await check("lookup_online states the default cap and the truncation path", () => {
+  const d = tools.lookup_online.description;
   assert.match(d, /Defaults to 5/i);
   assert.match(d, /truncat/i);
   assert.match(d, /raise max_results|narrow the query/i);
@@ -105,9 +105,9 @@ await check("exec reports an indeterminate start, the interim line, and a final 
   assert.match(last.tail, /world/);
 });
 
-await check("web_search reports the query while searching and settles at 1", async () => {
+await check("lookup_online reports the query while searching and settles at 1", async () => {
   const fake = recordingDeps();
-  await buildTools(fake.deps).web_search.execute(
+  await buildTools(fake.deps).lookup_online.execute(
     { query: "current docs" },
     { toolCallId: "c-search" }
   );
@@ -141,7 +141,7 @@ await check("every tool's final progress is fraction 1, and phases use the fixed
   const allowed = new Set(["searching", "running", "snapshotting", "scheduling", "restoring", "delegating"]);
   const runs = [
     ["exec", { cmd: "pwd" }],
-    ["web_search", { query: "docs" }],
+    ["lookup_online", { query: "docs" }],
     ["schedule_task", { title: "j", instructions: "i" }],
     ["save_workspace", {}],
   ];
@@ -251,7 +251,7 @@ await check("no runner means no delegate tool, not a tool that always fails", ()
   // throws on every call would still tell the model it can spawn.
   const built = buildTools(deps);
   assert.equal("delegate" in built, false);
-  assert.deepEqual(Object.keys(built), ["exec", "web_search", "schedule_task", "save_workspace"]);
+  assert.deepEqual(Object.keys(built), ["exec", "lookup_online", "schedule_task", "save_workspace"]);
 });
 
 await check("the fan-out refusal names the cap and the way out", () => {
