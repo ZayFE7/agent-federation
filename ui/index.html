@@ -1415,16 +1415,36 @@ body:before{background:radial-gradient(55% 28% at 58% 0%,color-mix(in srgb,var(-
 .tcard .tst.ok{background:var(--osoft);border-color:color-mix(in srgb,var(--ok) 24%,var(--ln));color:var(--ok)}
 .tspin{border-color:color-mix(in srgb,var(--ink) 22%,var(--ln));border-top-color:var(--ink)}
 
+/* ------------------------------------------------ mascot card ---- */
+.mascotWrap{position:fixed;inset:0;z-index:90;display:grid;place-items:center;padding:24px;background:color-mix(in srgb,var(--ink) 26%,transparent);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px)}
+.mascotWrap[hidden]{display:none}
+.mascotPanel{position:relative;width:min(360px,calc(100vw - 32px));padding:26px 24px 20px;border:1px solid var(--ln);border-radius:24px;background:var(--s1);box-shadow:var(--sh2);text-align:center;animation:mascotIn .24s cubic-bezier(.22,1,.36,1)}
+.mascotX{position:absolute;top:10px;right:10px;width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--ln);border-radius:9px;background:var(--s1);color:var(--mt)}
+.mascotX:hover{background:var(--soft);color:var(--ink)}
+.mascotX .ic{width:15px;height:15px}
+.mascotFace{width:168px;height:168px;margin:0 auto 16px;border:1px solid var(--ln);border-radius:36px;background:#FCFCFB;overflow:hidden;display:grid;place-items:center}
+.mascotFace canvas{display:block;width:100%;height:100%}
+.mascotKicker{display:block;color:var(--mu);font-size:11px;font-weight:600}
+.mascotPanel h2{margin:3px 0 4px;font-size:26px;font-weight:800;letter-spacing:-.03em}
+.mascotState{display:flex;align-items:center;justify-content:center;gap:6px;color:var(--mt);font-size:12px;font-weight:700}
+.mascotState .sdot{width:7px;height:7px}
+.mascotSay{max-width:286px;margin:12px auto 18px;color:var(--mt);font-size:13px;line-height:1.5}
+.mascotHi{width:100%;min-height:40px;justify-content:center;gap:7px}
+@keyframes mascotIn{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
+
 @media (max-width:899px){
   .scr{padding-bottom:calc(var(--cmpH,92px) + var(--kb,0px) + 14px)}
   .sbrand .x{display:grid}
   .wmark{width:96px;height:96px;border-radius:20px}
+  .mascotWrap{padding:16px}
+  .mascotPanel{padding:24px 18px 18px}
+  .mascotFace{width:148px;height:148px;border-radius:32px}
 }
 @media (max-width:700px){
   .model{display:none!important}
 }
 @media (prefers-reduced-motion:reduce){
-  .tcard,.gt,.sug,.newb{animation:none;transition:none}
+  .tcard,.gt,.sug,.newb,.mascotPanel{animation:none;transition:none}
 }
 </style>
 </head>
@@ -1446,7 +1466,7 @@ body:before{background:radial-gradient(55% 28% at 58% 0%,color-mix(in srgb,var(-
 <header class="hd" id="hd">
 <button class="ib mob" id="menuBtn" aria-label="Open chats" aria-controls="side" aria-expanded="false" onclick="side(1)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
 <div class="who" id="who">
-<div class="av" id="av" role="button" tabindex="0" aria-label="Blip. Tap for a closer look." onclick="peek()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();peek()}"><canvas data-face aria-hidden="true"></canvas></div>
+<div class="av" id="av" role="button" tabindex="0" aria-label="Blip. Open the mascot card." onclick="mascotOpen()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();mascotOpen()}"><canvas data-face aria-hidden="true"></canvas></div>
 <div class="idn"><div class="nm" id="nm">Blip</div><div class="st"><i class="sdot" id="sdot"></i><b id="verb">Ready</b><em class="clk" id="clk"></em></div></div>
 </div>
 <div class="hdact">
@@ -1469,13 +1489,23 @@ body:before{background:radial-gradient(55% 28% at 58% 0%,color-mix(in srgb,var(-
 <input type="file" id="attInp" multiple hidden onchange="attachFiles(this.files);this.value=''">
 <div class="chint"><span>Enter to send, Shift + Enter for a new line</span><span>Attach files or ask Blip to build something</span></div>
 </div>
-<div class="pk" id="pk" onclick="peek()"></div>
 </main>
 <div class="scrim" id="scrim" onclick="side(0)"></div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <div class="sr-only" id="announcer" aria-live="polite"></div>
 <dialog id="dlg"></dialog>
+<div class="mascotWrap" id="mascotWrap" hidden onclick="if(event.target===this)mascotClose()">
+<div class="mascotPanel" role="dialog" aria-modal="true" aria-labelledby="mascotTitle">
+<button class="mascotX" id="mascotX" aria-label="Close the mascot card" onclick="mascotClose()"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+<div class="mascotFace"><canvas data-face data-r=".32" aria-hidden="true"></canvas></div>
+<span class="mascotKicker">Your cloud agent</span>
+<h2 id="mascotTitle">Blip</h2>
+<div class="mascotState"><i class="sdot" id="mascotDot"></i><b id="mascotVerb">Ready</b></div>
+<p class="mascotSay" id="mascotSay">Nothing running. Ask me anything.</p>
+<button class="btn p mascotHi" id="mascotHi" onclick="mascotHi()">Say hi</button>
+</div>
+</div>
 <script>
 const I={
 play:'<path d="M8 5l11 7-11 7z"/>',
@@ -1548,7 +1578,7 @@ if(list)closeList();para.push(ln)}
 flushPara();closeList();
 let html="";const P=t=>inl(t).replace(/\n/g,"<br>");for(const b of out){if(b.raw!=null)html+=b.raw;else if(b.o)html+="<"+b.o+">";else if(b.c)html+="</"+b.c+">";else if(b.li)html+="<li>"+inl(b.li)+"</li>";else html+="<"+b.tag+">"+P(b.text)+"</"+b.tag+">"}
 return html.replace(/\u0000I(\d+)\u0000/g,(m,i)=>tokInl[+i]).replace(/\u0000(\d+)\u0000/g,(m,i)=>tok[+i])};
-let cur="idle",tab="chat",vi=0,LOG=[],pkt,NF=99,busy=false;
+let cur="idle",tab="chat",vi=0,LOG=[],NF=99,busy=false,MASCOT_HI_AT=0,MASCOT_HI_TIMER=0,MASCOT_RETURN=null;
 
 const state={sessions:[],sessionId:null,model:"",pinned:"",provider:"deployment",defaultProvider:null,defaultModel:null,providers:[],deploymentModels:[],settingsLoaded:false,mcpServers:[],mcpTools:[],mcpLoaded:false,mcpErr:"",skills:[],skillsLoaded:false,googleStatus:null,googleStatusLoaded:false,googleStatusErr:"",googleStatusLoading:false,googleAccounts:[],googleAccountsLoaded:false,googleAccountsErr:"",googleAccountsLoading:false,googleBusy:"",googleNotice:""};
 let TASKS=[],CAPS=[],PENDING=null,LIVE=null,DECIDING=false;
@@ -2593,9 +2623,9 @@ function mPose(id,t){const st=MascotStates.resolveState(id),d=st.duration||1,lt=
 function setMascotState(k){const id=MMAP[k]||"idle";if(id===MM.cur&&MM.live){MM.mix=1;return}MM.prev=Object.assign({},MM.live||mPose(MM.cur,MM.t-MM.at));MM.cur=id;MM.at=MM.t;MM.mix=0}
 function mountFaces(){for(const cv of document.querySelectorAll("canvas[data-face]")){if(cv.__face)continue;cv.__face=1;MFACES.push({cv,seed:MSEED++})}
  for(let i=MFACES.length-1;i>=0;i--)if(!MFACES[i].cv.isConnected)MFACES.splice(i,1)}
-function mDraw(face){const cv=face.cv,w=cv.clientWidth,h=cv.clientHeight;if(!w||!h||w>1024||h>1024)return;const d=3;
+function mDraw(face){const cv=face.cv,w=cv.clientWidth,h=cv.clientHeight;if(!w||!h||w>1024||h>1024)return;const d=Math.min(4,Math.max(2,(window.devicePixelRatio||1)*1.5));
  if(cv.width!==Math.round(w*d)||cv.height!==Math.round(h*d)){cv.width=Math.round(w*d);cv.height=Math.round(h*d)}
- const x=cv.getContext("2d"),p=MM.live||mPose(MM.cur,MM.t-MM.at),R=Math.min(w,h)*.36;
+ const x=cv.getContext("2d"),p=MM.live||mPose(MM.cur,MM.t-MM.at),R=Math.min(w,h)*(Number(cv.dataset.r)||.36);
  x.setTransform(d,0,0,d,0,0);x.clearRect(0,0,w,h);x.save();x.translate(w/2+p.dx*R,h*.5+p.dy*R);x.scale(p.sx,p.sy);
  if(p.spin>.5){x.save();x.rotate(MM.t*.9);
   for(let j=0;j<8;j++){x.rotate(Math.PI/4);const g=Math.round(158+(j/7)*68);x.strokeStyle="rgb("+g+","+g+","+g+")";x.lineWidth=R*.16;x.lineCap="round";x.beginPath();x.moveTo(0,-R*.3);x.lineTo(0,-R*.68);x.stroke()}
@@ -2697,7 +2727,7 @@ const clock=busy&&LIVE?Math.floor((Date.now()-LIVE.started)/1000):0;
 const txt=busy?String(Math.floor(clock/60))+":"+String(clock%60).padStart(2,"0"):"";
 if($("clk").textContent!==txt)$("clk").textContent=txt;
 const w=$("wel");if(w&&LIVE)w.textContent=txt||"0:00"}
-function upd(){const s=S[cur]||S.idle;setMascotState(!navigator.onLine&&cur==="idle"?"offline":cur);const dot=$("sdot");if(dot){dot.style.background=s.c;dot.classList.toggle("pulse",!!busy)};tick();setSend()}
+function upd(){const s=S[cur]||S.idle;setMascotState(!navigator.onLine&&cur==="idle"?"offline":cur);const dot=$("sdot");if(dot){dot.style.background=s.c;dot.classList.toggle("pulse",!!busy)};tick();setSend();if(!$("mascotWrap").hidden)updateMascotCard()}
 
 
 function nearEnd(){const e=$("scr");return e.scrollHeight-e.scrollTop-e.clientHeight<180}
@@ -2929,7 +2959,10 @@ function side(o){if(!matchMedia("(max-width:899px)").matches&&o)return;const app
 if(o){const active=document.activeElement;app.dataset.returnFocus=active&&active.id?active.id:"";app.classList.add("dr");sd.setAttribute("role","dialog");sd.setAttribute("aria-modal","true");if(main)main.inert=true;setTimeout(()=>{try{$("sideClose")&&$("sideClose").focus()}catch(e){}},60)}
 else{app.classList.remove("dr");sd.removeAttribute("role");sd.removeAttribute("aria-modal");if(main)main.inert=false;if(wasOpen&&matchMedia("(max-width:899px)").matches)setTimeout(()=>{try{$("menuBtn")&&$("menuBtn").focus()}catch(e){}},60)}
 $("menuBtn")&&$("menuBtn").setAttribute("aria-expanded",String(!!o))}
-function peek(){const w=$("who"),h=$("hd"),o=!w.classList.contains("big");w.classList.toggle("big",o);h.classList.toggle("big",o);$("pk").classList.toggle("on",o);clearTimeout(pkt);if(o)pkt=setTimeout(peek,5200)}
+function mascotOpen(){const w=$("mascotWrap");if(!w||!w.hidden)return;MASCOT_RETURN=document.activeElement;w.hidden=false;const app=$("app");if(app)app.inert=true;mountFaces();updateMascotCard();requestAnimationFrame(()=>{try{$("mascotX").focus({preventScroll:true})}catch(e){}})}
+function mascotClose(){const w=$("mascotWrap");if(!w||w.hidden)return;w.hidden=true;const app=$("app");if(app)app.inert=false;clearTimeout(MASCOT_HI_TIMER);MASCOT_HI_AT=0;setMascotState(!navigator.onLine&&cur==="idle"?"offline":cur);const r=MASCOT_RETURN;MASCOT_RETURN=null;if(r&&r.focus){try{r.focus({preventScroll:true})}catch(e){}}}
+function updateMascotCard(){const s=S[cur]||S.idle,hi=Date.now()<MASCOT_HI_AT,off=!navigator.onLine&&cur==="idle";const dot=$("mascotDot"),verb=$("mascotVerb"),say=$("mascotSay");if(dot)dot.style.background=off?"#96918A":s.c;if(verb)verb.textContent=hi?"Hello":off?"Offline":busy||cur!=="idle"?((LIVE&&LIVE.serverVerb)||s.v[vi%s.v.length]):"Ready";if(say)say.textContent=hi?"Hey. What are we getting done?":off?"Saved chats are available. Messages wait for the connection.":s.say}
+function mascotHi(){MASCOT_HI_AT=Date.now()+3200;setMascotState("wave");updateMascotCard();clearTimeout(MASCOT_HI_TIMER);MASCOT_HI_TIMER=setTimeout(()=>{MASCOT_HI_AT=0;const w=$("mascotWrap");if(w&&!w.hidden){setMascotState(!navigator.onLine&&cur==="idle"?"offline":cur);updateMascotCard()}},3200)}
 function suggest(text){if(tab!=="chat"){pageTab="";tab="chat";render()}const inp=$("inp");if(!inp)return;inp.value=String(text||"");sizeInp();setSend();side(0);requestAnimationFrame(()=>{inp.focus();try{inp.setSelectionRange(inp.value.length,inp.value.length)}catch(e){}})}
 function sizeInp(){const e=$("inp");if(!e)return;e.style.height="auto";e.style.height=Math.min(160,Math.max(26,e.scrollHeight))+"px"}
 function setSend(){const b=$("sendBtn"),i=$("inp");if(!b||!i)return;const has=!!i.value.trim()||ATTACH.length>0;const stop=busy&&!has;b.classList.toggle("stop",stop);b.disabled=!!PENDING||DECIDING||(!busy&&!has);b.innerHTML=stop?ic("stop","ic fill"):ic("send");b.setAttribute("aria-label",stop?"Stop":"Send or queue");b.title=stop?"Stop":DECIDING?"Sending your decision":PENDING?"Decide the approval first":busy?"Queue this message for after the current turn":"Send"}
@@ -3444,7 +3477,7 @@ const id=(stored&&ids.includes(stored))?stored:(ids.includes("main")?"main":ids[
 if(id&&!state.sessionId)await openSession(id);else{state.sessionId=null;try{localStorage.removeItem("blip.session")}catch(e){}LOG=[];renderThread();render()}}
 
 document.addEventListener("visibilitychange",()=>{D.classList.toggle("away",document.hidden);if(document.visibilityState==="visible"){if(tab==="connections"){loadGoogleStatus();loadGoogleAccounts();loadComposioConnectors()}else if(tab==="tasks"){loadAutomations(true);loadAttention();if(AUTOSEL)loadAutomationDetail(AUTOSEL,true)}else if(tab==="goals"){loadGoals(true);loadGoalAttention();if(GOALSEL)loadGoalDetail(GOALSEL,true)}else autoAmbientTick()}});
-addEventListener("keydown",e=>{if(e.key==="Escape"){const d=$("dlg");if(d&&d.open)return;if($("app").classList.contains("dr"))side(0)}});
+addEventListener("keydown",e=>{if(e.key==="Escape"){const m=$("mascotWrap");if(m&&!m.hidden){mascotClose();return}const d=$("dlg");if(d&&d.open)return;if($("app").classList.contains("dr"))side(0)}});
 matchMedia("(max-width:899px)").addEventListener("change",e=>{if(!e.matches)side(0)});
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{syncTheme()});
 $("inp").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if(!PENDING&&!DECIDING)send()}});

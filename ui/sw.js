@@ -1,7 +1,7 @@
 // Blip's app shell. iPhone-first: the installed PWA must open instantly and
 // render the last saved chats with no network. Private API responses never go
 // through this cache; the page keeps its own small offline store.
-const VERSION = "blip-shell-2026-10-31-1";
+const VERSION = "blip-shell-2026-10-31-2";
 const SHELL = [
   "/",
   "/manifest.webmanifest",
