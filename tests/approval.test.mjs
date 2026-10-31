@@ -71,6 +71,35 @@ check("read-shaped MCP tools run free and write-shaped ones ask", () => {
   assert.equal(needsApproval("mcp_call", {}), true, "a missing tool fails closed");
 });
 
+check("Gmail reads and drafts run free; sends and destructive changes ask", () => {
+  assert.equal(needsApproval("gmail", { action: "search" }), false);
+  assert.equal(needsApproval("gmail", { action: "read" }), false);
+  assert.equal(needsApproval("gmail", { action: "draft", account: "a@b.c" }), false);
+  assert.equal(needsApproval("gmail", { action: "send", account: "a@b.c" }), true);
+  assert.equal(needsApproval("gmail", { action: "reply", account: "a@b.c" }), true);
+  assert.equal(needsApproval("gmail", { action: "manage", operation: "trash" }), true);
+  assert.equal(needsApproval("gmail", { action: "manage", operation: "delete" }), true);
+  assert.equal(needsApproval("gmail", { action: "manage", operation: "archive" }), false);
+  assert.equal(
+    needsApproval("gmail", {
+      action: "manage",
+      operation: "archive",
+      threadIds: Array.from({ length: 11 }, (_, i) => `t${i}`),
+    }),
+    true
+  );
+  assert.equal(needsApproval("gmail", {}), true);
+});
+
+check("loading and installing a skill run free; critical effects still ask", () => {
+  assert.equal(needsApproval("skill", { name: "demo" }), false);
+  assert.equal(
+    needsApproval("skill_install", { url: "https://github.com/example/skill" }),
+    false
+  );
+  assert.equal(needsApproval("exec", { cmd: "git push origin main" }), true);
+});
+
 check("a missing cmd fails closed", () => {
   assert.equal(needsApproval("exec", {}), true);
 });

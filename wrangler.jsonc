@@ -12,6 +12,11 @@
     { "binding": "ROUTER", "service": "zay-router" },
     { "binding": "SANDBOX", "service": "zay-sandbox" }
   ],
+  // Workers AI embeddings for semantic memory recall. Unbound in an environment
+  // that forbids it: recall then falls back to keyword + recency scoring.
+  "ai": {
+    "binding": "AI"
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -21,6 +26,14 @@
       {
         "name": "REGISTRY",
         "class_name": "RegistryAgent"
+      },
+      {
+        "name": "AUTOMATION",
+        "class_name": "AutomationAgent"
+      },
+      {
+        "name": "AUTONOMY",
+        "class_name": "AutonomyAgent"
       }
     ]
   },
@@ -42,6 +55,18 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["Researcher"]
+    },
+    // Event triggers (AutomationAgent): a singleton coordinator with its own
+    // SQLite, alarm, and encrypted ingress secrets.
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["AutomationAgent"]
+    },
+    // Durable goals (AutonomyAgent): a singleton coordinator owning goal state,
+    // the planner/verifier alarm, and the attention queue.
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["AutonomyAgent"]
     }
   ],
   // Keep-alive cron: pings RENDER_URL/health every 10 minutes so the free

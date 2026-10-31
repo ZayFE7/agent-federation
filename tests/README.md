@@ -1,11 +1,11 @@
 # tests/
 
-Thirty-six offline, framework-free test files live here, all run by `npm test`. Beside them are the
-runner, one shared fixture, and five live-only scripts that `npm test` never runs.
+Sixty-nine offline, framework-free test files live here, all run by `npm test`. Beside them are the
+runner, one shared fixture, and six live-only scripts that `npm test` never runs.
 
 The count is whatever is on disk, not a number baked into a file: `run-all.mjs` globs
 `tests/*.test.mjs`, so adding a file adds it to the suite with no edit. As written here there are
-36 such files.
+69 such files.
 
 ## How the suite runs
 
@@ -19,8 +19,8 @@ The count is whatever is on disk, not a number baked into a file: `run-all.mjs` 
   import at load, so the tests that import a `.ts` module need nothing else; those modules are kept
   dependency-free by design so they stay loadable this way.
 - The live scripts (`live-matrix.mjs`, `live-stream.mjs`, `live-probe.sh`, `router-probe.mjs`,
-  `capture-ui.mjs`) do not end in `.test.mjs`, so they are outside the glob and `npm test` makes no
-  network call.
+  `capture-ui.mjs`, `live-automations.mjs`) do not end in `.test.mjs`, so they are outside the glob
+  and `npm test` makes no network call.
 
 Run any single file directly with `node tests/<file>.test.mjs`. Every file exits 0 on success and
 prints every failure then exits 1 otherwise.
@@ -35,6 +35,45 @@ Asserts only shell (`exec`) can be flagged risky and that a malformed exec input
 Covers ordinary code staying ungated, critical effects gating, malformed exec input failing closed,
 and `parkedApproval`, the transcript scan a reloaded console uses to re-mount its gate. Cannot reach
 the live approval round trip: that needs a Durable Object and is only exercised live.
+
+### automation-engine.test.mjs
+Runs the real `AutomationEngine` against a real `node:sqlite` store and fake session/fetch ports.
+Covers wrong secrets, duplicate delivery ids, queued to running to done, condition skips, cooldown
+rate limits, watcher seed/change behavior, schedule due advancement, and target-session rejection.
+Cannot reach the AutomationAgent alarm or a live model turn; `live-automations.mjs` owns that.
+
+### automation-match.test.mjs
+Pins the data-only condition matcher: all/any, dotted and indexed paths, each operator, missing-path
+semantics, depth and node caps, and rejection of unknown operators. No code execution.
+
+### automation-routes.test.mjs
+Pins public hook authentication and the bearer-gated management family: accepted, duplicate, invalid,
+oversized, rate-limited, create-once secret, list redaction, reserved-path ordering, control actions,
+and invalid ids.
+
+### automation-security.test.mjs
+Pins 32-byte base64url secrets, hints, constant-time comparisons, GitHub HMAC (including rejected
+SHA1), body caps, URL/SSRF guards, and header redaction.
+
+### automation-schedule.test.mjs
+Pins interval floors, UTC daily rollover, stable JSON, watcher fingerprints, excerpts, and source
+validation.
+
+### automation-store.test.mjs
+Pins the automation tables, unique delivery key, rate counters, watch state, retention pruning, and
+the private columns. It never starts a DO.
+
+### automation-agent.test.mjs
+Source-level guards for the session origin path: automation turns cannot use directives, parked
+approvals do not report completion, and the callback/turnStatus hooks exist. `src/agent.ts` cannot be
+imported offline.
+
+### automation-ui.test.mjs
+Reads the shipped single-file console and pins the Automations nav, Triggers/Scheduled sections,
+create fields for all four sources, the secret-once and rotate flows, event/run timelines, global
+pause, Activity card, attention badge, visibility-gated polling, and the mobile sheet. It extracts the
+one inline script to a temp file and runs `node --check` on it. It does not drive a browser; the live
+UI is a separate manual/Playwright pass.
 
 ### child.test.mjs
 Pins the sub-agent recursion guard from the outside: the child tool list in `src/capabilities.ts`,
@@ -65,6 +104,21 @@ no affected-row count (the platform cursor has none, R37). Proves the fixture, n
 Tests the wire vocabulary in `src/frames.ts`: the tool-to-widget table, the chunk-to-frame mapping,
 the persisted-message mapping (a parked approval and a finished tool result both survive as frames),
 and the one-line SSE encoding. Does not render anything; the console is separate.
+
+### gmail-client.test.mjs
+Pins the Gmail API client and MIME layer: thread search metadata, full thread parsing, text/HTML/attachments, base64url, label operations, trash/delete shapes, text/HTML/attachment MIME build, reply headers, caps, and 401/403/429 error redaction. Fake fetch only.
+
+### gmail-routes.test.mjs
+Pins the Google connection routes: owner bearer for management, public state-protected callback, start URL and redirect URI, account/default/delete forwarding, missing token fields, and redirects that never carry credentials.
+
+### gmail-ui.test.mjs
+Reads the shipped console and pins the Connections page: Gmail accounts, setup card and exact redirect URI, Testing-mode warning, connect/reconnect/default/disconnect, MCP section moved out of Settings, empty/error states, mobile layout, and script syntax.
+
+### google-oauth.test.mjs
+Pins Google auth URL parameters, token exchange and refresh forms, userinfo, revoke, invalid_grant classification, and credential redaction. Fake fetch only.
+
+### google-store.test.mjs
+Pins the Google account and OAuth state tables with `node:sqlite`: single-use state, expiry, upsert and reconnect by Google sub, default promotion, delete promotion, public redaction, and id/email resolution.
 
 ### guardrails.test.mjs
 Unit tests `isRisky` in `src/guardrails.ts`: ordinary sandbox code and build-output deletes are free; outward publish/push, payments, outbound uploads, persistent workspace deletes and VM/disk destruction are critical. Cannot catch a
@@ -125,9 +179,19 @@ Tests `src/directives.ts`: `run:`/`exec:`/`execute:` and `search:` short-circuit
 is required, and an empty argument (`"run:  "`) is refused (P2-14). Cannot prove `src/agent.ts` calls
 `parseDirective`; that call site is a live path.
 
+### pwa-ui.test.mjs
+Static checks on the iPhone-first package: manifest and maskable icons, the iOS meta tags, the shell
+service worker (API excluded, offline fallback), the local chat cache and outbox, reconnect flush,
+standalone safe areas and the install hint. Also parses both scripts.
+
 ### provider.test.mjs
 Asserts the AI SDK provider reaches the router service binding at the absolute URL it was configured
 with, carrying the bearer the SDK set or the router key when it set none. Does not call a real model.
+
+### queue-search-ui.test.mjs
+Static checks on the built console: the queue bar and its per-session storage, the queued-receipt
+branch in `send()`, stop clearing the queue, and the cross-session search input and result renderer.
+Also parses the one inline script, so a malformed build fails here rather than in a browser.
 
 ### registry-input.test.mjs
 Executes `src/registry-input.ts`, the DO's query, segment and body parsing. This is the first offline
@@ -177,6 +241,11 @@ text, because the entry module value-imports `e2b` and cannot load offline.
 Tests `src/session-scope.ts`: the one copy of the session-id shape (R38), the DO's check that a
 session belongs to it, and the single home of `MAIN_DO_NAME`. The last check reads the module's own
 source to pin that it imports nothing, which is what keeps it loadable by `src/routes.ts` offline.
+
+### session-search.test.mjs
+Tests `src/session-search.ts`: the 2..200 query window, snippet trimming around a match, and the
+cross-session merge that attaches registry titles, drops rows for sessions the registry no longer
+lists, dedupes the FTS/display overlap, and applies the cap. No DO and no network.
 
 ### sql-handle.test.mjs
 Tests `src/sql-handle.ts`, the one exec adapter both Durable Objects build `db()` from, against a real
@@ -248,6 +317,11 @@ reach the real `e2b` data plane; the sandbox is an injected port.
 - `live-stream.mjs`: one model turn, and the four numbers that make "streaming works" measurable:
   first-text latency (budget 12 s from submit), frame count, tool starts versus results, and terminal
   frames (exactly one). Passes only when all four hold. Not in the glob.
+- `live-automations.mjs`: creates a real target chat and a webhook automation, posts a delivery,
+  waits for the agent's reply, asserts the duplicate delivery and the bad secret, checks the
+  automation marker in the transcript, pauses the trigger, verifies a paused delivery is skipped, and
+  exercises a valid GitHub HMAC plus a missing signature without spending a second model turn. Cleans
+  up both automations and the session. Requires `BLIP_URL` and the local key, prints no secret.
 - `live-probe.sh`, `router-probe.mjs`: live-only probes. Not in the glob.
 - `capture-ui.mjs`: the visual QA harness. Drives an installed Chrome over CDP at 1440x900,
   834x1112 and 390x844, in both themes, and writes one PNG per console screen. It reads the key from
@@ -266,8 +340,8 @@ reach the real `e2b` data plane; the sandbox is an injected port.
   fails here on purpose until you run `npm --prefix deploy/sandbox-worker install`: that project
   declares `e2b` in its own `package.json`, the clone never installs a subproject's dependencies,
   so `src/index.ts` reports TS2307 on that one import while `auth.ts`, `pool.ts` and
-  `workspace.ts` typecheck clean. `deploy/telegram-bridge` has a tsconfig and typechecks clean, and
-  is not wired into either script because it is a held feature that is never deployed. No script
+  `workspace.ts` typecheck clean. The old `deploy/telegram-bridge` folder was removed on
+  2026-10-25; it was never wired into either script or deployed. No script
   typechecks `tests/**`; these `.mjs` files are only ever exercised by running them.
 - Held feature, recorded so the hunt is not repeated: an earlier revision of this README called
   `DIRECT_RUN_RE` dead code. It was never dead; the `run:`/`search:` short-circuit it backed is live.

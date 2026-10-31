@@ -28,6 +28,12 @@ const ROUTES = [
   "/workspace/manifest",
   "/workspace/archive",
   "/workspace/forget",
+  "/workspace/write",
+  "/workspace/files",
+  "/workspace/read",
+  "/workspace/upload",
+  "/workspace/put",
+  "/workspace/copy",
 ];
 
 function check(name, fn) {
@@ -53,15 +59,29 @@ check("SANDBOX_HOME is the real E2B home", () => {
   assert.equal(SANDBOX_HOME, "/home/user");
 });
 
-check("EXPECTED_TOOLS is the seven wired tools, frozen", () => {
+check("EXPECTED_TOOLS is the twenty-one wired tools, frozen", () => {
   assert.deepEqual([...EXPECTED_TOOLS], [
     "exec",
     "lookup_online",
     "schedule_task",
-    "save_workspace",
     "delegate",
     "mcp_call",
     "skill",
+    "skill_install",
+    "write_file",
+    "automation_create",
+    "automation_status",
+    "automation_control",
+    "gmail",
+    "calendar",
+    "tasks",
+    "youtube_transcript",
+    "generate_image",
+    "generate_speech",
+    "transcribe_media",
+    "goal_create",
+    "goal_status",
+    "goal_control",
   ]);
   assert.ok(Object.isFrozen(EXPECTED_TOOLS), "EXPECTED_TOOLS must be frozen");
 });
@@ -83,7 +103,7 @@ check("sandbox worker never mkdirs /workspace", () => {
 });
 
 check("every /workspace in the sandbox worker is a route name", () => {
-  // The five workspace endpoint paths stay until Task 30 renames them; nothing
+  // The workspace endpoint paths stay until Task 30 renames them; nothing
   // else in this worker may name a directory.
   let withoutRoutes = sandboxSrc;
   for (const route of ROUTES) {

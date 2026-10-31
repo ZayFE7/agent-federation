@@ -164,6 +164,14 @@ function hasControlChar(value: string): boolean {
   return false;
 }
 
+/** Stable prefix for one file's `.blip/versions` backups. */
+export function versionBaseName(path: string): string {
+  return path
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/\//g, "__")
+    .slice(0, 120);
+}
+
 /**
  * POSIX single quotes, with every inner quote closed, escaped and reopened. This
  * is the whole reason a legal filename is safe to pass: inside single quotes the

@@ -17,6 +17,11 @@ export type StreamFrame =
   | { t: "approval"; id: string; toolCallId: string; label: string; cmd: string }
   | { t: "state"; state: string; verb: string }
   | { t: "step"; n: number; max: number }
+  | { t: "timing"; reasoningMs?: number; textMs?: number; toolMs?: number }
+  | {
+      t: "artifacts";
+      files: Array<{ path: string; title: string; bytes: number; created_at: number }>;
+    }
   | { t: "done"; reply: string }
   | { t: "error"; message: string };
 
@@ -32,6 +37,21 @@ export const TOOL_WIDGET: Record<string, { label: string; state: string }> = Obj
   delegate: { label: "Delegate", state: "delegate" },
   mcp_call: { label: "MCP", state: "tools" },
   skill: { label: "Skill", state: "idea" },
+  skill_install: { label: "Install skill", state: "idea" },
+  write_file: { label: "Write file", state: "files" },
+  automation_create: { label: "Automation", state: "calendar" },
+  automation_status: { label: "Automations", state: "calendar" },
+  automation_control: { label: "Automation", state: "calendar" },
+  gmail: { label: "Gmail", state: "mail" },
+  calendar: { label: "Calendar", state: "calendar" },
+  tasks: { label: "Tasks", state: "task" },
+  youtube_transcript: { label: "YouTube", state: "files" },
+  generate_image: { label: "Image", state: "create" },
+  generate_speech: { label: "Speech", state: "message" },
+  transcribe_media: { label: "Transcript", state: "files" },
+  goal_create: { label: "Goal", state: "think" },
+  goal_status: { label: "Goals", state: "think" },
+  goal_control: { label: "Goal", state: "think" },
 });
 
 const FALLBACK_WIDGET = { label: "Tool", state: "code" };

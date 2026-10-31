@@ -108,7 +108,9 @@ function fakeAgentNamespace() {
   const workspaces = [];
   const clears = [];
   const fileDeletes = [];
+  const artifactCalls = [];
   const models = [];
+  const searchCalls = [];
   const stubs = new Map();
   const ns = {
     names,
@@ -122,10 +124,14 @@ function fakeAgentNamespace() {
     workspaces,
     clears,
     fileDeletes,
+    artifactCalls,
     models,
+    searchCalls,
     reply: { reply: "pong" },
     messageRows: [],
+    artifactRows: [],
     pendingReply: { ok: true, pending: null },
+    searchReply: {},
     submitReply: null,
     abortReply: true,
     workspaceReply: { saved: false },
@@ -171,6 +177,10 @@ function fakeAgentNamespace() {
             fileDeletes.push({ name, args, arity: args.length });
             return ns.fileDeleteReply;
           },
+          async artifacts(...args) {
+            artifactCalls.push({ name, args, arity: args.length });
+            return ns.artifactRows;
+          },
           // The model picker's two RPCs. One recorder for both, because the route
           // contract worth pinning is which session id each call carried.
           async setModel(...args) {
@@ -184,6 +194,12 @@ function fakeAgentNamespace() {
           async messages(...args) {
             messageCalls.push({ name, args, arity: args.length });
             return ns.messageRows.map((row) => ({ ...row }));
+          },
+          // Cross-session search: the route asks the session that owns the
+          // transcript and stamps the id itself, so the recording pins both.
+          async searchMessages(...args) {
+            searchCalls.push({ name, args, arity: args.length });
+            return (ns.searchReply?.[name] ?? []).map((row) => ({ ...row }));
           },
           async pendingApproval(...args) {
             approvalCalls.push({ name, args, arity: args.length });
@@ -268,6 +284,18 @@ function fakeEnv({ key = "k", registry, agent, sandbox = fakeSandbox() } = {}) {
       },
       get() {
         return registry;
+      },
+    },
+    AUTONOMY: {
+      idFromName(name) {
+        return { __autonomyName: name, toString: () => `autonomy:${name}` };
+      },
+      get() {
+        return {
+          async blocksDelete() {
+            return false;
+          },
+        };
       },
     },
   };
@@ -411,11 +439,13 @@ check("src/routes.ts is importable offline: no non-type import of ./agent or age
 // exists, so the `X-Blip-Trace` half of the gate has to be read here.
 check("src/routes.ts value-imports exactly the dependency-free allow-list (R75)", () => {
   const ALLOWED = new Set([
+    "./attachments",
     "./auth",
     "./observability",
     "./registry-input",
     "./registry-store",
     "./session-scope",
+    "./session-search",
     "./workspace-keys",
   ]);
   const value = importsOf(ROUTES_SOURCE)
@@ -437,6 +467,18 @@ check("src/session-scope.ts is dependency-free, so routes.ts may value-import it
     0,
     "src/session-scope.ts imports something, so it cannot be a value import in routes.ts"
   );
+});
+
+check("title refinement runs after the turn, not before the first model call", () => {
+  const start = AGENT_SOURCE.match(/private startTitle\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(start, "src/agent.ts declares no startTitle(...)");
+  assert.equal(
+    /fetchRouter|generateText/.test(start),
+    false,
+    "startTitle must only write the provisional name; a model call there competes with the first reply"
+  );
+  assert.match(AGENT_SOURCE, /private refineTitle\(/);
+  assert.match(AGENT_SOURCE, /this\.refineTitle\(stashed\.content/);
 });
 
 check("src/routes.ts addresses DOs through env, never through an imported class", () => {
@@ -796,9 +838,16 @@ check("src/agent.ts keeps memory global from any DO (R45, Step 3b)", () => {
   for (const name of ["memoryRemember", "memoryRecall"]) {
     const rpc = AGENT_SOURCE.match(new RegExp(`\\n {2}async\\s+${name}\\([\\s\\S]*?\\n {2}\\}`))?.[0] ?? "";
     assert.ok(rpc, `src/agent.ts declares no public ${name} RPC`);
-    assert.ok(/this\.db\(\)/.test(rpc), `${name} must run against this DO's own store, as the pre-shard sites did`);
+    assert.ok(
+      /this\.db\(\)|this\.rememberLocal\(|this\.recallMemory\(/.test(rpc),
+      `${name} must run against this DO's own store, as the pre-shard sites did`
+    );
     assert.equal(/private/.test(rpc), false, `${name} is what a session DO calls over a stub, so it cannot be private`);
   }
+  const rememberLocal = AGENT_SOURCE.match(/private\s+rememberLocal\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(/remember\(this\.db\(/.test(rememberLocal), "rememberLocal must insert into this DO's own store");
+  const recallMemory = AGENT_SOURCE.match(/private\s+async\s+recallMemory\([\s\S]*?\n {2}\}/)?.[0] ?? "";
+  assert.ok(/this\.db\(\)/.test(recallMemory), "recallMemory must read this DO's own store");
 });
 
 // ------------------------------------------- turn-end workspace snapshot (P4) ----
@@ -808,8 +857,8 @@ check("a turn that used the sandbox owes exactly one workspace snapshot", () => 
   assert.ok(turnEnd, "src/agent.ts declares no private onHarnessTurnEnd(...) to read");
   assert.match(
     turnEnd,
-    /name === "exec" \|\| name === "save_workspace"/,
-    "the two tools that can write into the sandbox are the two that charge a save"
+    /name === "exec"/,
+    "exec is the tool that can write into the sandbox, so it is what charges a save"
   );
   assert.match(turnEnd, /this\.ctx\.waitUntil\(\s*this\.snapshotWorkspace\(turn\.session\)/);
   assert.equal(
@@ -1131,6 +1180,90 @@ await checkAsync("GET /api/sessions with an empty key is 401", async () => {
   assert.deepEqual(world.registry.calls, []);
 });
 
+// ------------------------------------------------------- search (queue batch) ----
+
+await checkAsync("GET /api/sessions/search without a key is 401 and addresses nothing", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/search?q=hello", "GET", { headers: {} }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 401);
+  assert.deepEqual(world.registry.calls, []);
+  assert.deepEqual(world.fed.names, []);
+});
+
+await checkAsync("GET /api/sessions/search refuses a query under two characters before any DO", async () => {
+  for (const path of ["/api/sessions/search", "/api/sessions/search?q=", "/api/sessions/search?q=a"]) {
+    const world = setup();
+    const res = await handleFetch(req(path), world.env, world.ctx);
+    assert.equal(res.status, 400, `${path} should be rejected`);
+    assert.deepEqual(world.registry.calls, [], `${path} must not list sessions`);
+    assert.deepEqual(world.fed.names, [], `${path} must not address a session`);
+  }
+});
+
+await checkAsync("GET /api/sessions/search asks every listed session and stamps its own id", async () => {
+  const world = setup();
+  world.fed.searchReply = {
+    abc: [{ id: "h1", role: "user", content: "deploy notes for the worker", createdAt: "2026-10-02T10:00:00.000Z" }],
+    main: [{ id: "h2", role: "assistant", content: "the deploy finished", createdAt: "2026-10-01T10:00:00.000Z" }],
+  };
+  const res = await handleFetch(req("/api/sessions/search?q=deploy"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.scanned, 2);
+  assert.deepEqual(
+    body.results.map((row) => [row.sessionId, row.id, row.sessionTitle]),
+    [
+      ["abc", "h1", PLACEHOLDER_TITLE],
+      ["main", "h2", PLACEHOLDER_TITLE],
+    ],
+    "newest hit first, each row carrying the session the route asked"
+  );
+  assert.deepEqual(
+    world.fed.searchCalls.map((call) => [call.name, call.args]),
+    [
+      ["abc", ["abc", "deploy", 6]],
+      ["main", ["main", "deploy", 6]],
+    ],
+    "searchMessages is called with the session id, the query, and the per-session cap"
+  );
+});
+
+await checkAsync("GET /api/sessions/search caps the answer at its limit and keeps only registry rows", async () => {
+  const rows = DEFAULT_ROWS();
+  const world = setup({ rows });
+  world.fed.searchReply = {
+    abc: Array.from({ length: 6 }, (_, i) => ({
+      id: `a${i}`,
+      role: "user",
+      content: `match ${i}`,
+      createdAt: `2026-10-0${i + 1}T10:00:00.000Z`,
+    })),
+    main: Array.from({ length: 6 }, (_, i) => ({
+      id: `m${i}`,
+      role: "assistant",
+      content: `match main ${i}`,
+      createdAt: `2026-09-0${i + 1}T10:00:00.000Z`,
+    })),
+  };
+  const res = await handleFetch(
+    req("/api/sessions/search?q=match&limit=3"),
+    world.env,
+    world.ctx
+  );
+  const body = await res.json();
+  assert.equal(body.results.length, 3);
+  assert.deepEqual(
+    body.results.map((row) => row.id),
+    ["a5", "a4", "a3"],
+    "recency decides across sessions; the per-session order is not preserved wholesale"
+  );
+});
+
 // ---------------------------------------------------- PATCH/GET/DELETE /:id ----
 
 await checkAsync("PATCH /api/sessions/abc renames with the id and the title", async () => {
@@ -1213,6 +1346,20 @@ await checkAsync("GET /api/sessions/abc/messages returns MessageRow[] unmodified
     "tier",
     "tools_json",
   ]);
+});
+
+await checkAsync("GET /api/sessions/abc/artifacts returns the DO's markers", async () => {
+  const world = setup();
+  world.fed.artifactRows = [
+    { id: 1, path: "report.pdf", title: "Report", bytes: 2048, created_at: 1700000000000 },
+  ];
+  const res = await handleFetch(req("/api/sessions/abc/artifacts"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    ok: true,
+    artifacts: world.fed.artifactRows,
+  });
+  assert.deepEqual(world.fed.artifactCalls, [{ name: "abc", args: ["abc"], arity: 1 }]);
 });
 
 await checkAsync("GET /api/sessions/abc/messages clamps ?limit=99999 to MAX_LIMIT", async () => {
@@ -1341,6 +1488,47 @@ await checkAsync("an absent or unknown tier is passed through as undefined, stil
   assert.deepEqual(world.fed.submits[0].args, ["hello", undefined, "abc", false]);
   assert.equal(world.fed.submits[0].args[1], undefined, "no tier means undefined, the same rule src/index.ts:82");
 });
+
+await checkAsync("a valid attachment list reaches submitTurn as a fifth argument", async () => {
+  const world = setup();
+  const attachments = [
+    { name: "notes.txt", path: "uploads/notes-ab12.txt", bytes: 12 },
+  ];
+  const res = await handleFetch(
+    req("/api/sessions/abc/message", "POST", {
+      body: JSON.stringify({ content: "read this", attachments }),
+    }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  const call = world.fed.submits[0];
+  assert.equal(call.arity, 5, "attachments ride as a fifth argument");
+  assert.deepEqual(call.args, ["read this", undefined, "abc", false, attachments]);
+});
+
+await checkAsync("a malformed attachment list is 400 before any submit", async () => {
+  const bad = [
+    [{ name: "x", path: "../etc/passwd", bytes: 1 }],
+    [{ name: "x", path: "uploads/a.txt", bytes: -1 }],
+    [{ name: "x", path: "uploads/a.txt", bytes: 13 * 1024 * 1024 }],
+    new Array(11).fill({ name: "x", path: "uploads/a.txt", bytes: 1 }),
+    "nope",
+  ];
+  for (const attachments of bad) {
+    const world = setup();
+    const res = await handleFetch(
+      req("/api/sessions/abc/message", "POST", {
+        body: JSON.stringify({ content: "read this", attachments }),
+      }),
+      world.env,
+      world.ctx
+    );
+    assert.equal(res.status, 400, JSON.stringify(attachments));
+    assert.deepEqual(world.fed.submits, []);
+  }
+});
+
 
 // R74: this sequence is the gate order made visible, exists then touch, and R73's
 // amendment 5 is the reason the touch still lands in the recorder: the fake pushes
@@ -1584,6 +1772,42 @@ await checkAsync("a receipt carrying code invalid_session is 403 and skips the t
   assert.deepEqual(world.registry.calls, [["exists", "abc"]], "the refusal must not touch the registry");
   assert.deepEqual(world.registry.touchCalls, []);
   assert.deepEqual(world.promised, [], "the 403 branch schedules nothing");
+});
+
+await checkAsync("a queued receipt is relayed with queued:true and still touches the registry", async () => {
+  const world = setup();
+  world.fed.submitReply = { operationId: "op-2", streamId: "s:abc:op-2", queued: true };
+  const res = await handleFetch(
+    req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "and then" }) }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    ok: true,
+    streamId: "s:abc:op-2",
+    operationId: "op-2",
+    queued: true,
+  });
+  await Promise.all(world.promised);
+  assert.deepEqual(world.registry.touchCalls, [["abc", undefined]], "a queued turn is activity too");
+});
+
+await checkAsync("a running turn refuses a directive with 409 and never touches the registry", async () => {
+  const world = setup();
+  world.fed.submitReply = { code: "busy_directive" };
+  const res = await handleFetch(
+    req("/api/sessions/abc/message", "POST", { body: JSON.stringify({ content: "run: ls" }) }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), {
+    ok: false,
+    error: "stop the running turn before sending a command",
+  });
+  assert.deepEqual(world.registry.touchCalls, []);
+  assert.deepEqual(world.promised, []);
 });
 
 // Amendment 4 (R73): `idFromName` cannot report absence, so gate 3 is the only thing
@@ -1899,6 +2123,87 @@ await checkAsync("GET /:id/workspace/archive forwards the bytes and names the fi
     "a download with no filename lands as archive.tar and teaches the user nothing"
   );
   assert.deepEqual(new Uint8Array(await res.arrayBuffer()), tar);
+});
+
+await checkAsync("GET /:id/files proxies the live listing with the sandbox bearer", async () => {
+  const listing = {
+    body: { ok: true, files: [{ path: "notes.txt", bytes: 5, mtime: 1700000000000 }], bytes: 5 },
+  };
+  const sandbox = fakeSandbox({ answers: { "/workspace/files": listing } });
+  const world = setup({ sandbox });
+  const res = await handleFetch(req("/api/sessions/abc/files"), world.env, world.ctx);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), listing.body);
+  const call = world.sandbox.calls.find((c) => c.pathname === "/workspace/files");
+  assert.ok(call, "the live listing must reach the sandbox");
+  assert.equal(call.query.sessionId, "abc");
+  assert.equal(call.headers.authorization, "Bearer sbox");
+});
+
+await checkAsync("GET /:id/files/download guards the path and forwards it", async () => {
+  const file = new Response("hello", {
+    status: 200,
+    headers: { "content-type": "text/plain" },
+  });
+  const sandbox = fakeSandbox({ answers: { "/workspace/read": file } });
+  const world = setup({ sandbox });
+  const res = await handleFetch(
+    req("/api/sessions/abc/files/download?path=" + encodeURIComponent("uploads/x.txt")),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "hello");
+  const call = world.sandbox.calls.find((c) => c.pathname === "/workspace/read");
+  assert.equal(call.query.path, "uploads/x.txt");
+  assert.equal(call.query.sessionId, "abc");
+
+  const evil = setup({ sandbox: fakeSandbox() });
+  const refused = await handleFetch(
+    req("/api/sessions/abc/files/download?path=" + encodeURIComponent("../etc/passwd")),
+    evil.env,
+    evil.ctx
+  );
+  assert.equal(refused.status, 400);
+  assert.equal(evil.sandbox.calls.filter((c) => c.pathname === "/workspace/read").length, 0);
+});
+
+await checkAsync("POST /:id/files uploads under uploads/ and returns the display name", async () => {
+  const sandbox = fakeSandbox({ answers: { "/workspace/upload": { body: { ok: true } } } });
+  const world = setup({ sandbox });
+  const contentBase64 = Buffer.from("hello").toString("base64");
+  const res = await handleFetch(
+    req("/api/sessions/abc/files", "POST", {
+      body: JSON.stringify({ name: "My Report.pdf", contentBase64 }),
+    }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.file.name, "My Report.pdf");
+  assert.match(body.file.path, /^uploads\/my-report-[a-z0-9]+\.pdf$/);
+  assert.equal(body.file.bytes, 5);
+  const call = world.sandbox.calls.find((c) => c.pathname === "/workspace/upload");
+  assert.ok(call, "the upload must reach the sandbox");
+  assert.equal(call.headers.authorization, "Bearer sbox");
+  assert.deepEqual(call.body.files, [{ path: body.file.path, contentBase64 }]);
+});
+
+await checkAsync("a named attachment that is too large is 413 before the sandbox", async () => {
+  const world = setup();
+  const res = await handleFetch(
+    req("/api/sessions/abc/files", "POST", {
+      body: JSON.stringify({
+        name: "big.bin",
+        contentBase64: "A".repeat(Math.ceil((12 * 1024 * 1024 * 4) / 3) + 17),
+      }),
+    }),
+    world.env,
+    world.ctx
+  );
+  assert.equal(res.status, 413);
+  assert.deepEqual(world.sandbox.calls, []);
 });
 
 await checkAsync("an absent SANDBOX binding is 503, never a silent empty list", async () => {

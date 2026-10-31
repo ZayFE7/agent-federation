@@ -2,10 +2,31 @@
 // This module stays type-import-only so a dependency-free consumer (src/routes.ts)
 // can read it, and so an offline test can assert on it as text.
 
-import type { MessageRow } from "./memory";
+import type { MemoryRow, MessageRow } from "./memory";
+import type { MessageAttachment } from "./attachments";
+import type { ArtifactRow } from "./artifact-store";
 import type { SessionRow } from "./registry-store";
 import type { ModelDefault, ModelProvider } from "./model-store";
 import type { ProviderInput } from "./model-input";
+import type {
+  AutomationEventRow,
+  AutomationListFilter,
+  AutomationRow,
+  AutomationRunRow,
+  CreateAutomationInput,
+  UpdateAutomationInput,
+} from "./automation-types";
+import type {
+  GmailAccessResult,
+  GoogleAccountView,
+  GoogleStatusView,
+} from "./google-types";
+import type {
+  GoalAttentionRow,
+  GoalBudget,
+  GoalEventRow,
+  GoalRow,
+} from "./goal-types";
 
 /** One model selection: a provider row plus a model id inside it. */
 export interface ModelChoice {
@@ -51,10 +72,32 @@ export interface McpCatalog {
 export interface SkillView {
   name: string;
   description: string;
+  fileCount?: number;
+  source?: string;
+}
+
+export interface SkillFileView {
+  path: string;
+  bytes: number;
 }
 
 export interface SkillDefinition extends SkillView {
   body: string;
+  files: SkillFileView[];
+  source?: string;
+}
+
+/** One file inside a skill package, base64 for storage and transport. */
+export interface SkillPackageFile extends SkillFileView {
+  contentBase64: string;
+}
+
+export interface SkillPackage {
+  name: string;
+  description: string;
+  body: string;
+  source: string;
+  files: SkillPackageFile[];
 }
 
 /** Router lane. Agent uses primary|cheap; jev is reserved for the router's third lane. */
@@ -107,7 +150,7 @@ export interface AgentReply {
    * `instanceof` on anything the DO threw can never be true in the worker. Only
    * strings and plain objects survive the hop.
    */
-  code?: "invalid_session";
+  code?: "invalid_session" | "goal_active";
 }
 
 /** Inbound body for WebSocket {type:"chat"}. */
@@ -124,11 +167,161 @@ export interface ChatRequest {
 export interface TurnReceipt {
   operationId: string;
   streamId: string;
+  /**
+   * True when another turn was already open in the session and the harness is
+   * holding this one behind it. The console shows the message as queued and
+   * starts watching this stream only when the running turn settles.
+   */
+  queued?: boolean;
 }
 
-/** The DO refused work for a session id it does not own (Task 8's code). */
+/** One full-text hit inside a session transcript. */
+export interface MessageSearchHit {
+  id: string;
+  role: string;
+  content: string;
+  createdAt?: string;
+  sessionId: string;
+  sessionTitle: string;
+}
+
+/** The DO refused a human turn: wrong session, a goal step owns it, or a directive
+ * arrived while another turn was running. */
 export interface TurnRefusal {
-  code: "invalid_session";
+  code: "invalid_session" | "goal_active" | "busy_directive";
+}
+
+/** Who asked for a turn. Only a human may use the deterministic directive path. */
+export type TurnOrigin =
+  | { kind: "human" }
+  | { kind: "automation"; automationId: string; runId: string }
+  | { kind: "goal"; goalId: string; stepId: string; runId: string; leaseToken: string };
+
+export interface StartGoalStepInput {
+  sessionId: string;
+  goalId: string;
+  stepId: string;
+  runId: string;
+  leaseToken: string;
+  prompt: string;
+  checks: unknown[];
+}
+
+export interface GoalStepCompletion {
+  runId: string;
+  leaseToken: string;
+  goalId: string;
+  stepId: string;
+  status: "done" | "error";
+  result: string;
+  evidence: unknown;
+  usage: unknown;
+  tools: unknown[];
+}
+
+/** Reconciliation answer for an automation run whose callback was lost. */
+export interface SessionTurnStatus {
+  status: "running" | "done" | "error" | "unknown";
+  reply?: string;
+  error?: string;
+}
+
+/** What the session reports when an automation-origin turn settles. */
+export interface AutomationRunCompletion {
+  runId: string;
+  automationId: string;
+  sessionId: string;
+  status: "done" | "error";
+  reply?: string;
+  error?: string;
+}
+
+export interface AutomationCreateReply {
+  ok: boolean;
+  automation?: AutomationRow;
+  secret?: string;
+  error?: string;
+}
+
+export interface AutomationIngestReply {
+  status:
+    | "accepted"
+    | "duplicate"
+    | "invalid"
+    | "not_found"
+    | "too_large"
+    | "disabled"
+    | "skipped"
+    | "rate_limited";
+  eventId?: string;
+  reason?: string;
+}
+
+export interface AutomationControlReply {
+  ok: boolean;
+  secret?: string;
+  prompt?: string;
+  error?: string;
+}
+
+/** The RPC surface AutomationAgent exposes to sessions, routes, and tools. */
+export interface AutomationAgentStub {
+  completeRun(input: AutomationRunCompletion): Promise<void>;
+  ingestHook(input: {
+    automationId: string;
+    mode: "generic" | "github";
+    pathSecret?: string;
+    bodyText: string;
+    headers: Record<string, string>;
+    contentType: string | null;
+  }): Promise<AutomationIngestReply>;
+  createAutomation(input: CreateAutomationInput): Promise<AutomationCreateReply>;
+  listAutomations(filter: AutomationListFilter, limit: number): Promise<AutomationRow[]>;
+  getAutomation(id: string): Promise<AutomationRow | null>;
+  updateAutomation(
+    id: string,
+    patch: UpdateAutomationInput
+  ): Promise<{ ok: boolean; automation?: AutomationRow; error?: string }>;
+  automationEvents(id: string, after: number, limit: number): Promise<AutomationEventRow[]>;
+  automationRuns(id: string, limit: number): Promise<AutomationRunRow[]>;
+  controlAutomation(
+    id: string,
+    action: "pause" | "resume" | "rotate_secret" | "retry_event" | "preview" | "delete",
+    note?: string
+  ): Promise<AutomationControlReply>;
+  setGlobalPause(paused: boolean): Promise<void>;
+  globalPaused(): Promise<boolean>;
+  automationAttention(limit: number): Promise<AutomationEventRow[]>;
+}
+
+/** The RPC surface the goal coordinator exposes to sessions, routes, and tools. */
+export interface AutonomyAgentStub {
+  createGoal(input: {
+    title: string;
+    brief: string;
+    success_criteria: string;
+    origin_session_id?: string | null;
+    budget?: Partial<GoalBudget>;
+  }): Promise<{ ok: boolean; goal?: GoalRow; error?: string }>;
+  completeGoalStep(input: GoalStepCompletion): Promise<void>;
+  goalApprovalPending(input: {
+    runId: string;
+    goalId: string;
+    stepId: string;
+  }): Promise<void>;
+  getGoal(id: string): Promise<GoalRow | null>;
+  listGoals(statuses?: string[], limit?: number): Promise<GoalRow[]>;
+  goalEvents(id: string, after: number | null, limit?: number): Promise<GoalEventRow[]>;
+  controlGoal(
+    id: string,
+    action: "pause" | "resume" | "cancel" | "retry" | "instruct" | "budget",
+    note?: string
+  ): Promise<{ ok: boolean; error?: string }>;
+  goalAttention(limit?: number): Promise<GoalAttentionRow[]>;
+  readGoalAttention(id: number): Promise<boolean>;
+  setGlobalPause(paused: boolean): Promise<void>;
+  globalPaused(): Promise<boolean>;
+  blocksDelete(sessionId: string): Promise<boolean>;
 }
 
 /** The parked approval as the console sees it: enough to re-mount its gate. */
@@ -178,12 +371,39 @@ export interface AgentStub {
     content: string,
     tier: ChatTier | undefined,
     sessionId: string,
-    trace: boolean
+    trace: boolean,
+    attachments?: MessageAttachment[],
+    origin?: TurnOrigin
   ): Promise<TurnReceipt | TurnRefusal>;
   /** Stop one operation, or everything open in a session; false when nothing matched. */
   abortTurn(sessionId: string, operationId?: string): Promise<boolean>;
+  /** Terminal-state reconciliation for a background turn whose callback was lost. */
+  turnStatus(sessionId: string, streamId: string): Promise<SessionTurnStatus>;
+  /** Start one goal step in this dedicated session. */
+  startGoalStep(input: StartGoalStepInput): Promise<{ ok: boolean; error?: string }>;
+  /** Abort the active goal run and report whether a side effect had started. */
+  abortGoalRun(sessionId: string, runId: string): Promise<{ aborted: boolean; sideEffects: boolean }>;
+  /** True while this session is owned by a running goal step. */
+  goalActive(sessionId: string): Promise<boolean>;
   chat(content: string, tier?: ChatTier, sessionId?: string): Promise<AgentReply>;
   messages(limit?: number): Promise<MessageRow[]>;
+  /** Full-text search over this session's transcript, newest-first per session. */
+  searchMessages(
+    sessionId: string,
+    query: string,
+    limit?: number
+  ): Promise<Array<{
+    id: string;
+    role: string;
+    content: string;
+    createdAt?: string;
+    sessionId?: string;
+  }>>;
+  /** Global memory, hybrid-ranked; main owns the store. */
+  memoryRecall(query: string, limit: number): Promise<MemoryRow[]>;
+  memoryStatus(): Promise<{ semantic: boolean; memories: number; vectors: number }>;
+  /** Files the agent explicitly shared, newest first. */
+  artifacts(sessionId: string): Promise<ArtifactRow[]>;
   jobList(): Promise<unknown[]>;
   approveToolCall(
     sessionId: string,
@@ -215,6 +435,28 @@ export interface AgentStub {
   clearWorkspace(sessionId: string): Promise<void>;
   /** Task 30: remove one file from a live workspace and re-snapshot it. */
   deleteWorkspaceFile(sessionId: string, path: string): Promise<WorkspaceDeleteResult>;
+  /** Goal creation: force a snapshot of the origin session. */
+  saveWorkspaceForGoal(sessionId: string): Promise<{ ok: boolean; output: string }>;
+  /** Goal creation: seed the new goal session's workspace pointer. */
+  adoptWorkspace(
+    sessionId: string,
+    row: { key: string; bytes: number; files: number; sha256: string; updated_at: number }
+  ): Promise<void>;
+  /** Previous write_file backups for one path. */
+  listFileVersions(
+    sessionId: string,
+    path: string
+  ): Promise<{
+    ok: boolean;
+    versions: Array<{ path: string; bytes: number; mtime: number }>;
+    error?: string;
+  }>;
+  /** Restore one previous version, backing up the current bytes. */
+  restoreFileVersion(
+    sessionId: string,
+    path: string,
+    version: string
+  ): Promise<{ ok: boolean; output: string }>;
   /** Console model picker: false means the session id does not belong to this DO. */
   setModel(sessionId: string, model: string | null, provider?: string): Promise<boolean>;
   /** Console model picker: the override for this session plus the pinned fallback. */
@@ -234,7 +476,14 @@ export interface AgentStub {
   mcpCall(server: string, tool: string, input: Record<string, unknown>): Promise<string>;
   skillCatalog(): Promise<SkillView[]>;
   skillGet(name: string): Promise<SkillDefinition | null>;
-  skillSave(name: string, description: string, body: string): Promise<boolean>;
+  skillFiles(name: string): Promise<SkillPackageFile[] | null>;
+  skillSave(
+    name: string,
+    description: string,
+    body: string,
+    files: SkillPackageFile[],
+    source: string
+  ): Promise<boolean>;
   skillDelete(name: string): Promise<boolean>;
 }
 
@@ -294,8 +543,28 @@ export interface RegistryStub {
   setModelDefault(provider: string, model: string): Promise<boolean>;
   skillCatalog(): Promise<SkillView[]>;
   skillGet(name: string): Promise<SkillDefinition | null>;
-  skillSave(name: string, description: string, body: string): Promise<boolean>;
+  skillFiles(name: string): Promise<SkillPackageFile[] | null>;
+  skillSave(
+    name: string,
+    description: string,
+    body: string,
+    files: SkillPackageFile[],
+    source: string
+  ): Promise<boolean>;
   skillDelete(name: string): Promise<boolean>;
+  googleStatus(origin: string): Promise<GoogleStatusView>;
+  googleBegin(
+    origin: string,
+    loginHint?: string
+  ): Promise<{ ok: boolean; authUrl?: string; redirectUri: string; error?: string }>;
+  googleComplete(
+    code: string,
+    state: string
+  ): Promise<{ ok: boolean; account?: GoogleAccountView; error?: string }>;
+  googleAccounts(): Promise<GoogleAccountView[]>;
+  googleSetDefault(id: string): Promise<boolean>;
+  googleDelete(id: string): Promise<boolean>;
+  gmailAccess(account: string): Promise<GmailAccessResult>;
 }
 
 /**
@@ -305,6 +574,11 @@ export interface RegistryStub {
  */
 export const DEFAULT_MODEL_PRIMARY = "antigravity/gemini-3.8-flash-tiered";
 export const DEFAULT_MODEL_CHEAP = "antigravity/gemini-3.8-flash-tiered";
+
+/** The slice of the Workers AI binding this worker uses. */
+export interface AiBinding {
+  run(model: string, input: unknown): Promise<unknown>;
+}
 
 export interface Env {
   /** HTTPS URL of the Pipedream router workflow. */
@@ -338,4 +612,20 @@ export interface Env {
    * idFromName("registry").
    */
   REGISTRY: DurableObjectNamespace;
+  /** Durable Object binding for AutomationAgent (wrangler name: AUTOMATION). */
+  AUTOMATION: DurableObjectNamespace;
+  /** Durable Object binding for the goal coordinator (wrangler name: AUTONOMY). */
+  AUTONOMY: DurableObjectNamespace;
+  /** Workers AI embeddings for semantic memory recall (wrangler binding: AI). */
+  AI?: AiBinding;
+  /** OpenAI-compatible media router for image, speech, and transcription. */
+  MEDIA_API_BASE_URL?: string;
+  MEDIA_API_KEY?: string;
+  /** Composio project key for managed OAuth Gmail and other connectors. */
+  COMPOSIO_API_KEY?: string;
+  /** Google OAuth web client. Unset means the Connections page shows setup. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /** Optional fixed redirect URI; otherwise derived from the request origin. */
+  GOOGLE_REDIRECT_URI?: string;
 }

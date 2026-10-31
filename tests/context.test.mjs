@@ -33,11 +33,16 @@ check("wired tools are described; unwired features are absent", () => {
 
 check("adding delegate adds the multi-agent line and changes nothing else", () => {
   const withDelegate = capabilitiesText(["exec", "lookup_online", "delegate"]);
-  const added = withDelegate.split("\n").filter((line) => !wired.includes(line));
+  const base = new Set(wired.split("\n"));
+  const added = withDelegate.split("\n").filter((line) => !base.has(line));
   assert.equal(added.length, 1);
   assert.match(added[0], /Sub-agents/);
   assert.match(added[0], /delegate tool/);
-  assert.equal(withDelegate.startsWith(wired), true, "existing lines must be unchanged");
+  // New always-on rows can sit after Sub-agents; what matters is that every
+  // wired line survives and only the delegate line is new.
+  for (const line of base) {
+    assert.equal(withDelegate.includes(line), true, `a wired line disappeared: ${line}`);
+  }
 });
 
 check("the sandbox home is named in the shell claim", () => {

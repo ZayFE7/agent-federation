@@ -1,6 +1,17 @@
 import { FederationAgent } from "./agent";
 import { RegistryAgent } from "./registry";
 import { Researcher } from "./child";
+import { AutomationAgent } from "./automation-agent";
+import { handleAutomations, handleAutomationHooks } from "./automation-routes";
+import { AutonomyAgent } from "./goal-agent";
+import { handleGoals } from "./goal-routes";
+import { handleGoogleConnections } from "./gmail-routes";
+import { handleComposioConnections } from "./composio-routes";
+import {
+  generateSpeech,
+  mediaConfigured,
+  transcribeMedia,
+} from "./media-client";
 import { fetchRouter } from "./router";
 import { authed, safeEq, vaultAuthed } from "./auth";
 import { MAIN_DO_NAME, isSessionId } from "./session-scope";
@@ -17,7 +28,7 @@ import type { AgentStub, Env } from "./types";
 // Researcher is exported for the same reason and under its own class name: the
 // SDK resolves a dynamic-agent facet through `ctx.exports[className]`, so a
 // re-export under an alias would not be found at runtime.
-export { FederationAgent, RegistryAgent, Researcher };
+export { FederationAgent, RegistryAgent, Researcher, AutomationAgent, AutonomyAgent };
 
 function mainAgentId(env: Env): DurableObjectId {
   return env.FEDERATION_AGENT.idFromName(MAIN_DO_NAME);
@@ -58,6 +69,28 @@ export default {
       const stub = env.FEDERATION_AGENT.get(mainAgentId(env));
       return stub.fetch(request);
     }
+
+    // Automation hooks are public by design: the per-automation secret or the
+    // GitHub HMAC is the credential, not the owner's bearer key.
+    const hookResponse = await handleAutomationHooks(request, env);
+    if (hookResponse) return hookResponse;
+
+    // Automation management is bearer-authenticated inside its own handler.
+    const automationResponse = await handleAutomations(request, env);
+    if (automationResponse) return automationResponse;
+
+    // Durable goal management, authenticated inside its own handler.
+    const goalResponse = await handleGoals(request, env);
+    if (goalResponse) return goalResponse;
+
+    // Google account OAuth and the Connections account list. The callback is
+    // public but state-protected; every other route checks the bearer itself.
+    const googleResponse = await handleGoogleConnections(request, env);
+    if (googleResponse) return googleResponse;
+
+    // Calendar, Tasks, and future Composio-managed toolkit connections.
+    const composioResponse = await handleComposioConnections(request, env);
+    if (composioResponse) return composioResponse;
 
     // MCP server management and the OAuth callback. The callback is allowed
     // without the bearer because the provider redirect carries its own state.
@@ -108,6 +141,107 @@ export default {
       }
       const list = await agentStub(env).jobList();
       return Response.json({ ok: true, tasks: list });
+    }
+
+    // Read-aloud audio for the console. The media key never reaches the browser.
+    if (url.pathname === "/api/voice/speak" && request.method === "POST") {
+      if (!authed(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      if (!mediaConfigured(env)) {
+        return Response.json({ error: "media endpoint not configured" }, { status: 503 });
+      }
+      let body: { text?: unknown; voice?: unknown };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return Response.json({ error: "invalid JSON body" }, { status: 400 });
+      }
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      if (!text) return Response.json({ error: "text required" }, { status: 400 });
+      if (text.length > 4000) {
+        return Response.json({ error: "text must be under 4000 characters" }, { status: 400 });
+      }
+      const voice = typeof body.voice === "string" ? body.voice : undefined;
+      try {
+        const audio = await generateSpeech(env, { text, voice: voice as never });
+        return new Response(audio.bytes as unknown as BodyInit, {
+          headers: {
+            "content-type": audio.mime,
+            "cache-control": "no-store",
+            "content-disposition": `inline; filename="speech.${audio.ext}"`,
+          },
+        });
+      } catch (err) {
+        return Response.json({ error: String(err).slice(0, 500) }, { status: 502 });
+      }
+    }
+
+    // Voice input transcription. No storage: the audio is forwarded and dropped.
+    if (url.pathname === "/api/voice/transcribe" && request.method === "POST") {
+      if (!authed(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      if (!mediaConfigured(env)) {
+        return Response.json({ error: "media endpoint not configured" }, { status: 503 });
+      }
+      try {
+        const form = await request.formData();
+        const file = form.get("file");
+        if (!(file instanceof File)) {
+          return Response.json({ error: "file required" }, { status: 400 });
+        }
+        if (file.size === 0) {
+          return Response.json({ error: "empty audio" }, { status: 400 });
+        }
+        if (file.size > 24 * 1024 * 1024) {
+          return Response.json({ error: "audio must be under 24 MB" }, { status: 413 });
+        }
+        const languageValue = form.get("language");
+        const language =
+          typeof languageValue === "string" && languageValue.trim()
+            ? languageValue.trim()
+            : undefined;
+        const result = await transcribeMedia(env, {
+          bytes: new Uint8Array(await file.arrayBuffer()),
+          filename: file.name || "audio",
+          mime: file.type || "application/octet-stream",
+          language,
+        });
+        return Response.json({ ok: true, ...result });
+      } catch (err) {
+        return Response.json({ error: String(err).slice(0, 500) }, { status: 502 });
+      }
+    }
+
+    // Global memory search. Main owns the store; a query is ranked by embedding
+    // similarity, word overlap, recency, and importance.
+    if (url.pathname === "/api/memory" && request.method === "GET") {
+      if (!authed(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const query = (url.searchParams.get("q") ?? "").slice(0, 500);
+      const limit = Math.min(Math.max(1, Number(url.searchParams.get("limit")) || 20), 50);
+      const stub = agentStub(env);
+      try {
+        const [memories, status] = await Promise.all([
+          stub.memoryRecall(query, limit),
+          stub.memoryStatus(),
+        ]);
+        return Response.json({
+          ok: true,
+          memories,
+          semantic: status.semantic,
+          memoryCount: status.memories,
+          vectors: status.vectors,
+        });
+      } catch (err) {
+        console.error(`memory route failed: ${String(err).slice(0, 400)}`);
+        return Response.json(
+          { ok: false, error: String(err).slice(0, 500) },
+          { status: 500 }
+        );
+      }
     }
 
     if (url.pathname === "/api/approve" && request.method === "POST") {

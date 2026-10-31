@@ -49,14 +49,32 @@ function recordingDeps() {
       ],
       schedule: async () => "scheduled for later",
       snapshot: async () => ({ ok: true, output: "saved" }),
+      writeFile: async () => "Wrote a file.",
       progress: (toolCallId, p) => calls.push({ toolCallId, ...p }),
     },
   };
 }
 
-// `delegate` is only built for a caller that can actually spawn, so the wired-set
-// check has to hand buildTools a runner.
-const tools = buildTools({ ...deps, delegate: async () => "sub-agent report" });
+// `delegate` is only built for a caller that can actually spawn, and the
+// automation tools are only built when the DO supplies their deps. The wired-set
+// check hands buildTools both sets.
+const tools = buildTools({
+  ...deps,
+  delegate: async () => "sub-agent report",
+  automationCreate: async () => "automation created",
+  automationStatus: async () => "automation status",
+  automationControl: async () => "automation controlled",
+  gmail: async () => "gmail result",
+  goalCreate: async () => "goal created",
+  goalStatus: async () => "goal status",
+  goalControl: async () => "goal controlled",
+  generateImage: async () => "image generated",
+  generateSpeech: async () => "speech generated",
+  transcribeMedia: async () => "transcript ready",
+  calendar: async () => "calendar result",
+  tasks: async () => "tasks result",
+  youtubeTranscript: async () => "youtube transcript",
+});
 
 await check("buildTools wires exactly EXPECTED_TOOLS, in order", () => {
   assert.deepEqual(Object.keys(tools), [...EXPECTED_TOOLS]);
@@ -64,6 +82,73 @@ await check("buildTools wires exactly EXPECTED_TOOLS, in order", () => {
 
 await check("EXPECTED_TOOLS is frozen", () => {
   assert.ok(Object.isFrozen(EXPECTED_TOOLS), "EXPECTED_TOOLS must be frozen");
+});
+
+await check("gmail tool is wired with its full action schema", () => {
+  assert.ok("gmail" in tools, "gmail tool is missing");
+  assert.match(tools.gmail.description, /approval/i);
+  assert.equal(
+    tools.gmail.inputSchema.safeParse({ action: "send", account: "a@b.c", to: "x@y.z" }).success,
+    true
+  );
+  assert.equal(tools.gmail.inputSchema.safeParse({ action: "nope" }).success, false);
+});
+
+await check("skill returns the instructions and places package files in the sandbox", async () => {
+  const placed = [];
+  const t = buildTools({
+    ...deps,
+    skill: async () => ({
+      name: "demo",
+      description: "Demo package",
+      body: "Run scripts/run.py.",
+      files: [
+        { path: "SKILL.md", bytes: 10 },
+        { path: "scripts/run.py", bytes: 12 },
+      ],
+    }),
+    materializeSkill: async (name) => {
+      placed.push(name);
+      return "Skill files (2) are in /home/user/.blip/skills/demo. Run its scripts from there with exec.";
+    },
+  }).skill;
+  const out = await t.execute({ name: "demo" }, { toolCallId: "c-skill" });
+  assert.match(out, /Run scripts\/run\.py/);
+  assert.match(out, /scripts\/run\.py \(12 B\)/);
+  assert.match(out, /\.blip\/skills\/demo/);
+  assert.deepEqual(placed, ["demo"]);
+});
+
+await check("a sandbox write failure still returns the skill instructions", async () => {
+  const t = buildTools({
+    ...deps,
+    skill: async () => ({
+      name: "demo",
+      description: "Demo package",
+      body: "Follow these steps.",
+      files: [{ path: "SKILL.md", bytes: 10 }],
+    }),
+    materializeSkill: async () => {
+      throw new Error("sandbox offline");
+    },
+  }).skill;
+  const out = await t.execute({ name: "demo" }, { toolCallId: "c-skill" });
+  assert.match(out, /Follow these steps/);
+  assert.match(out, /could not be placed in the sandbox/);
+});
+
+await check("write_file reports writing and settles at 1", async () => {
+  const calls = [];
+  const t = buildTools({
+    ...deps,
+    writeFile: async (path, content, append) => {
+      calls.push([path, content, append]);
+      return "Wrote notes.md (5 bytes).";
+    },
+  }).write_file;
+  const out = await t.execute({ path: "notes.md", content: "hello" }, { toolCallId: "c-write" });
+  assert.match(out, /Wrote notes\.md/);
+  assert.deepEqual(calls, [["notes.md", "hello", false]]);
 });
 
 await check("exec does not opt into rerun (it writes)", () => {
@@ -129,21 +214,13 @@ await check("schedule_task reports the job title while scheduling and settles at
   assert.equal(fake.calls.at(-1).fraction, 1);
 });
 
-await check("save_workspace reports snapshotting and settles at 1", async () => {
-  const fake = recordingDeps();
-  await buildTools(fake.deps).save_workspace.execute({}, { toolCallId: "c-snap" });
-  assert.equal(fake.calls[0].phase, "snapshotting");
-  assert.equal(fake.calls[0].fraction, null);
-  assert.equal(fake.calls.at(-1).fraction, 1);
-});
-
 await check("every tool's final progress is fraction 1, and phases use the fixed vocabulary", async () => {
-  const allowed = new Set(["searching", "running", "snapshotting", "scheduling", "restoring", "delegating"]);
+  const allowed = new Set(["searching", "running", "snapshotting", "scheduling", "restoring", "delegating", "writing"]);
   const runs = [
     ["exec", { cmd: "pwd" }],
     ["lookup_online", { query: "docs" }],
     ["schedule_task", { title: "j", instructions: "i" }],
-    ["save_workspace", {}],
+    ["write_file", { path: "notes.md", content: "hello" }],
   ];
   for (const [name, input] of runs) {
     const fake = recordingDeps();
@@ -255,9 +332,10 @@ await check("no runner means no delegate tool, not a tool that always fails", ()
     "exec",
     "lookup_online",
     "schedule_task",
-    "save_workspace",
     "mcp_call",
     "skill",
+    "skill_install",
+    "write_file",
   ]);
 });
 

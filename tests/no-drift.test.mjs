@@ -114,32 +114,8 @@ await check("the agent restates no capability prose", () => {
   assert.equal(answer.includes("\u2014"), false, "em dash in the generated capability answer");
 });
 
-// Task 29 makes snapshotting automatic on turn end and pins the ceiling; the
-// description the model reads has to say both or it will call a tool for a reason
-// that no longer exists and stay silent about the limit that does.
-await check("save_workspace describes the real limit and the automatic path", () => {
-  const deps = {
-    exec: async () => ({ ok: true, exitCode: 0, stdout: "", stderr: "" }),
-    snapshot: async () => ({ ok: true, output: "" }),
-    search: async () => ({ ok: true, output: "" }),
-    schedule: async () => ({ ok: true, output: "" }),
-    onEvent: () => {},
-  };
-  const desc = buildTools(deps).save_workspace.description;
-  assert.ok(typeof desc === "string" && desc.length > 40, "save_workspace has no usable description");
-  assert.equal(
-    desc.includes(formatLimit(SNAPSHOT_LIMIT_BYTES)),
-    true,
-    `save_workspace description does not name the ${formatLimit(SNAPSHOT_LIMIT_BYTES)} limit`
-  );
-  assert.equal(/automatic/i.test(desc), true, "save_workspace description does not say snapshotting is automatic");
-  assert.equal(
-    /nothing is snapshotted automatically/i.test(desc),
-    false,
-    "save_workspace description still says snapshotting never happens by itself"
-  );
-  assert.equal(desc.includes("\u2014"), false, "save_workspace description contains an em dash");
-});
+// Task 29 makes saving automatic on turn end; the manual snapshot tool is gone,
+// so there is no description left to drift. The live Files tab reads the tree.
 
 if (failures.length > 0) {
   for (const f of failures) console.log(`FAIL ${f}`);

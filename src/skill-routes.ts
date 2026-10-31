@@ -2,7 +2,9 @@
 
 import { authed } from "./auth.ts";
 import { parseSkill } from "./skill-parser.ts";
-import type { Env, RegistryStub } from "./types";
+import { decodeBase64, fetchSkillPackages, packagesFromZip } from "./skill-import.ts";
+import { zipSync } from "fflate";
+import type { Env, RegistryStub, SkillPackage } from "./types";
 
 const PREFIX = "/api/skills";
 
@@ -46,10 +48,94 @@ export async function handleSkills(
     const saved = await registry.skillSave(
       parsed.skill.name,
       parsed.skill.description,
-      parsed.skill.body
+      parsed.skill.body,
+      [],
+      "manual"
     );
     if (!saved) return fail(409, "the skill library is full or the name is taken");
     return json({ ok: true, skill: parsed.skill });
+  }
+
+  if (parts.length === 1 && parts[0] === "import" && request.method === "POST") {
+    let body: { url?: unknown; archiveBase64?: unknown; path?: unknown };
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return fail(400, "invalid JSON body");
+    }
+    const path = typeof body.path === "string" ? body.path : "";
+    let packages: SkillPackage[];
+    let skipped: Array<{ path: string; reason: string }> = [];
+    let source = "manual";
+    if (typeof body.url === "string" && body.url.trim()) {
+      source = body.url.trim();
+      const fetched = await fetchSkillPackages(source, path);
+      if (!fetched.ok) return fail(400, fetched.error);
+      packages = fetched.packages;
+      skipped = fetched.skipped;
+    } else if (typeof body.archiveBase64 === "string" && body.archiveBase64) {
+      // 12 MB of zip is about 16.8 MB as base64; the headroom covers the JSON
+      // envelope while the importer still enforces the real archive cap.
+      if (body.archiveBase64.length > 20 * 1024 * 1024) {
+        return fail(413, "the archive is too large");
+      }
+      source = "upload";
+      const unpacked = packagesFromZip(decodeBase64(body.archiveBase64), "upload", path);
+      if (!unpacked.ok) return fail(400, unpacked.error);
+      packages = unpacked.packages;
+      skipped = unpacked.skipped;
+    } else {
+      return fail(400, "url or archiveBase64 required");
+    }
+    const installed = [];
+    for (const skill of packages) {
+      const saved = await registry.skillSave(
+        skill.name,
+        skill.description,
+        skill.body,
+        skill.files,
+        skill.source
+      );
+      if (!saved) {
+        return fail(
+          409,
+          `could not save ${skill.name}; the library may be full or a file exceeds the size limit`
+        );
+      }
+      installed.push({
+        name: skill.name,
+        description: skill.description,
+        files: skill.files.length,
+        bytes: skill.files.reduce((sum, file) => sum + file.bytes, 0),
+        source: skill.source,
+      });
+    }
+    return json({ ok: true, skills: installed, packages: packages.length, skipped });
+  }
+
+  if (parts.length === 2 && parts[1] === "archive" && request.method === "GET") {
+    let name: string;
+    try {
+      name = decodeURIComponent(parts[0]);
+    } catch {
+      return fail(404, "not found");
+    }
+    if (!/^[a-z0-9][a-z0-9_-]{0,40}$/.test(name)) return fail(404, "not found");
+    const files = await registry.skillFiles(name);
+    if (!files) return fail(404, "not found");
+    const zipEntries: Record<string, Uint8Array> = {};
+    for (const file of files) {
+      zipEntries[file.path] = decodeBase64(file.contentBase64);
+    }
+    const zipped = zipSync(zipEntries, { level: 6 });
+    return new Response(zipped, {
+      status: 200,
+      headers: {
+        "content-type": "application/zip",
+        "content-disposition": `attachment; filename="${name}.zip"`,
+        "cache-control": "no-store",
+      },
+    });
   }
 
   if (parts.length === 1) {

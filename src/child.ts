@@ -273,11 +273,6 @@ export class Researcher extends Agent<Env> {
           "a sub-agent cannot schedule jobs. Report what should be scheduled and let the main agent schedule it."
         );
       },
-      snapshot: () => {
-        throw new Error(
-          "a sub-agent does not snapshot workspaces; the parent session's turn end is what saves its files."
-        );
-      },
     };
   }
 }

@@ -38,13 +38,16 @@ export interface HarnessConfigDeps {
    */
   system?: string;
   /**
-   * Override the approval gate. The main agent leaves this unset and a held call
-   * reaches the console's approve card; a child has no reader that can answer one
-   * (the approve RPC is addressed to a session DO, not a facet), so it passes a
-   * function that never holds and blocks the risky call in its own tool instead.
-   * Parking a call nobody can answer is how a sub-agent hangs.
+   * Override the approval gate. The main agent supplies one that also stops a
+   * second gated call in the same step from parking beside the first; a child
+   * has no reader that can answer one, so it passes a function that never holds
+   * and blocks the risky call in its own tool instead.
    */
-  approve?: (toolName: string, input: unknown) => boolean;
+  approve?: (
+    toolName: string,
+    input: unknown,
+    context: { session: string; toolCallId: string }
+  ) => boolean;
 }
 
 /**
@@ -97,8 +100,10 @@ export function harnessConfig(
     system: () => deps.system ?? DEFAULT_PERSONA,
     tools: ({ session }) => toolsFor(session),
     maxSteps: deps.maxSteps,
-    toolApproval: ({ toolName, input }) =>
-      deps.approve ? deps.approve(toolName, input) : needsApproval(toolName, input),
+    toolApproval: ({ toolName, input, session, toolCallId }) =>
+      deps.approve
+        ? deps.approve(toolName, input, { session, toolCallId })
+        : needsApproval(toolName, input),
     recovery: { ...RECOVERY },
     configureSession: (session, id) => {
       session

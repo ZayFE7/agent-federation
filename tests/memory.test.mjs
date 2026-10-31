@@ -88,6 +88,20 @@ check(
   persistedRows[0]?.tools_json === persistedTools,
   `got ${JSON.stringify(persistedRows[0]?.tools_json)}`
 );
+M.logMessage(sql, "assistant", "Files ready", "primary", null, null, "turn-art");
+M.setLastAssistantArtifacts(
+  sql,
+  JSON.stringify([{ path: "demo.html", title: "Demo" }]),
+  "turn-art"
+);
+check(
+  "the turn-end artifact list lands on that turn's assistant row",
+  JSON.parse(M.recentMessages(sql, 1)[0]?.artifacts_json || "[]")[0]?.path === "demo.html"
+);
+check(
+  "an unknown turn id is reported as not written yet",
+  M.setLastAssistantArtifacts(sql, "[]", "turn-missing") === null
+);
 
 // Seed a legacy backlog the way the OLD behavior would have left it.
 sql.exec(
@@ -113,6 +127,27 @@ check(
   JSON.stringify(afterPrune)
 );
 check("pending/running survive prune", true); // none pending seeded yet
+
+// ---- memory noise pruning ----
+M.remember(sql, "tool", "approval granted for call_abc", 3);
+M.remember(sql, "exchange", "User: keep this\nAgent: kept", 2);
+const approvalId = sql.exec(
+  "SELECT id FROM memories WHERE content LIKE 'approval granted%'"
+).results[0].id;
+M.saveMemoryVector(sql, approvalId, "test-model", [1, 1]);
+M.ensureSchema(sql);
+check(
+  "ensureSchema prunes approval bookkeeping from memory",
+  sql.exec("SELECT COUNT(*) AS n FROM memories WHERE content LIKE 'approval %'").results[0].n === 0
+);
+check(
+  "the prune also removes orphan vectors",
+  sql.exec("SELECT COUNT(*) AS n FROM memory_vectors WHERE memory_id = ?", approvalId).results[0].n === 0
+);
+check(
+  "the prune does not touch a real exchange",
+  sql.exec("SELECT COUNT(*) AS n FROM memories WHERE content LIKE 'User: keep this%'").results[0].n === 1
+);
 
 // ---- text recall (#26) ----
 const t0 = Date.now();
@@ -150,6 +185,46 @@ sql.exec("DELETE FROM tasks WHERE id = ?", oneoffId);
 const remaining = sql.exec("SELECT title,status FROM tasks ORDER BY title").results;
 check("served one-off is gone from tasks table", !remaining.some((r) => r.title === "reminder"), JSON.stringify(remaining));
 check("daily remains pending (re-armed by tick, not deleted here)", remaining.some((r) => r.title === "daily standup" && r.status === "pending"), JSON.stringify(remaining));
+
+// ---- hybrid semantic recall ----
+check("cosine similarity is 1 for identical vectors", Math.abs(M.cosineSimilarity([1, 2, 3], [1, 2, 3]) - 1) < 1e-9);
+check("cosine similarity is 0 for orthogonal vectors", M.cosineSimilarity([1, 0], [0, 1]) === 0);
+check("cosine similarity rejects dimension mismatch", M.cosineSimilarity([1, 2], [1]) === 0);
+check("memory tokens drop stopwords and one-letter noise", !M.memoryTokens("the a I cloudflare worker").includes("the") && M.memoryTokens("the a I cloudflare worker").includes("cloudflare"));
+check("parseMemoryVector rejects malformed json", M.parseMemoryVector("{nope") === null);
+check("parseMemoryVector rejects non-numeric entries", M.parseMemoryVector('["a",1]') === null);
+
+const idA = M.remember(sql, "project", "deploy the worker to Cloudflare", 3);
+const idB = M.remember(sql, "preference", "favorite tea is mint", 1);
+check("remember returns the inserted id", Number.isInteger(idA) && idA > 0 && idB > idA, `${idA}, ${idB}`);
+M.saveMemoryVector(sql, idA, "test-model", [1, 0, 0]);
+M.saveMemoryVector(sql, idB, "test-model", [0, 1, 0]);
+check("saveMemoryVector upserts one row per memory", M.memoryVectors(sql).length >= 2);
+M.saveMemoryVector(sql, idA, "test-model", [1, 0, 0]);
+check("saveMemoryVector replaces an existing vector", M.memoryVectors(sql).filter((v) => v.memory_id === idA).length === 1);
+const stats = M.memoryStats(sql);
+check("memoryStats reports memories and vectors", stats.memories >= 2 && stats.vectors >= 2, JSON.stringify(stats));
+
+const rows = sql.exec("SELECT id, kind, content, importance, created_at, updated_at FROM memories").results;
+const vectors = M.memoryVectors(sql);
+const semanticRank = M.rankMemories("server deployment", [0.9, 0.1, 0], rows, vectors, Date.now());
+check("semantic similarity puts the Cloudflare memory first", semanticRank[0]?.row.id === idA, JSON.stringify(semanticRank.slice(0, 2).map((r) => [r.row.content, r.score.toFixed(3)])));
+const lexicalRank = M.rankMemories("mint tea", null, rows, [], Date.now());
+check("without a vector, lexical overlap still ranks the tea memory first", lexicalRank[0]?.row.id === idB, JSON.stringify(lexicalRank.slice(0, 2).map((r) => [r.row.content, r.score.toFixed(3)])));
+
+const recencyRows = [
+  { ...rows[0], id: 9001, content: "same content", importance: 1, updated_at: 1000 },
+  { ...rows[0], id: 9002, content: "same content", importance: 1, updated_at: 9000 },
+];
+const recencyRank = M.rankMemories("", null, recencyRows, [], 10_000);
+check("empty query ranks recency when importance ties", recencyRank[0].row.id === 9002, JSON.stringify(recencyRank.map((r) => r.row.id)));
+
+const kindRows = [
+  { ...rows[0], id: 9101, kind: "tool", content: "same words", importance: 2, updated_at: 5000 },
+  { ...rows[0], id: 9102, kind: "preference", content: "same words", importance: 2, updated_at: 5000 },
+];
+const kindRank = M.rankMemories("", null, kindRows, [], 6000);
+check("a preference outranks an audit line at equal recency", kindRank[0].row.kind === "preference", JSON.stringify(kindRank.map((r) => [r.row.kind, r.score.toFixed(3)])));
 
 db.close();
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -23,10 +23,24 @@ export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
   "exec",
   "lookup_online",
   "schedule_task",
-  "save_workspace",
   "delegate",
   "mcp_call",
   "skill",
+  "skill_install",
+  "write_file",
+  "automation_create",
+  "automation_status",
+  "automation_control",
+  "gmail",
+  "calendar",
+  "tasks",
+  "youtube_transcript",
+  "generate_image",
+  "generate_speech",
+  "transcribe_media",
+  "goal_create",
+  "goal_status",
+  "goal_control",
 ]);
 
 /**
@@ -34,8 +48,8 @@ export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
  * not by oversight: a child that can delegate can spawn a child that can
  * delegate, and nothing in this build bounds that recursion except this list.
  * `schedule_task` is absent because a job a child schedules runs in the main
- * session with no reader for its result, and `save_workspace` because a child
- * shares the parent session's sandbox, so the parent's turn end is what saves it.
+ * session with no reader for its result. There is no snapshot tool for anyone:
+ * a turn that used the sandbox saves the workspace by itself.
  *
  * tests/child.test.mjs pins this list against src/tools.ts, which is the only
  * place the recursion guard can be proven without loading src/child.ts.
@@ -109,8 +123,15 @@ const TABLE: readonly CapabilityDef[] = [
     id: "shell",
     label: "Linux sandbox",
     detail: (home) =>
-      `Run shell commands and Python (exec tool) in a real Linux computer with internet access. The home working directory is ${home}, and every chat session gets its own sandbox: another session's files are not reachable from here. Your files in ${home} are snapshotted automatically at the end of a turn that used the sandbox, and come back when the sandbox is next needed. The user can also prefix a message with "run:" to execute a command directly.`,
+      `Run shell commands and Python (exec tool) in a real Linux computer with internet access. The home working directory is ${home}, and every chat session gets its own sandbox: another session's files are not reachable from here. Your files in ${home} are saved automatically at the end of a turn that used the sandbox, and come back when the sandbox is next needed. The user can also prefix a message with "run:" to execute a command directly.`,
     tool: "exec",
+  },
+  {
+    id: "write",
+    label: "Safe file writes",
+    detail: () =>
+      "Create or replace files with write_file. The previous version is copied to a hidden backup first, and the new file is attached as an artifact card at the end of the reply.",
+    tool: "write_file",
   },
   {
     id: "web-search",
@@ -127,11 +148,53 @@ const TABLE: readonly CapabilityDef[] = [
     tool: "schedule_task",
   },
   {
-    id: "snapshots",
-    label: "Workspace snapshots",
+    id: "automations",
+    label: "Automations",
     detail: () =>
-      `Save the sandbox home to persistent storage so work survives the sandbox going away, up to ${SNAPSHOT_LIMIT_LABEL}. This happens automatically at the end of a turn that used the sandbox; save_workspace is for when you want one right now. A tree over the limit is not saved and the failure says so.`,
-    tool: "save_workspace",
+      "Create durable automations that fire from signed webhooks, watched URLs, or schedules (automation_create tool). Each fire runs a real turn in a chosen chat, with deduplication, conditions, rate limits, and run history. Manage them on the Automations page.",
+    tool: "automation_create",
+  },
+  {
+    id: "calendar",
+    label: "Calendar and tasks",
+    detail: () =>
+      "Read and manage Google Calendar events and Google Tasks (calendar and tasks tools): exams, homework, appointments, reminders, due dates, and recurring events. The agent can list what is coming, create reminders, and tick items off.",
+    tool: "calendar",
+  },
+  {
+    id: "youtube",
+    label: "YouTube transcripts",
+    detail: () =>
+      "Read the spoken content of a public YouTube video by pulling its captions (youtube_transcript tool) and saving a clean transcript, SRT, or VTT. Works for uploaded and auto-generated captions; it does not watch the visuals.",
+    tool: "youtube_transcript",
+  },
+  {
+    id: "images",
+    label: "Image generation",
+    detail: () =>
+      "Generate images from text with Gemini 3.1 Flash Image (generate_image tool): illustrations, logos, posters, and project assets. Images are saved in the chat workspace, attached as preview cards, and can be used by later code.",
+    tool: "generate_image",
+  },
+  {
+    id: "voice",
+    label: "Speech and transcription",
+    detail: () =>
+      "Turn text into spoken audio (generate_speech) and transcribe audio or video with Whisper (transcribe_media). Use it for voice notes, narration, subtitles, lecture notes, dubbing, and video voiceovers. Generated audio is attached as a playable artifact.",
+    tool: "generate_speech",
+  },
+  {
+    id: "goals",
+    label: "Durable goals",
+    detail: () =>
+      "Turn a multi-step outcome into a durable goal (goal_create tool). It gets its own chat and copied workspace, plans steps, runs each in a bounded turn, verifies evidence, tracks a budget, and pauses for approvals. Watch and control it on the Goals page.",
+    tool: "goal_create",
+  },
+  {
+    id: "autosave",
+    label: "Live files, saved automatically",
+    detail: () =>
+      `Every file Blip creates appears in the Files tab as it works. The sandbox home is saved automatically after a turn that used it, up to ${SNAPSHOT_LIMIT_LABEL}, and restored when the sandbox comes back. There is no manual snapshot step.`,
+    always: true,
   },
   {
     id: "sub-agents",
@@ -147,8 +210,10 @@ const TABLE: readonly CapabilityDef[] = [
   },
   {
     id: "email",
-    label: "Email",
-    detail: () => "Read and send email. Not connected yet.",
+    label: "Gmail",
+    detail: () =>
+      "Connect multiple Google accounts in Connections, then use the gmail tool to search all inboxes or one account, read threads, manage labels and spam, archive, draft, send, reply, attach files, and trash or delete with approval. Full mailbox scope; sends and destructive actions always require approval.",
+    tool: "gmail",
   },
   {
     id: "payments",
@@ -166,8 +231,15 @@ const TABLE: readonly CapabilityDef[] = [
     id: "skills",
     label: "Skills",
     detail: () =>
-      "Load reusable instructions from installed SKILL.md skills (skill tool). Manage them in Settings. Skills can contain prompts and scripts made for Claude Code.",
+      "Load reusable instructions from installed SKILL.md skills (skill tool) and install more from GitHub, a zip URL or a raw SKILL.md (skill_install tool). A package's scripts, libraries and assets are written into the sandbox when the skill loads. Manage them in Settings.",
     tool: "skill",
+  },
+  {
+    id: "artifacts",
+    label: "Artifacts",
+    detail: () =>
+      "Files created during a turn are attached at the end of the reply as artifact cards. Click a card to preview it; the Artifacts tab keeps every deliverable from this chat.",
+    always: true,
   },
 ];
 
@@ -253,12 +325,14 @@ export function capabilityAnswer(
 export function buildSystemPrompt(
   memories: MemoryRow[],
   capabilities: string,
-  home: string = SANDBOX_HOME
+  home: string = SANDBOX_HOME,
+  now: number = Date.now()
 ): string {
   const parts = [
     DEFAULT_PERSONA,
     HARD_RULE,
     `Your sandbox home is ${home}.`,
+    `Current date and time (UTC): ${new Date(now).toISOString()}. Use this for "today", "tomorrow", and calendar due dates.`,
     "What you can do:",
     capabilities,
   ];

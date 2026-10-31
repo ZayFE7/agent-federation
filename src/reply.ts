@@ -55,7 +55,7 @@ function inputRecord(part: UIPartLike): Record<string, unknown> {
 
 function commandOf(name: string, part: UIPartLike): string {
   const input = inputRecord(part);
-  for (const key of ["cmd", "query", "title", "task"]) {
+  for (const key of ["cmd", "query", "title", "task", "path"]) {
     const value = input[key];
     if (typeof value === "string" && value.length > 0) return value;
   }

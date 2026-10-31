@@ -2,8 +2,11 @@
 // offline test can use it without a Worker or a YAML library.
 
 export const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,40}$/;
-const MAX_BODY = 40_000;
-const MAX_DESCRIPTION = 300;
+// Real skill packages (including Anthropic's own) carry long frontmatter
+// descriptions and bodies over 100k characters. The system prompt clips the
+// description to 160 chars; the body is only paid for when the skill loads.
+const MAX_BODY = 200_000;
+const MAX_DESCRIPTION = 2_000;
 
 export interface ParsedSkill {
   name: string;

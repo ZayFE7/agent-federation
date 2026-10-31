@@ -53,9 +53,30 @@ import {
   deleteSkillRow,
   ensureSkillSchema,
   getSkillRow,
+  listSkillFileRows,
   listSkillRows,
+  upsertSkillFiles,
   upsertSkillRow,
 } from "./skill-store";
+import type { SkillPackageFile } from "./types";
+import type {
+  GmailAccessResult,
+  GoogleAccountRow,
+  GoogleAccountView,
+  GoogleOAuthStateRow,
+  GoogleStatusView,
+  GoogleTokens,
+  GoogleUserInfo,
+} from "./google-types";
+import { GMAIL_SCOPE } from "./google-types";
+import { GoogleStore, ensureGoogleSchema } from "./google-store";
+import {
+  buildGoogleAuthUrl,
+  exchangeGoogleCode,
+  fetchGoogleUserInfo,
+  refreshGoogleToken,
+  revokeGoogleToken,
+} from "./google-oauth";
 
 /**
  * Boot seed for the conversation that already exists.
@@ -115,6 +136,7 @@ function fail(status: number, error: string): Response {
 
 export class RegistryAgent extends Agent<Env> {
   private schemaReady = false;
+  private readonly googleAccessCache = new Map<string, { token: string; expiresAt: number }>();
 
   /**
    * Adapt the Agents SDK's tagged-template this.sql(strings, ...values) into
@@ -134,6 +156,7 @@ export class RegistryAgent extends Agent<Env> {
       ensureRegistrySchema(handle);
       ensureModelSchema(handle);
       ensureSkillSchema(handle);
+      ensureGoogleSchema(handle);
       this.schemaReady = true;
     }
     return handle;
@@ -330,24 +353,275 @@ export class RegistryAgent extends Agent<Env> {
     return true;
   }
 
-  async skillCatalog(): Promise<Array<{ name: string; description: string }>> {
+  private googleStore(): GoogleStore {
+    return new GoogleStore(this.db());
+  }
+
+  private googleClientId(): string {
+    return (this.env.GOOGLE_CLIENT_ID ?? "").trim();
+  }
+
+  private googleClientSecret(): string {
+    return (this.env.GOOGLE_CLIENT_SECRET ?? "").trim();
+  }
+
+  private googleRedirectUri(origin: string): string {
+    const configured = (this.env.GOOGLE_REDIRECT_URI ?? "").trim();
+    if (configured) return configured;
+    return `${origin.replace(/\/+$/, "")}/api/connections/google/callback`;
+  }
+
+  async googleStatus(origin: string): Promise<GoogleStatusView> {
+    const accounts = this.googleStore().listAccounts();
+    const redirectUri = this.googleRedirectUri(origin);
+    return {
+      configured: Boolean(this.googleClientId() && this.googleClientSecret()),
+      redirectUri,
+      accounts: accounts.filter((row) => row.status === "active").length,
+      defaultEmail: accounts.find((row) => row.is_default === 1)?.email ?? null,
+    };
+  }
+
+  async googleBegin(
+    origin: string,
+    loginHint?: string
+  ): Promise<{ ok: boolean; authUrl?: string; redirectUri: string; error?: string }> {
+    const redirectUri = this.googleRedirectUri(origin);
+    const clientId = this.googleClientId();
+    if (!clientId || !this.googleClientSecret()) {
+      return { ok: false, redirectUri, error: "google_not_configured" };
+    }
+    const now = Date.now();
+    const store = this.googleStore();
+    store.pruneStates(now, 10 * 60 * 1000);
+    const state = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+    const stateRow: GoogleOAuthStateRow = {
+      state,
+      redirect_uri: redirectUri,
+      login_hint: loginHint?.trim() || null,
+      created_at: now,
+    };
+    store.createState(stateRow);
+    return {
+      ok: true,
+      redirectUri,
+      authUrl: buildGoogleAuthUrl({
+        clientId,
+        redirectUri,
+        state,
+        ...(loginHint ? { loginHint } : {}),
+      }),
+    };
+  }
+
+  async googleComplete(
+    code: string,
+    state: string
+  ): Promise<{ ok: boolean; account?: GoogleAccountView; error?: string }> {
+    const store = this.googleStore();
+    const stateRow = store.consumeState(state, Date.now(), 10 * 60 * 1000);
+    if (!stateRow) return { ok: false, error: "state_expired" };
+    const clientId = this.googleClientId();
+    const clientSecret = this.googleClientSecret();
+    if (!clientId || !clientSecret) return { ok: false, error: "google_not_configured" };
+
+    let tokens: GoogleTokens;
+    let user: GoogleUserInfo;
+    try {
+      tokens = await exchangeGoogleCode(
+        {
+          clientId,
+          clientSecret,
+          code,
+          redirectUri: stateRow.redirect_uri,
+        },
+        fetch
+      );
+      user = await fetchGoogleUserInfo(tokens.accessToken, fetch);
+    } catch (err) {
+      return { ok: false, error: String(err).slice(0, 300) };
+    }
+
+    const existing = store
+      .listAccounts()
+      .find((row) => row.google_sub === user.sub || row.email.toLowerCase() === user.email.toLowerCase());
+    const encryptedRefresh = tokens.refreshToken
+      ? await encryptSecret(this.modelSecret(), tokens.refreshToken)
+      : existing?.refresh_enc;
+    if (!encryptedRefresh) {
+      return { ok: false, error: "Google did not return a refresh token; reconnect and grant offline access." };
+    }
+    const now = Date.now();
+    const id = existing?.id ?? `ga_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const row: GoogleAccountRow = {
+      id,
+      google_sub: user.sub,
+      email: user.email,
+      name: user.name?.trim() || null,
+      picture: user.picture?.trim() || null,
+      refresh_enc: encryptedRefresh,
+      scopes: (tokens.scopes.length ? tokens.scopes : [GMAIL_SCOPE]).join(" "),
+      is_default: existing?.is_default ?? 0,
+      status: "active",
+      last_error: null,
+      last_refresh_at: now,
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    };
+    store.upsertAccount(row);
+    if (!store.listAccounts().some((account) => account.is_default === 1)) {
+      store.setDefault(id);
+    }
+    this.googleAccessCache.delete(id);
+    const saved = store.getAccount(id);
+    return saved
+      ? { ok: true, account: store.publicAccount(saved) }
+      : { ok: false, error: "the account could not be saved" };
+  }
+
+  async googleAccounts(): Promise<GoogleAccountView[]> {
+    return this.googleStore().listAccounts().map((row) => this.googleStore().publicAccount(row));
+  }
+
+  async googleSetDefault(id: string): Promise<boolean> {
+    const store = this.googleStore();
+    if (!store.getAccount(id)) return false;
+    store.setDefault(id);
+    return true;
+  }
+
+  async googleDelete(id: string): Promise<boolean> {
+    const store = this.googleStore();
+    const row = store.getAccount(id);
+    if (!row) return false;
+    try {
+      const refresh = await decryptSecret(this.modelSecret(), row.refresh_enc);
+      if (refresh) await revokeGoogleToken(refresh, fetch);
+    } catch {
+      // A failed revoke must not strand a row the owner asked to remove.
+    }
+    store.deleteAccount(id);
+    this.googleAccessCache.delete(id);
+    return true;
+  }
+
+  async gmailAccess(account: string): Promise<GmailAccessResult> {
+    const store = this.googleStore();
+    const row = store.resolveAccount(account);
+    if (!row) return { ok: false, error: "No connected Gmail account matches that id or email.", reauth: false };
+    if (row.status === "reauth_required") {
+      return {
+        ok: false,
+        error: `${row.email} needs to be reconnected in Connections.`,
+        reauth: true,
+      };
+    }
+    const now = Date.now();
+    const cached = this.googleAccessCache.get(row.id);
+    if (cached && cached.expiresAt - now > 60_000) {
+      return {
+        ok: true,
+        access: { account: store.publicAccount(row), accessToken: cached.token },
+      };
+    }
+    const clientId = this.googleClientId();
+    const clientSecret = this.googleClientSecret();
+    if (!clientId || !clientSecret) {
+      return { ok: false, error: "Google OAuth is not configured.", reauth: false };
+    }
+    try {
+      const refresh = await decryptSecret(this.modelSecret(), row.refresh_enc);
+      if (!refresh) {
+        store.markStatus(row.id, "reauth_required", "The stored Google token is unreadable.", now);
+        return { ok: false, error: `${row.email} needs to be reconnected.`, reauth: true };
+      }
+      const tokens = await refreshGoogleToken(
+        { clientId, clientSecret, refreshToken: refresh },
+        fetch
+      );
+      this.googleAccessCache.set(row.id, {
+        token: tokens.accessToken,
+        expiresAt: now + Math.max(60, tokens.expiresIn) * 1000,
+      });
+      store.updateRefresh(row.id, row.refresh_enc, tokens.scopes.join(" "), now);
+      return {
+        ok: true,
+        access: {
+          account: store.publicAccount(store.getAccount(row.id) ?? row),
+          accessToken: tokens.accessToken,
+        },
+      };
+    } catch (err) {
+      const message = String(err).slice(0, 300);
+      const reauth = /invalid_grant|reauth|expired/i.test(message);
+      if (reauth) store.markStatus(row.id, "reauth_required", message, now);
+      return { ok: false, error: message, reauth };
+    }
+  }
+
+  async skillCatalog(): Promise<Array<{ name: string; description: string; fileCount: number; source: string }>> {
     return listSkillRows(this.db()).map((row) => ({
       name: row.name,
       description: row.description,
+      fileCount: row.file_count,
+      source: row.source,
     }));
   }
 
   async skillGet(
     name: string
-  ): Promise<{ name: string; description: string; body: string } | null> {
+  ): Promise<{
+    name: string;
+    description: string;
+    body: string;
+    source: string;
+    files: Array<{ path: string; bytes: number }>;
+  } | null> {
     if (typeof name !== "string" || !name) return null;
     const row = getSkillRow(this.db(), name);
-    return row ? { name: row.name, description: row.description, body: row.body } : null;
+    if (!row) return null;
+    const files = listSkillFileRows(this.db(), row.id).map((file) => ({
+      path: file.path,
+      bytes: file.bytes,
+    }));
+    return {
+      name: row.name,
+      description: row.description,
+      body: row.body,
+      source: row.source,
+      files,
+    };
   }
 
-  async skillSave(name: string, description: string, body: string): Promise<boolean> {
+  async skillFiles(name: string): Promise<SkillPackageFile[] | null> {
+    if (typeof name !== "string" || !name) return null;
+    const row = getSkillRow(this.db(), name);
+    if (!row) return null;
+    return listSkillFileRows(this.db(), row.id).map((file) => ({
+      path: file.path,
+      bytes: file.bytes,
+      contentBase64: file.content_b64,
+    }));
+  }
+
+  async skillSave(
+    name: string,
+    description: string,
+    body: string,
+    files: SkillPackageFile[],
+    source: string
+  ): Promise<boolean> {
     if (typeof name !== "string" || !name || typeof description !== "string" || !body) return false;
     if (!getSkillRow(this.db(), name) && countSkills(this.db()) >= 100) return false;
+    if (files.length > 500) return false;
+    let total = 0;
+    for (const file of files) {
+      if (!file || typeof file.path !== "string" || !file.path) return false;
+      if (!Number.isFinite(file.bytes) || file.bytes < 0 || file.bytes > 2 * 1024 * 1024) return false;
+      if (typeof file.contentBase64 !== "string") return false;
+      total += file.bytes;
+      if (total > 8 * 1024 * 1024) return false;
+    }
     const existing = getSkillRow(this.db(), name);
     const now = Date.now();
     upsertSkillRow(this.db(), {
@@ -355,9 +629,13 @@ export class RegistryAgent extends Agent<Env> {
       name,
       description,
       body,
+      source: typeof source === "string" ? source.slice(0, 300) : "",
+      file_count: files.length,
+      bytes: total,
       created_at: existing?.created_at ?? now,
       updated_at: now,
     });
+    upsertSkillFiles(this.db(), name, files);
     return true;
   }
 

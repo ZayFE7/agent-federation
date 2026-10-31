@@ -78,6 +78,21 @@ export function parkedApproval(messages: readonly MessageLike[]): ParkedApproval
  * persistent workspace delete, VM destruction); ordinary sandbox code is free.
  */
 export function needsApproval(toolName: string, input: unknown): boolean {
+  if (toolName === "skill_install") return false;
+  if (toolName === "gmail") {
+    if (!input || typeof input !== "object") return true;
+    const value = input as Record<string, unknown>;
+    const action = typeof value.action === "string" ? value.action : "";
+    if (!action) return true;
+    if (action === "send" || action === "reply") return true;
+    if (action === "manage") {
+      const operation = typeof value.operation === "string" ? value.operation : "";
+      if (operation === "trash" || operation === "delete") return true;
+      const ids = Array.isArray(value.threadIds) ? value.threadIds : [];
+      return ids.length > 10;
+    }
+    return false;
+  }
   if (toolName === "mcp_call") {
     if (!input || typeof input !== "object") return true;
     const tool = (input as { tool?: unknown }).tool;
@@ -94,6 +109,26 @@ export function needsApproval(toolName: string, input: unknown): boolean {
 
 /** One human sentence for the approval card, including what will run. */
 export function approvalPromptFor(toolName: string, input: unknown): string {
+  if (toolName === "skill_install") {
+    const value = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    return `Install a skill from ${typeof value.url === "string" ? value.url : "an unknown source"}? Installs run automatically; the package stays in the library until removed.`;
+  }
+  if (toolName === "gmail") {
+    const value = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    const account = typeof value.account === "string" ? value.account : "the default account";
+    const action = typeof value.action === "string" ? value.action : "unknown";
+    if (action === "send" || action === "reply") {
+      const to = typeof value.to === "string" ? value.to : "the recipients";
+      const subject = typeof value.subject === "string" ? value.subject : "(no subject)";
+      return `${action === "reply" ? "Reply" : "Send"} from ${account} to ${to}: ${subject}?`;
+    }
+    if (action === "manage") {
+      const operation = typeof value.operation === "string" ? value.operation : "change";
+      const ids = Array.isArray(value.threadIds) ? value.threadIds.length : 0;
+      return `${operation === "delete" ? "Permanently delete" : operation === "trash" ? "Move to trash" : "Change"} ${ids || "the selected"} thread${ids === 1 ? "" : "s"} in ${account}?`;
+    }
+    return `Run the Gmail ${action} action on ${account}?`;
+  }
   if (toolName === "mcp_call") {
     const value = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
     const server = typeof value.server === "string" ? value.server : "unknown server";

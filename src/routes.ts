@@ -118,7 +118,7 @@
 // zero side effects. The DO re-runs the same function (defense in depth, the rule the
 // stream proxy and the scope guard already follow: a handler does not trust its route).
 
-// The five value imports below carry their `.ts` extension, because plain Node
+// The seven value imports below carry their `.ts` extension, because plain Node
 // (which runs tests/routes.test.mjs, and nothing else can) is a strict ESM resolver:
 // an extensionless relative specifier never reaches `auth.ts`. Type imports are erased
 // before resolution, so they stay extensionless like the rest of the repo.
@@ -126,7 +126,7 @@
 // `allowImportingTsExtensions` is on in this tsconfig, legal because `noEmit` is
 // already true, so a `.ts` specifier is permitted rather than suppressed: tsc type
 // checks these five lines normally. Wrangler's esbuild resolves both spellings.
-// These five are the whole value-import set because R39 lets this module reach only
+// These seven are the whole value-import set because R39 lets this module reach only
 // `src/*.ts` files that are themselves dependency-free under plain Node, which is
 // exactly why ./session-scope joined ./auth, ./registry-input and ./registry-store in
 // Task 8 (R75), and why ./workspace-keys joined them in Task 30: that module imports
@@ -136,11 +136,19 @@ import { idFromSegment, limitFrom, parseModelPick, readJson } from "./registry-i
 import { PLACEHOLDER_TITLE } from "./registry-store.ts";
 import { isSessionId } from "./session-scope.ts";
 import { safeWorkspacePath } from "./workspace-keys.ts";
+import {
+  MAX_ATTACHMENT_BYTES,
+  parseAttachments,
+  safeAttachmentName,
+  storedAttachmentPath,
+} from "./attachments.ts";
 import { authed, tokenOk } from "./auth.ts";
 import { shouldTrace } from "./observability.ts";
+import { clampSearchQuery, mergeSearchHits } from "./session-search.ts";
+import type { SearchHitInput } from "./session-search";
 import type { MessageRow } from "./memory";
 import type { SessionRow } from "./registry-store";
-import type { AgentStub, ChatTier, Env, RegistryStub } from "./types";
+import type { AgentStub, AutonomyAgentStub, ChatTier, Env, RegistryStub } from "./types";
 
 /** The one path prefix this module answers for. */
 const SESSIONS_PATH = "/api/sessions";
@@ -169,6 +177,12 @@ function newSessionId(): string {
  * with no prefix, so the legacy `idFromName("main")` stays reachable as session
  * `main` and keeps every existing memory, task and vault chunk alive.
  */
+function autonomyStubFor(env: Env): AutonomyAgentStub {
+  return env.AUTONOMY.get(
+    env.AUTONOMY.idFromName("autonomy")
+  ) as unknown as AutonomyAgentStub;
+}
+
 export function agentStubFor(env: Env, sessionId: string): AgentStub {
   const stub = env.FEDERATION_AGENT.get(env.FEDERATION_AGENT.idFromName(sessionId));
   // Cast avoids depending on version-specific DurableObjectNamespace generics.
@@ -273,25 +287,94 @@ async function submitMessage(
   ctx: ExecutionContext,
   id: string
 ): Promise<Response> {
-  const body = (await readJson(request)) as { content?: unknown; tier?: unknown } | null;
+  const body = (await readJson(request)) as {
+    content?: unknown;
+    tier?: unknown;
+    attachments?: unknown;
+  } | null;
   if (typeof body?.content !== "string" || body.content.length === 0) {
     return fail(400, "content required");
   }
+  const attachments = parseAttachments(body.attachments);
+  if (attachments === null) return fail(400, "invalid attachments");
   const tier: ChatTier | undefined =
     body.tier === "primary" || body.tier === "cheap" ? body.tier : undefined;
   // The header half of the trace gate lives here because this is the last place a
   // Request exists: an RPC turn inside the DO has none to read (Task 38).
-  const receipt = await agentStubFor(env, id).submitTurn(
-    body.content,
-    tier,
-    id,
-    shouldTrace(request, env)
-  );
+  const receipt = attachments.length
+    ? await agentStubFor(env, id).submitTurn(
+        body.content,
+        tier,
+        id,
+        shouldTrace(request, env),
+        attachments
+      )
+    : await agentStubFor(env, id).submitTurn(
+        body.content,
+        tier,
+        id,
+        shouldTrace(request, env)
+      );
   if ("code" in receipt) {
+    if (receipt.code === "goal_active") {
+      return fail(409, "this session is running a goal step");
+    }
+    if (receipt.code === "busy_directive") {
+      return fail(409, "stop the running turn before sending a command");
+    }
     return fail(403, "invalid session");
   }
   ctx.waitUntil(registryStubFor(env).touch(id));
-  return json({ ok: true, streamId: receipt.streamId, operationId: receipt.operationId });
+  return json({
+    ok: true,
+    streamId: receipt.streamId,
+    operationId: receipt.operationId,
+    ...(receipt.queued ? { queued: true } : {}),
+  });
+}
+
+/**
+ * GET /api/sessions/search?q=...&limit=N
+ *
+ * Cross-session full-text search. Transcripts shard into one DO per session, so
+ * there is no single table to query: the route lists the registry (most recent
+ * first), asks a bounded window of sessions in small parallel batches, and
+ * merges the answers. The cap is the design, not a shortcut: a personal index is
+ * dozens of chats, and an unbounded fan-out would wake every DO a person owns on
+ * one keystroke. Sessions the registry lists are the only ones searched, so no
+ * ghost DO can be instantiated from a search string.
+ */
+const SEARCH_SESSIONS = 24;
+const SEARCH_PER_SESSION = 6;
+const SEARCH_BATCH = 6;
+
+async function searchSessions(env: Env, url: URL): Promise<Response> {
+  const query = clampSearchQuery(url.searchParams.get("q"));
+  if (!query) return fail(400, "a search query of 2 to 200 characters is required");
+  const rawLimit = Number(url.searchParams.get("limit"));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(30, Math.floor(rawLimit)) : 12;
+  const sessions = await registryStubFor(env).list(SEARCH_SESSIONS);
+  const hits: SearchHitInput[] = [];
+  for (let at = 0; at < sessions.length; at += SEARCH_BATCH) {
+    const slice = sessions.slice(at, at + SEARCH_BATCH);
+    const settled = await Promise.allSettled(
+      slice.map((row) =>
+        agentStubFor(env, row.id).searchMessages(row.id, query, SEARCH_PER_SESSION)
+      )
+    );
+    for (const [index, answer] of settled.entries()) {
+      if (answer.status !== "fulfilled") continue;
+      for (const hit of answer.value) {
+        hits.push({ ...hit, sessionId: slice[index].id });
+      }
+    }
+  }
+  return json({
+    ok: true,
+    query,
+    scanned: sessions.length,
+    results: mergeSearchHits(hits, sessions, limit, query),
+  });
 }
 
 /**
@@ -484,6 +567,101 @@ async function readWorkspaceArchive(env: Env, id: string): Promise<Response> {
 }
 
 /**
+ * GET /api/sessions/:id/files
+ *
+ * The live tree, read through the sandbox worker, which boots a cold VM and
+ * restores the saved workspace before answering. This is what the Files tab
+ * shows now; the KV manifest is history, not the screen.
+ */
+async function readLiveFiles(env: Env, id: string): Promise<Response> {
+  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+  const pending = sandboxGet(env, "/workspace/files", id);
+  if (!pending) return fail(503, "sandbox not configured");
+  return pending;
+}
+
+/** GET /api/sessions/:id/artifacts: the files the agent explicitly shared. */
+async function readArtifacts(env: Env, id: string): Promise<Response> {
+  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+  return json({ ok: true, artifacts: await agentStubFor(env, id).artifacts(id) });
+}
+
+/**
+ * GET /api/sessions/:id/files/download?path=...
+ *
+ * One workspace file as bytes. The path is guarded before it reaches the worker;
+ * the worker repeats the guard because it, not this route, builds the filesystem
+ * path. The response type comes from the extension so images and PDFs open in
+ * the console's preview instead of always downloading.
+ */
+async function readLiveFile(env: Env, id: string, rawPath: string | null): Promise<Response> {
+  const path = safeWorkspacePath(rawPath ?? "");
+  if (!path) return fail(400, "invalid file path");
+  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+  if (!env.SANDBOX) return fail(503, "sandbox not configured");
+  const url = new URL(`${SANDBOX_ORIGIN}/workspace/read`);
+  url.searchParams.set("sessionId", id);
+  url.searchParams.set("path", path);
+  return env.SANDBOX.fetch(url.toString(), {
+    method: "GET",
+    headers: sandboxHeaders(env),
+  });
+}
+
+/**
+ * POST /api/sessions/:id/files, body `{name, contentBase64}`.
+ *
+ * The file lands in the session's sandbox under uploads/ before the message that
+ * names it is submitted, so the model can read it with exec and the Files tab can
+ * show it immediately. The stored filename is generated, never taken from the
+ * body: the display name is the user's, the path is ours.
+ */
+async function uploadSessionFile(
+  request: Request,
+  env: Env,
+  id: string
+): Promise<Response> {
+  const body = (await readJson(request)) as {
+    name?: unknown;
+    contentBase64?: unknown;
+  } | null;
+  const name = safeAttachmentName(body?.name);
+  if (!name) return fail(400, "a valid file name is required");
+  const contentBase64 = body?.contentBase64;
+  if (typeof contentBase64 !== "string" || contentBase64.length === 0) {
+    return fail(400, "contentBase64 required");
+  }
+  // Reject on the encoded length before decoding; a body over the cap cannot
+  // become a legal attachment regardless of what its bytes say.
+  if (contentBase64.length > Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 16) {
+    return fail(413, "the file is over 12 MB");
+  }
+  const bytes = Math.floor((contentBase64.replace(/=+$/, "").length * 3) / 4);
+  if (bytes > MAX_ATTACHMENT_BYTES) return fail(413, "the file is over 12 MB");
+  if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+  if (!env.SANDBOX) return fail(503, "sandbox not configured");
+  const path = storedAttachmentPath(name);
+  let res: Response;
+  try {
+    res = await env.SANDBOX.fetch(`${SANDBOX_ORIGIN}/workspace/upload`, {
+      method: "POST",
+      headers: sandboxHeaders(env, true),
+      body: JSON.stringify({
+        sessionId: id,
+        files: [{ path, contentBase64 }],
+      }),
+    });
+  } catch (err) {
+    return fail(502, `sandbox unreachable: ${String(err).slice(0, 200)}`);
+  }
+  const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+  if (!res.ok || !data?.ok) {
+    return fail(502, data?.error || `the sandbox refused the upload (${res.status})`);
+  }
+  return json({ ok: true, file: { name, path, bytes } });
+}
+
+/**
  * DELETE /api/sessions/:id/workspace/files/<path>
  *
  * `rawSegments` is what the pathname still holds after `files/`: encoded, and split
@@ -530,6 +708,9 @@ async function deleteWorkspaceFile(
  * agree that the files outlived the session.
  */
 async function deleteSession(request: Request, env: Env, id: string): Promise<Response> {
+  if (await autonomyStubFor(env).blocksDelete(id)) {
+    return fail(409, "this session is running a goal; pause or cancel the goal first");
+  }
   const body = (await readJson(request)) as { confirm_body?: unknown } | null;
   const registry = registryStubFor(env);
   if (body?.confirm_body !== true) {
@@ -590,6 +771,13 @@ export async function handleFetch(
     return fail(404, "not found");
   }
 
+  // GET /api/sessions/search?q=...  (a literal word, not an id: the branch must
+  // come before the id shape check, or "search" would 400 as a malformed id)
+  if (parts.length === 1 && parts[0] === "search") {
+    if (request.method !== "GET") return fail(404, "not found");
+    return searchSessions(env, url);
+  }
+
   const id = idFromSegment(parts[0]);
   if (!id) return fail(404, "not found");
   // Gate 2 (R76): EVERY `:id` is shape-checked here, before any `idFromName` call and
@@ -628,6 +816,34 @@ export async function handleFetch(
     return fail(404, "not found");
   }
 
+  // GET /api/sessions/:id/files/versions?path=...
+  if (parts.length === 3 && parts[1] === "files" && parts[2] === "versions" && request.method === "GET") {
+    const path = safeWorkspacePath(url.searchParams.get("path") ?? "");
+    if (!path || path.startsWith(".blip/")) return fail(400, "invalid file path");
+    if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+    return json(await agentStubFor(env, id).listFileVersions(id, path));
+  }
+  // POST /api/sessions/:id/files/restore, body {path, version}
+  if (parts.length === 3 && parts[1] === "files" && parts[2] === "restore" && request.method === "POST") {
+    const body = (await readJson(request)) as { path?: unknown; version?: unknown } | null;
+    if (typeof body?.path !== "string" || typeof body?.version !== "string") {
+      return fail(400, "path and version are required");
+    }
+    const path = safeWorkspacePath(body.path);
+    if (!path || path.startsWith(".blip/")) return fail(400, "invalid file path");
+    if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
+    const result = await agentStubFor(env, id).restoreFileVersion(id, path, body.version);
+    return result.ok ? json({ ok: true, output: result.output }) : fail(409, result.output);
+  }
+  // GET /api/sessions/:id/files/download?path=...
+  if (parts.length === 3 && parts[1] === "files" && parts[2] === "download" && request.method === "GET") {
+    return readLiveFile(env, id, url.searchParams.get("path"));
+  }
+  // DELETE /api/sessions/:id/files/<path...> aliases the workspace delete.
+  if (parts[1] === "files" && parts.length >= 3 && request.method === "DELETE") {
+    return deleteWorkspaceFile(env, id, parts.slice(2));
+  }
+
   // GET /api/sessions/:id/messages  |  POST /api/sessions/:id/message
   if (parts.length === 2) {
     const sub = parts[1];
@@ -647,6 +863,12 @@ export async function handleFetch(
     if (sub === "message" && request.method === "POST") {
       if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
       return submitMessage(request, env, ctx, id);
+    }
+    if (sub === "artifacts" && request.method === "GET") return readArtifacts(env, id);
+    // GET /api/sessions/:id/files  |  POST /api/sessions/:id/files
+    if (sub === "files") {
+      if (request.method === "GET") return readLiveFiles(env, id);
+      if (request.method === "POST") return uploadSessionFile(request, env, id);
     }
     if (sub === "abort" && request.method === "POST") {
       if (!(await registryStubFor(env).exists(id))) return fail(404, "not found");
