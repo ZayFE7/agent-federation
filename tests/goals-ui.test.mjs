@@ -23,7 +23,7 @@ function hasNot(text, label) {
 }
 
 check("Goals is a primary nav page with its own title", () => {
-  has('goals:["Goals","goal"]', "Goals nav item");
+  has('["goals","Goals","goal"', "Goals nav item");
   has('goals:"Goals"', "Goals page title");
   has("goalbadge", "goal attention badge");
 });
@@ -65,8 +65,9 @@ check("attention can reach the browser while the tab is open", () => {
 
 check("Settings exposes hybrid memory with its honest mode", () => {
   has("/api/memory?q=", "memory search endpoint");
-  has("Semantic recall", "semantic status copy");
-  has("Keyword recall", "keyword fallback copy");
+  has("Facts and preferences", "memory copy");
+  has("Semantic", "semantic status copy");
+  has("Keyword", "keyword fallback copy");
   has("Search memory", "memory search field");
 });
 

@@ -37,10 +37,10 @@ function slice(start, end) {
 }
 
 check("Connections sits between Automations and Files in the nav and titles", () => {
-  has(
-    'tasks:["Automations","task"],connections:["Connections","conn"],docs:["Files","doc"]',
-    "ordered Connections nav item"
-  );
+  has('["tasks","Automations","loop"', "Automations tile");
+  has('["connections","Connections","conn"', "Connections tile");
+  has('["docs","Files","files"', "Files tile");
+  assert.ok(html.indexOf('["tasks","Automations","loop"') < html.indexOf('["connections","Connections","conn"') && html.indexOf('["connections","Connections","conn"') < html.indexOf('["docs","Files","files"'), "Connections sits between Automations and Files");
   has('connections:"Connections"', "Connections page title");
   has("connections:pConnections", "Connections page renderer");
   has('function go(t){', "view router");

@@ -29,7 +29,7 @@ function hasNot(text, label) {
 }
 
 check("Automations replaces Tasks in the nav and page title", () => {
-  has('tasks:["Automations","task"]', "Automations nav item");
+  has('["tasks","Automations","loop"', "Automations nav item");
   has('tasks:"Automations"', "Automations page title");
   hasNot('tasks:["Tasks"', "old Tasks nav label");
   hasNot("<h1>Tasks</h1>", "old Tasks page heading");

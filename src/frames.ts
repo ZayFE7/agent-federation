@@ -39,6 +39,7 @@ export const TOOL_WIDGET: Record<string, { label: string; state: string }> = Obj
   skill: { label: "Skill", state: "idea" },
   skill_install: { label: "Install skill", state: "idea" },
   write_file: { label: "Write file", state: "files" },
+  remember: { label: "Memory", state: "memory" },
   automation_create: { label: "Automation", state: "calendar" },
   automation_status: { label: "Automations", state: "calendar" },
   automation_control: { label: "Automation", state: "calendar" },

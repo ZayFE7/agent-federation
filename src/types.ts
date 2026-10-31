@@ -402,6 +402,7 @@ export interface AgentStub {
   /** Global memory, hybrid-ranked; main owns the store. */
   memoryRecall(query: string, limit: number): Promise<MemoryRow[]>;
   memoryStatus(): Promise<{ semantic: boolean; memories: number; vectors: number }>;
+  memoryClear(): Promise<number>;
   /** Files the agent explicitly shared, newest first. */
   artifacts(sessionId: string): Promise<ArtifactRow[]>;
   jobList(): Promise<unknown[]>;

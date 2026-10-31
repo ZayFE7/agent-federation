@@ -269,6 +269,12 @@ export interface ToolDeps {
   installSkill?(url: string, path?: string): Promise<string>;
   /** Write a file, backing up any previous version first. */
   writeFile?(path: string, content: string, append?: boolean): Promise<string>;
+  /** Save one explicit fact or preference to global memory. */
+  remember?(input: {
+    content: string;
+    kind?: "fact" | "preference";
+    importance?: number;
+  }): Promise<string>;
   /**
    * Write an installed skill's package files into this session's sandbox and
    * return the directory line the model should see. Absent when the session has
@@ -637,6 +643,35 @@ function writeFileTool(deps: ToolDeps) {
         tail: clip(result, 200),
       });
       return result;
+    },
+  });
+}
+
+function rememberTool(deps: ToolDeps) {
+  return tool({
+    description:
+      "Save one durable fact or preference the user wants remembered across chats. Use this only when the user explicitly asks you to remember something, or when they state a stable preference that will clearly matter later. Do not save ordinary chat turns, task runs, approvals, command output, URLs, or transient state. Write one self-contained sentence in the user's own terms, and never include passwords, keys, tokens, or other credentials.",
+    inputSchema: z.object({
+      content: z
+        .string()
+        .min(3)
+        .max(500)
+        .describe("The fact or preference, one self-contained sentence. Example: 'Prefers short replies without em dashes.'"),
+      kind: z
+        .enum(["fact", "preference"])
+        .optional()
+        .describe("fact for a stable fact, preference for a way the user wants things done. Defaults to fact."),
+      importance: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .optional()
+        .describe("1 is background, 5 is load-bearing. Defaults to 3."),
+    }),
+    execute: async ({ content, kind, importance }) => {
+      if (!deps.remember) return "Memory is not available in this session.";
+      return deps.remember({ content: content.trim(), kind, importance });
     },
   });
 }
@@ -1198,6 +1233,7 @@ export function buildTools(
     skill: skillTool,
     skill_install: skillInstallTool,
     write_file: writeFileTool,
+    remember: rememberTool,
   };
   const tools: ToolSet = {};
   for (const name of names) {
@@ -1206,6 +1242,10 @@ export function buildTools(
       // list is one forgotten filter away from letting a sub-agent spawn its own.
       const run = deps.delegate;
       if (typeof run === "function") tools.delegate = delegateTool(deps, run);
+      continue;
+    }
+    if (name === "remember") {
+      if (deps.remember) tools.remember = rememberTool(deps);
       continue;
     }
     if (name === "automation_create") {

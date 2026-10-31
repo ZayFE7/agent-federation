@@ -724,6 +724,45 @@ async function deleteSession(request: Request, env: Env, id: string): Promise<Re
   return json({ ok: true, workspace: forgotten ? "deleted" : "kept" });
 }
 
+/**
+ * DELETE /api/sessions?limit=N, body `{"confirm":"delete-all"}`.
+ *
+ * A fresh start needs to remove chats in batches, not one request per row. The
+ * route keeps the same per-session guards: a session that owns a running goal is
+ * skipped and named in the answer, and a workspace is cleared only when the
+ * sandbox pointer existed. The client repeats while `truncated` is true.
+ */
+async function deleteAllSessions(
+  request: Request,
+  env: Env,
+  url: URL
+): Promise<Response> {
+  const body = (await readJson(request)) as { confirm?: unknown } | null;
+  if (body?.confirm !== "delete-all") return fail(400, "confirm must be delete-all");
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit")) || 50));
+  const registry = registryStubFor(env);
+  const sessions = await registry.list(limit);
+  let removed = 0;
+  const skipped: string[] = [];
+  for (const session of sessions) {
+    if (await autonomyStubFor(env).blocksDelete(session.id)) {
+      skipped.push(session.id);
+      continue;
+    }
+    const existed = await registry.exists(session.id);
+    const forgotten = await sandboxForget(env, session.id);
+    if (existed && forgotten) await agentStubFor(env, session.id).clearWorkspace(session.id);
+    await registry.remove(session.id);
+    removed++;
+  }
+  return json({
+    ok: true,
+    removed,
+    skipped,
+    truncated: sessions.length === limit,
+  });
+}
+
 function isSessionsPath(pathname: string): boolean {
   return pathname === SESSIONS_PATH || pathname.startsWith(`${SESSIONS_PATH}/`);
 }
@@ -768,6 +807,7 @@ export async function handleFetch(
       return json({ ok: true, sessions, truncated: sessions.length === limit });
     }
     if (request.method === "POST") return createSession(request, env);
+    if (request.method === "DELETE") return deleteAllSessions(request, env, url);
     return fail(404, "not found");
   }
 

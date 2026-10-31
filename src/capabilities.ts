@@ -28,6 +28,7 @@ export const EXPECTED_TOOLS: readonly string[] = Object.freeze([
   "skill",
   "skill_install",
   "write_file",
+  "remember",
   "automation_create",
   "automation_status",
   "automation_control",
@@ -116,7 +117,7 @@ const TABLE: readonly CapabilityDef[] = [
     id: "memory",
     label: "Persistent memory",
     detail: () =>
-      "Remember the user and prior conversations across sessions; recall happens automatically.",
+      "Remember facts and preferences the user explicitly asks you to keep, and recall them across sessions. Ordinary chat turns are not saved to memory.",
     always: true,
   },
   {

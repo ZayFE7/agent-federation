@@ -52,6 +52,7 @@ import {
 } from "./capabilities";
 import {
   clearAssistantArtifacts,
+  clearMemories,
   dueTasks,
   enqueueTask,
   ensureSchema,
@@ -1266,6 +1267,13 @@ export class FederationAgent extends Agent<Env> {
     return { semantic: Boolean(this.env.AI), ...stats };
   }
 
+
+  /** Wipe the one global memory store and its vectors. */
+  async memoryClear(): Promise<number> {
+    if (!this.isMainInstance()) return this.mainStub().memoryClear();
+    return clearMemories(this.db());
+  }
+
   async onStart(): Promise<void> {
     // Every DO keeps its own schema: a session DO needs its own `messages` table for
     // its own transcript (R41), which is the one thing that DOES shard.
@@ -1717,7 +1725,6 @@ export class FederationAgent extends Agent<Env> {
     if (kind === "capabilities") {
       const reply = capabilityAnswer(EXPECTED_TOOLS);
       logMessage(sql, "assistant", reply, chatTier);
-      await this.rememberGlobal("exchange", `User: ${content}\nAgent: ${reply}`, 1);
       return { reply, state: "idle", verb: "Ready" };
     }
 
@@ -1729,11 +1736,6 @@ export class FederationAgent extends Agent<Env> {
       const cmd = arg;
       const result = await this.runSandbox(cmd, session, onProgress);
       const output = formatExecResult(result);
-      await this.rememberGlobal(
-        "tool",
-        `direct exec: ${cmd} -> ${result.ok ? "ok" : "fail"}`,
-        2
-      );
       const runs: ToolRun[] = [
         { name: "exec", cmd, output: output.slice(0, 4000), ok: result.ok },
       ];
@@ -1768,7 +1770,6 @@ export class FederationAgent extends Agent<Env> {
       { name: "lookup_online", cmd: query, output: output.slice(0, 4000), ok },
     ];
     logMessage(sql, "assistant", output, chatTier, JSON.stringify(runs));
-    if (ok) await this.rememberGlobal("tool", `direct lookup_online: "${query}" -> ok`, 2);
     return {
       reply: output,
       state: ok ? "search" : "error",
@@ -2622,15 +2623,9 @@ export class FederationAgent extends Agent<Env> {
       null,
       turnId
     );
-    // R45: the exchange is the memory a later session recalls, so it goes to
-    // main. A continuation after an approval has no stashed user turn, so it
-    // logs the display row only.
+    // Memory is written only through the explicit remember tool. A completed
+    // turn stays a transcript row; it does not become a memory by itself.
     if (stashed && turn.status === "done") {
-      await this.rememberGlobal(
-        "exchange",
-        `User: ${stashed.content}\nAgent: ${text}`,
-        2
-      );
       if (!this.goalTurnSessions.has(turn.session)) {
         this.refineTitle(stashed.content, turn.session);
       }
@@ -3378,6 +3373,10 @@ export class FederationAgent extends Agent<Env> {
       calendar: (input) => this.runCalendarForChat(input),
       tasks: (input) => this.runTasksForChat(input),
       youtubeTranscript: (input) => this.youtubeTranscriptForChat(session, input),
+      remember: async (input) => {
+        await this.rememberGlobal(input.kind ?? "fact", input.content, input.importance ?? 3);
+        return `Remembered: ${input.content}`;
+      },
       progress: (toolCallId, p) => this.emitToolProgress(session, toolCallId, p),
     };
   }
@@ -4370,11 +4369,6 @@ export class FederationAgent extends Agent<Env> {
       );
     }
     const when = new Date(dueAt).toISOString();
-    await this.rememberGlobal(
-      "task",
-      `Scheduled: ${title} at ${when}${recurrence ? ` (${recurrence})` : ""}`,
-      2
-    );
     // The job runs on main's DO, so it writes main's transcript and main's
     // sandbox lease, not this session's (R46). Say so rather than letting the
     // user look for the run in the chat they scheduled it from.

@@ -204,7 +204,6 @@ M.saveMemoryVector(sql, idA, "test-model", [1, 0, 0]);
 check("saveMemoryVector replaces an existing vector", M.memoryVectors(sql).filter((v) => v.memory_id === idA).length === 1);
 const stats = M.memoryStats(sql);
 check("memoryStats reports memories and vectors", stats.memories >= 2 && stats.vectors >= 2, JSON.stringify(stats));
-
 const rows = sql.exec("SELECT id, kind, content, importance, created_at, updated_at FROM memories").results;
 const vectors = M.memoryVectors(sql);
 const semanticRank = M.rankMemories("server deployment", [0.9, 0.1, 0], rows, vectors, Date.now());
@@ -225,6 +224,11 @@ const kindRows = [
 ];
 const kindRank = M.rankMemories("", null, kindRows, [], 6000);
 check("a preference outranks an audit line at equal recency", kindRank[0].row.kind === "preference", JSON.stringify(kindRank.map((r) => [r.row.kind, r.score.toFixed(3)])));
+
+const beforeClear = M.memoryStats(sql);
+const cleared = M.clearMemories(sql);
+const afterClear = M.memoryStats(sql);
+check("clearMemories removes every memory and vector", cleared === beforeClear.memories && afterClear.memories === 0 && afterClear.vectors === 0, JSON.stringify({ before: beforeClear, cleared, after: afterClear }));
 
 db.close();
 console.log(`\n${pass} passed, ${fail} failed`);

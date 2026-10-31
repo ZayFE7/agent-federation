@@ -244,6 +244,26 @@ export default {
       }
     }
 
+    // Clear the global memory store. Destructive, so the body must carry the
+    // confirmation word exactly, the same rule as a chat delete.
+    if (url.pathname === "/api/memory" && request.method === "DELETE") {
+      if (!authed(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      type ConfirmBody = { confirm?: unknown };
+      let body: ConfirmBody | null = null;
+      try {
+        body = (await request.json()) as ConfirmBody;
+      } catch {
+        body = null;
+      }
+      if (body?.confirm !== "clear-memory") {
+        return Response.json({ error: "confirm must be clear-memory" }, { status: 400 });
+      }
+      const removed = await agentStub(env).memoryClear();
+      return Response.json({ ok: true, removed });
+    }
+
     if (url.pathname === "/api/approve" && request.method === "POST") {
       if (!authed(request, env)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });

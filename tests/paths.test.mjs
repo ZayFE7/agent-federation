@@ -59,7 +59,7 @@ check("SANDBOX_HOME is the real E2B home", () => {
   assert.equal(SANDBOX_HOME, "/home/user");
 });
 
-check("EXPECTED_TOOLS is the twenty-one wired tools, frozen", () => {
+check("EXPECTED_TOOLS is the twenty-two wired tools, frozen", () => {
   assert.deepEqual([...EXPECTED_TOOLS], [
     "exec",
     "lookup_online",
@@ -69,6 +69,7 @@ check("EXPECTED_TOOLS is the twenty-one wired tools, frozen", () => {
     "skill",
     "skill_install",
     "write_file",
+    "remember",
     "automation_create",
     "automation_status",
     "automation_control",

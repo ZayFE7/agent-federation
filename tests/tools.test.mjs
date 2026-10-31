@@ -74,6 +74,7 @@ const tools = buildTools({
   calendar: async () => "calendar result",
   tasks: async () => "tasks result",
   youtubeTranscript: async () => "youtube transcript",
+  remember: async () => "remembered",
 });
 
 await check("buildTools wires exactly EXPECTED_TOOLS, in order", () => {

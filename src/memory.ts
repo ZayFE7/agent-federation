@@ -184,6 +184,15 @@ export function remember(
   return sql.exec<{ id: number }>("SELECT last_insert_rowid() AS id").results[0]?.id ?? 0;
 }
 
+/** Delete every memory and its vector. Returns the number of memories removed. */
+export function clearMemories(sql: SqlHandle): number {
+  const count =
+    sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM memories").results[0]?.n ?? 0;
+  sql.exec("DELETE FROM memories");
+  sql.exec("DELETE FROM memory_vectors");
+  return Number(count) || 0;
+}
+
 /* ------------------------------------------------------------------ *
  * Hybrid memory recall
  * ------------------------------------------------------------------ */

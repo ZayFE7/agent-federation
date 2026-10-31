@@ -811,16 +811,17 @@ check("src/agent.ts keeps memory global from any DO (R45, Step 3b)", () => {
   );
   const runDirect = AGENT_SOURCE.match(/private\s+async\s+runDirect\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(runDirect, "src/agent.ts declares no private runDirect(...) to read");
-  assert.ok(
+  assert.equal(
     /this\.rememberGlobal\(/.test(runDirect),
-    "the deterministic turn path must write memory through rememberGlobal"
+    false,
+    "ordinary deterministic turns must not write memory; only the explicit remember tool does"
   );
   const beforeTurn = AGENT_SOURCE.match(/private\s+async\s+beforeTurn\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(beforeTurn, "src/agent.ts declares no private beforeTurn(...) to read");
   assert.ok(/this\.recallGlobal\(/.test(beforeTurn), "the model context must read memory through recallGlobal");
   const turnEnd = AGENT_SOURCE.match(/private\s+async\s+onHarnessTurnEnd\([\s\S]*?\n {2}\}/)?.[0] ?? "";
   assert.ok(turnEnd, "src/agent.ts declares no private onHarnessTurnEnd(...) to read");
-  assert.ok(/this\.rememberGlobal\(/.test(turnEnd), "the exchange memory must be written through rememberGlobal");
+  assert.equal(/this\.rememberGlobal\(/.test(turnEnd), false, "completed turns must not write memory automatically");
   for (const [name, body] of [["runTurn", runTurn], ["runDirect", runDirect], ["beforeTurn", beforeTurn], ["onHarnessTurnEnd", turnEnd]]) {
     assert.equal(
       /\b(?:remember|recall)\(this\.db\(/.test(body),
