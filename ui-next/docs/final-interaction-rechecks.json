@@ -1,0 +1,31 @@
+[
+  {
+    "test": "FINAL routine creation and pause",
+    "result": "PASS"
+  },
+  {
+    "test": "Memory add, edit, reload persistence, typed clear-all disabled until confirmed, Escape dismisses",
+    "result": "PASS",
+    "method": "Staged Chromium interaction verification after modal lifecycle correction"
+  },
+  {
+    "test": "FINAL scoped approval and receipt",
+    "result": "PASS"
+  },
+  {
+    "test": "FINAL deny proposed action with reason",
+    "result": "PASS"
+  },
+  {
+    "test": "FINAL command palette keyboard navigation",
+    "result": "PASS"
+  },
+  {
+    "test": "FINAL mobile drawer Escape and viewport",
+    "result": "PASS"
+  },
+  {
+    "test": "FINAL standalone no-install file preview",
+    "result": "PASS"
+  }
+]

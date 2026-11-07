@@ -1,7 +1,7 @@
 // Blip's app shell. iPhone-first: the installed PWA must open instantly and
 // render the last saved chats with no network. Private API responses never go
 // through this cache; the page keeps its own small offline store.
-const VERSION = "blip-shell-2026-10-31-3";
+const VERSION = "blip-shell-2026-10-31-4";
 const SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -49,7 +49,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   // Private, authenticated data stays out of the HTTP cache.
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/next/")) return;
   if (request.mode === "navigate") {
     event.respondWith(shellResponse(request));
     return;

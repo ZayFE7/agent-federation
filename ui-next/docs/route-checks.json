@@ -1,0 +1,178 @@
+[
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["Your day,a little lighter."],
+    "crashed": false,
+    "route": "overview",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["Conversations"],
+    "crashed": false,
+    "route": "chat",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["You\u2019re in the loop."],
+    "crashed": false,
+    "route": "approvals",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["Move things forward."],
+    "crashed": false,
+    "route": "goals",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["On it. Again and again."],
+    "crashed": false,
+    "route": "automations",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["Good work, kept close."],
+    "crashed": false,
+    "route": "library",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["Your apps, on a short leash."],
+    "crashed": false,
+    "route": "connections",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["What Blip can do \u2014 and where it stops."],
+    "crashed": false,
+    "route": "capabilities",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["Gets to know your way."],
+    "crashed": false,
+    "route": "memory",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["A few personal touches."],
+    "crashed": false,
+    "route": "settings",
+    "viewport": "desktop"
+  },
+  {
+    "client": 1440,
+    "scroll": 1440,
+    "h1": ["Same Blip. More life."],
+    "crashed": false,
+    "route": "motion",
+    "viewport": "desktop"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["Your day,a little lighter."],
+    "crashed": false,
+    "route": "overview",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["Conversations"],
+    "crashed": false,
+    "route": "chat",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["You\u2019re in the loop."],
+    "crashed": false,
+    "route": "approvals",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["Move things forward."],
+    "crashed": false,
+    "route": "goals",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["On it. Again and again."],
+    "crashed": false,
+    "route": "automations",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["Good work, kept close."],
+    "crashed": false,
+    "route": "library",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["Your apps, on a short leash."],
+    "crashed": false,
+    "route": "connections",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["What Blip can do \u2014 and where it stops."],
+    "crashed": false,
+    "route": "capabilities",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["Gets to know your way."],
+    "crashed": false,
+    "route": "memory",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["A few personal touches."],
+    "crashed": false,
+    "route": "settings",
+    "viewport": "mobile"
+  },
+  {
+    "client": 390,
+    "scroll": 390,
+    "h1": ["Same Blip. More life."],
+    "crashed": false,
+    "route": "motion",
+    "viewport": "mobile"
+  }
+]
